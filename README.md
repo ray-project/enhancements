@@ -1,5 +1,5 @@
 # Ray Enhancement Proposals
-This repo tracks Ray Enhancement Proposals (REP). The REP process is the main way to propose, discuss, and decide on features and other major changes to the Ray project. 
+This repo tracks Ray Enhancement Proposals (REP). The REP process is the main way to propose, discuss, and decide on features and other major changes to the Ray project. We'll start with a simple decision-making process (and evolve it over time): For each REP, there will be a round of voting among Ray committers; if the result is not unanimous, Eric Liang (@ericl) and Philipp Moritz (@pcmoritz) will be the final deciders on whether to accept the change.
 
 Each REP should include the following information:
 ## Summary
