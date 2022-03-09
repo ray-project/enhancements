@@ -113,13 +113,27 @@ An important part of the proposal is to explicitly point out any compability imp
   - The only new API introduced is `.bind()` method on ray decorated function or class.  
 - Ray Serve 
   - Serve Pipeline DAG is transformed from Ray DAG where classes used are replaced with serve `Deployment` and class instances with deployment's `RayServeHandle` for better compatibility, deprecation as well as migration.
-  - [Breaking Changes]
-    - All args and kwargs passed into class or function in Serve Pipeline needs to be JSON serializable, enforced upon `build()` call. 
 
+- Breaking Changes: Ray Serve
+  - All args and kwargs passed into class or function in Serve Pipeline needs to be JSON serializable, enforced upon `build()` call. 
+  - We need to introduce and abstract out an `Ingress` component for serve pipeline. 
+
+- Deprecation 
+  - Existing Serve Pipeline Alpha API will be deprecated in favor of Ray Unified DAG API as well as Serve Pipeline Beta.
+
+- Migration Plan: Ray Serve
+  - New concepts and API introduced will be applied to Serve Pipeline Beta launch first to minimize compatibility risks. We can expect existing deployment implementation will migrate to `Ingress` and `Serve App` APIs later on.
+  - Existing multi-model pipeline using Alpha API or raw deployment handle is expected to be migrated to Pipeline Beta API over time.
 
 
 ## Test Plan and Acceptance Criteria
 The proposal should discuss how the change will be tested **before** it can be merged or enabled. It should also include other acceptance criteria including documentation and examples. 
 
+- Unit and integration test for core components
+- Benchmarks on common multi-model inference workload 
+- Documentation with representative workload, covered by CI.
+
 ## (Optional) Follow-on Work
-Optionally, the proposal should discuss necessary follow-on work after the change is accepted.
+- Performance optimizations for multi-model inference, such as communication, multiplexing, scale-to-zero, etc.
+- UX and UI improvements for better user experience 
+- Exploration of large model Distributed Inference on Serve Pipeline where each node represents a shard of a large model.
