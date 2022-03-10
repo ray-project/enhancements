@@ -34,9 +34,9 @@ TBF
 
 ## Design and Architecture
 
-the change will mostly happen in plasma client. Here we may add a virtual class for specific store client to inherit. we propose to: (1) first expose the interface of plasma client, this will not change any logic of raylet (2) then add a new client implementation for that interface (e.g. vineyard client). Since the vineyard provides similar APIs as Plasma, the client implementation here may just wrap the request and forward to vineyard server instead of plasma server. (3) handle the spilling and callback of vineyard.
+The change will mostly happen in plasma client.  We propose to: (1) first expose the interface of plasma client, this will not change any logic of raylet (2) then add a new client implementation for that interface (e.g. vineyard client). Since the vineyard provides similar APIs as Plasma, the client implementation here may just wrap the request and forward to vineyard server instead of Plasma server. (3) handle the spilling and callback of vineyard. (4) handle the cpp/python/java wrapper.
 
-**Step 1: Expose the interface (for third-party object store client)**. Define a mutually agreed interface for a third-party object store to inherit. Make the `PlasmaClientImpl` to inherit the `ClientImplInterface`. By defining the required ability of a store client, allow other object stores (.e.g vineyard) to act like a plasma mock. In this step, we will not add or delete anything into raylet.
+**Step 1: Expose the interface (for third-party object store client)**. Define mutually agreed interfaces for a third-party object store to inherit.  (The `PlasmaClientImpl` inherits the `ClientImplInterface`.) By defining the required ability of a store client, allowing other object stores (.e.g vineyard) to serve like a plasma mock. In this step, we will not add or delete anything into raylet.
 
 ```c++
 
@@ -88,7 +88,7 @@ class ClientImplInterface{
 
 **Step 2**: **Vineyard implement the interface to provide plamsa-like put/get/delete.** Like Plasma, Vineyard also has client-side and server-side. The client slide provides Plasma-compatible APIs which facilitates us to wrap Plasma requests into Vineyard requests.  We will implement `VineyardClientImpl` in a separate file. Both `PlasmaClientImpl` and `VineyardClientImpl` inherit from the `ClientImplIterface`, which allow users to select the desired client(Plasma or Vineyard) at runtime.
 
-**Step 3:**  **Make the behavior of VineyardClientImpl consistent with PlasmaClientImpl.** Vineyard server also provide simlar function like plasma server, it also has reference count, eviction, and lifecycle management. We will try our best to align the behavior of plasma server and vineyard server. We will maintain a special code path in vineyard to provide the same functionality as Plasma. The elusive feature maybe the spilling, since it is a callback which requires the raylet resources. An intuitively solution is to implement a proxy to replace plasmaRunner in vineyard mode, which waits the messages from vineyard server to trigger these callback.
+**Step 3:**  **Make the behavior of VineyardClientImpl consistent with PlasmaClientImpl.** Vineyard server also provide simlar function like plasma server, it also has reference count, eviction, and lifecycle management. We will try our best to align the behavior of plasma server and vineyard server. We will maintain a special code path in vineyard to provide the same functionality as Plasma. The elusive point maybe the spilling, since it is a callback which requires the raylet resources and cannot be executed in another process. An intuitively solution is to implement a proxy to replace the PlasmaStoreRunner in vineyard mode, which waits the messages from vineyard server to trigger these callback.
 
 **Step 4 :  python/cpp/jave wrappers. ** Handle the python/cpp/jave wrappers. provide demos, examples, and docs.
 
@@ -113,35 +113,37 @@ print(v6d.get(v6d_object_id)) # [1,2,3,4]
 
 ### Lifecycle Management
 
-The goal of  lifecycle management in local plasma store is to drop some not-in-use objects (evict or spill) when we we ran out of memory. Both plasma and vineyard have thier own lifecycle management, and their behavior may be different. We think that raylet logic should not rely on the underlying lifecycle management strategies  (e.g. different eviction policy). Thus we should give a **protocol** here that both vineyard and plasma agree. For example, the protocol will define when a object add/remove its reference, when object can be evicted/spilled. In other word The protocol defines the impact on lifecycle management when calling the  `ClientImplInterface` API described above. Since most of concerns about the integration may happens in this part, we may need further discussions about these protocols.
+The goal of  lifecycle management in local plasma store is to drop some not-in-use objects (evict or spill) when we we ran out of memory. Both plasma and vineyard have thier own lifecycle management, and their behavior may be different. We think that raylet logic should not rely on the underlying lifecycle management strategies  (e.g. different eviction policy).  We propose to define a **protocol** here that both vineyard and plasma should agree. For example, the protocol will define when a object adds/remove its reference, when object can be evicted/spilled. In other word The protocol defines the impact on lifecycle management in server-side when calling the above  `ClientImplInterface` API in client-side. Since most of concerns about the integration may happens in this part, we may need further discussions about these protocols.
 
 #### Ref_count
 
 The Ray keeps two type of "reference count", one is `ref_count` in plasma to track the local plasma object, and the other is the `reference_count` in core_worker to track the primary copy. In this proposal, we will not change the logic of `reference_count`, and the vineyard server will have its own `ref_count`.
 
-**Protocol #1**: A object will increase its `ref_count` when the `Get(...)` or `CreateAndSpillIfNeeded(...)`  is invoked.
+**Protocol #1**: A object will increase its `ref_count` iff the `Get(...)` or `CreateAndSpillIfNeeded(...)`  is invoked. ([Create](https://github.com/ray-project/ray/blob/master/src/ray/object_manager/plasma/store.cc#L193), [Get](https://github.com/ray-project/ray/blob/master/src/ray/object_manager/plasma/store.cc#L106))
 
-**Protocol #2:** A object will decrease its `refer_count` when the `release(...)` is invoked.
+**Protocol #2:** A object will decrease its `refer_count` iff the `release(...)` or `Disconnect(...)`is invoked. ([Release](https://github.com/ray-project/ray/blob/master/src/ray/object_manager/plasma/store.cc#L268), [DIsconnect](https://github.com/ray-project/ray/blob/master/src/ray/object_manager/plasma/store.cc#L337))
 
 #### Object eviction
 
 As mentioned above, the eviction policy may be different in different store variants. Currently, the policies of Plasma and Vineyard are both based on LRU.
 
-**Protocol #3:** Servers can only evict the objects that are not needed by clients, (a.k.a.reference count = 0). specially, pinned object should never be evcited.
+**Protocol #3:** Eviction only happens in an eviction request and create request. ([evict]( https://github.com/ray-project/ray/blob/master/src/ray/object_manager/plasma/store.cc#L441), [create](https://github.com/ray-project/ray/blob/master/src/ray/object_manager/plasma/object_lifecycle_manager.cc#L189))
+
+**Protocol #4:** Servers can only evict the objects that are not needed by clients, (a.k.a.reference count = 0). specially, pinned object should never be evcited. ([AddtoCache](https://github.com/ray-project/ray/blob/master/src/ray/object_manager/plasma/object_lifecycle_manager.cc#L159))
 
 #### Object spilling
 
 When creating a new object with insufficient memory even with evicting possible objects, the local object manager will try to spill objects to external storage. The code path of spilling is out of Plasma (via callback) thus we can reuse it in third-party object-store.
 
-**Protocol #4:** The spilling only happens in a object creation. 
+**Protocol #5:** The spilling only happens in a object creation.(we trigger spilling when memory usage > threshold([triggle](https://github.com/ray-project/ray/blob/master/src/ray/object_manager/plasma/store.cc#L140))) ([spill](https://github.com/ray-project/ray/blob/master/src/ray/object_manager/plasma/create_request_queue.cc#L93))
 
-**Protocol #5:** The spilling only happens when eviction can not meet the requirement.
+**Protocol #6:** The spilling only happens when eviction can not meet the requirement. ([create object will first trigger eviction](https://github.com/ray-project/ray/blob/master/src/ray/object_manager/plasma/object_lifecycle_manager.cc#L189))
 
-**Protocol #6:** The spilling only happens in pinned objects.
+**Protocol #7:** The spilling only happens in primary objects.(the spill_objects_callback will handle the spillng).
 
 #### Object Delete
 
-**Protocol #7:** `Delete()`a object only when (1) it exist, (2) has been sealed, (3) not used by any clients. or it will do nothing.
+**Protocol #8:** `Delete()`a object only when (1) it exists, (2) has been sealed, (3) not used by any clients. or it will do nothing.
 
 We believe that if a third-party object store client can follow the above protocol when implementation the `ClientImplInterface`. Then the ray logic can be seamlessly built on top of the third-party object store.
 
