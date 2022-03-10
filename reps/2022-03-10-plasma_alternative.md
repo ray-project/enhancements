@@ -92,7 +92,7 @@ class ClientImplInterface{
 
 **Step 3:**  **Make the behavior of VineyardClientImpl consistent with PlasmaClientImpl.** Vineyard server also provide simlar function like plasma server, it also has reference count, eviction, and lifecycle management. We will try our best to align the behavior of plasma server and vineyard server. We will maintain a special code path in vineyard to provide the same functionality as Plasma. The elusive point maybe the spilling, since it is a callback which requires the raylet resources and cannot be executed in another process. An intuitively solution is to implement a proxy to replace the PlasmaStoreRunner in vineyard mode, which waits the messages from vineyard server to trigger these callback.
 
-**Step 4 :  python/cpp/jave wrappers.** Handle the python/cpp/jave wrappers. provide demos, examples, and docs.
+**Step 4:** **python/cpp/jave wrappers.** Handle the python/cpp/jave wrappers. provide demos, examples, and docs.
 
 ### Example - Code
 
