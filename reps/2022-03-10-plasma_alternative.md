@@ -16,7 +16,7 @@ Ray is a general-purpose and powerful computing framework and makes it simple to
 
 #### Key requirements:
 - Provide the options for users to select a third-party object store at `ray.init()`.
-- [O1] Provide a  Plasma-like client which forward the request to vinyeard client. (vineyard server provide very similar functionality as plasma).
+- [O1] Provide a  Plasma-like client which forward the request to vineyard client. (vineyard server provide very similar functionality as plasma).
 
 ### Should this change be within `ray` or outside?
 main `ray` project. Changes are made to Ray Serve level.
