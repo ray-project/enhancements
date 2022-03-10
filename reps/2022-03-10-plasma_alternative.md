@@ -3,7 +3,7 @@
 ### General Motivation
 Ray is a general-purpose and powerful computing framework and makes it simple to scale any compute-intensive Python workload. By storing the objects in Plasma, data can be efficiently (0-copy) shared between Ray tasks. We propose to provide a plasma-like object store with more functionalities target for different situations (e.g. to better support [[Kubernetes](https://kubernetes.io/zh/)](https://kubernetes.io/zh/)). In other words, we can simultaneously have multiple plasma object-store variants with different functionalities. (e.g. users can choose a variant at `ray.init()`).
 
-[**[Vineyard](https://github.com/v6d-io/v6d)**](https://github.com/v6d-io/v6d) is also an in-memory immutable data manager that provides out-of-the-box high-level abstraction and zero-copy in-memory sharing for distributed data in big data tasks. It aims to optimize the end-to-end performance of complex data analytics jobs on cloud platforms. It manages various data structures produced in the job, and cross-system data sharing can be conducted without serialization/deserialization overheads by decoupling metadata and data payloads.
+[**[Vineyard]**](https://github.com/v6d-io/v6d) is also an in-memory immutable data manager that provides out-of-the-box high-level abstraction and zero-copy in-memory sharing for distributed data in big data tasks. It aims to optimize the end-to-end performance of complex data analytics jobs on cloud platforms. It manages various data structures produced in the job, and cross-system data sharing can be conducted without serialization/deserialization overheads by decoupling metadata and data payloads.
 
 **Opportunities**: Vineyard can enhance the ray object store with more functionalities for modern data-intensive applications. To be specific, the benefits are four-fold:
 
@@ -35,6 +35,8 @@ TBF
 ## Design and Architecture
 
 The change will mostly happen in plasma client.  We propose to: (1) first expose the interface of plasma client, this will not change any logic of raylet (2) then add a new client implementation for that interface (e.g. vineyard client). Since the vineyard provides similar APIs as Plasma, the client implementation here may just wrap the request and forward to vineyard server instead of Plasma server. (3) handle the spilling and callback of vineyard. (4) handle the cpp/python/java wrapper.
+
+We are going to split our changes into 4 PRs to make them friendly for review.
 
 **Step 1: Expose the interface (for third-party object store client)**. Define mutually agreed interfaces for a third-party object store to inherit.  (The `PlasmaClientImpl` inherits the `ClientImplInterface`.) By defining the required ability of a store client, allowing other object stores (.e.g vineyard) to serve like a plasma mock. In this step, we will not add or delete anything into raylet.
 
@@ -90,7 +92,7 @@ class ClientImplInterface{
 
 **Step 3:**  **Make the behavior of VineyardClientImpl consistent with PlasmaClientImpl.** Vineyard server also provide simlar function like plasma server, it also has reference count, eviction, and lifecycle management. We will try our best to align the behavior of plasma server and vineyard server. We will maintain a special code path in vineyard to provide the same functionality as Plasma. The elusive point maybe the spilling, since it is a callback which requires the raylet resources and cannot be executed in another process. An intuitively solution is to implement a proxy to replace the PlasmaStoreRunner in vineyard mode, which waits the messages from vineyard server to trigger these callback.
 
-**Step 4 :  python/cpp/jave wrappers. ** Handle the python/cpp/jave wrappers. provide demos, examples, and docs.
+**Step 4 :  python/cpp/jave wrappers.** Handle the python/cpp/jave wrappers. provide demos, examples, and docs.
 
 ### Example - Code
 
@@ -115,7 +117,7 @@ print(v6d.get(v6d_object_id)) # [1,2,3,4]
 
 The goal of  lifecycle management in local plasma store is to drop some not-in-use objects (evict or spill) when we we ran out of memory. Both plasma and vineyard have thier own lifecycle management, and their behavior may be different. We think that raylet logic should not rely on the underlying lifecycle management strategies  (e.g. different eviction policy).  We propose to define a **protocol** here that both vineyard and plasma should agree. For example, the protocol will define when a object adds/remove its reference, when object can be evicted/spilled. In other word The protocol defines the impact on lifecycle management in server-side when calling the above  `ClientImplInterface` API in client-side. Since most of concerns about the integration may happens in this part, we may need further discussions about these protocols.
 
-#### Ref_count
+#### Object Ref_count
 
 The Ray keeps two type of "reference count", one is `ref_count` in plasma to track the local plasma object, and the other is the `reference_count` in core_worker to track the primary copy. In this proposal, we will not change the logic of `reference_count`, and the vineyard server will have its own `ref_count`.
 
@@ -151,13 +153,16 @@ We believe that if a third-party object store client can follow the above protoc
 An important part of the proposal is to explicitly point out any compability implications of the proposed change. If there is any, we should thouroughly discuss a plan to deprecate existing APIs and migration to the new one(s).
 
 - Ray Core
-  - Add a new option named `plasma_store_impl` to choose the underlying local object store.  
+  - (**Step 1**) Add a new option named `plasma_store_impl` to choose the underlying local object store.  
 - Ray Serve 
-  - Add a new option named `plasma_store_impl` to not launch a plasma runner in third-party mode.
-  - Add a new virtual class named `ClientImplInterface` for third-party object store to implement.
-  - Add a new `VineyardClientImp` to implement the `ClientImplInterface` and follw the above protocols.
-  - Add a new `PlasmaRunnerProxy ` as a helper to execute the callback of raylet.
-  
+  - (**Step 1**) Add a new option named `plasma_store_impl` to not launch a plasma runner in third-party mode.
+  - (**Step 1**) Add a new virtual class named `ClientImplInterface` for third-party object store to implement.
+  - (**Step 2**) Add a new `VineyardClientImp` to implement the `ClientImplInterface` and follw the above protocols.
+  - (**Step 3**) Add a new `PlasmaRunnerProxy ` as a helper to execute the callback of raylet.
+
+- Ray API
+  - (**Step 4**) Handle the python/cpp/jave wrappers. provide demos, examples, and docs.
+
 - Deprecation 
   - No API will be deprecated.
 
