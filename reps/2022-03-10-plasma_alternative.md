@@ -19,7 +19,7 @@ Ray is a general-purpose and powerful computing framework and makes it simple to
 - [O1] Provide a  Plasma-like client which forward the request to vineyard client. (vineyard server provide very similar functionality as plasma).
 
 ### Should this change be within `ray` or outside?
-main `ray` project. Changes are made to Ray Serve level.
+main `ray` project. Changes are made to Ray Core level.
 
 ## Stewardship
 ### Required Reviewers
@@ -154,7 +154,6 @@ An important part of the proposal is to explicitly point out any compability imp
 
 - Ray Core
   - (**Step 1**) Add a new option named `plasma_store_impl` to choose the underlying local object store.  
-- Ray Serve 
   - (**Step 1**) Add a new option named `plasma_store_impl` to not launch a plasma runner in third-party mode.
   - (**Step 1**) Add a new virtual class named `ClientImplInterface` for third-party object store to implement.
   - (**Step 2**) Add a new `VineyardClientImp` to implement the `ClientImplInterface` and follw the above protocols.
