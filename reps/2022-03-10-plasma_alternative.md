@@ -137,6 +137,14 @@ As mentioned above, the eviction policy may be different in different store vari
 
 When creating a new object with insufficient memory even with evicting possible objects, the local object manager will try to spill objects to external storage. The code path of spilling is out of Plasma (via callback) thus we can reuse it in third-party object-store.
 
+**[callbacks]** Today the spilling of plasma relies on the callback. A `PlasmaStoreRunner` is running on a thread within raylet. Triggering the callback will directly call the methods in raylet. As a separate process, a third-party object store is unrealistic to execute these callbacks. The plasma store will also provide an [API](https://sourcegraph.com/github.com/ray-project/ray@149d06442bd0e53010ead72e4a7c0620ee1c0966/-/blob/src/ray/object_manager/object_manager.cc?L164) to query if an object is spillable.
+
+**[solution]**  We can keep these callbacks.  The third-party object store is another process instead of a thread within Ray , this means the third-party object should not be launched by raylet, when raylet starts, the third-party object store is already there. Since we have to process these callbacks in the ray-side. Thus we can introduce a `PlasmaProxy`(which is a thread in raylet) here to process the callbacks. 
+
+We put the `PlasmaProxy` on a thread in Raylet instead of the `PlasmaStoreRunner`. When triggering the callback in the third-party object store, it will send a request to the `PlasmaProxy` via IPC thus it can call the methods in raylet like plasma does so. Maybe we do not require API changes in the current client interface (a third-party object store will not do spilling itself, it only triggers spilling with a given threshold. In such a situation, a third-party object store will send a request to `PlasmaProxy` to trigger the spilling callback).
+
+The `PlasmaProxy` will share fate with raylet, if vineyard is running into issues, `PlasmaProxy` will complain that (we can use heartbeat here). I think ray can treat the `PlasmaProxy` as the third-party object store instance, it will throw exceptions just like the original plasma runner.
+
 **Protocol #5:** The spilling only happens in a object creation.(we trigger spilling when memory usage > threshold([triggle](https://github.com/ray-project/ray/blob/master/src/ray/object_manager/plasma/store.cc#L140))) ([spill](https://github.com/ray-project/ray/blob/master/src/ray/object_manager/plasma/create_request_queue.cc#L93))
 
 **Protocol #6:** The spilling only happens when eviction can not meet the requirement. ([create object will first trigger eviction](https://github.com/ray-project/ray/blob/master/src/ray/object_manager/plasma/object_lifecycle_manager.cc#L189))
@@ -158,12 +166,10 @@ An important part of the proposal is to explicitly point out any compability imp
   - (**Step 1**) Add a new virtual class named `ClientImplInterface` for third-party object store to implement.
   - (**Step 2**) Add a new `VineyardClientImp` to implement the `ClientImplInterface` and follw the above protocols.
   - (**Step 3**) Add a new `PlasmaRunnerProxy ` as a helper to execute the callback of raylet.
-
 - Ray API
   - (**Step 4**) Handle the python/cpp/jave wrappers. provide demos, examples, and docs.
-
 - Deprecation 
-  - No API will be deprecated.
+  - Deprecate the apis that directly call plasma store method in raylet such like `ObjectManager::IsPlasmaObjectSpillable`.
 
 
 ## Test Plan and Acceptance Criteria
