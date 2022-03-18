@@ -162,8 +162,6 @@ The `PlasmaProxy` will share fate with raylet, if vineyard is running into issue
 
 We believe that if a third-party object store client can follow the above protocol when implementation the `ClientImplInterface`. Then the ray logic can be seamlessly built on top of the third-party object store.
 
-### Special Cases
-
 #### Dupilicate IDs in multiple raylet.
 
 The third-party object store should not break the invariants within Ray. e.g when we start multiple raylet connect to the third-party object store (there could be lots of duplicated object ids).
@@ -171,6 +169,8 @@ The third-party object store should not break the invariants within Ray. e.g whe
 **[with visbility]** For vineyard-like third-party object store which has session/visibility/isolation mechanism, we can open a new session for each raylet (it is ok to have duplicated object ids which are seperated in different sessions.)
 
 **[w/o visbility]** For other third-party object stores which do not provide such isolation control. we can add prefix to the duplicated object ids to distinguish them (this should be handled in `xxxClinetImpl` which inherits the `ClientImplInterface`).
+
+**Protocol #10**: when the raylet is restarted, the storage should guarantee the object id from the previous raylet should be isolated to the new one.
 
 #### Failure Mode
 
@@ -186,7 +186,7 @@ The third-party objects' failure mode should be consistent with plasma: which me
 
 The cost of a callback depends on the underlying store implementation. The abstraction here can be compatible with different object store. For plasma, the `PlasmaProxy` will execute the callback via in-process function call, for standalone store service like vineyard, the `VineyardPlasmaProy` will execute the callback via IPC. Supporting the third-party object store will not incurs a performance hit for current coude path (plasma-version).
 
-If the IPC of third-party object store really obstacles the performance of ray scheduler (e.g. obtain the memory usage of the plasma store, and today ray design adopts the direct function call is to avoid to obtain the stale memory usage). We can share meta between ray and third-party object store via SHM. For example, the third-party object store write the memory usage to SHM after each creation/deletion, and the ray read the memory usage from SHM when required.
+If the IPC of third-party object store really obstacles the performance of ray scheduler (e.g. obtain the memory usage of the plasma store, and today ray design adopts the direct function call is to avoid to obtain the stale memory usage). We can share meta between ray and third-party object store via SHM. For example, the third-party object store writes the memory usage to SHM after each creation/deletion, and the ray read the memory usage from SHM when required.
 
 ## Compatibility, Deprecation, and Migration Plan
 An important part of the proposal is to explicitly point out any compability implications of the proposed change. If there is any, we should thouroughly discuss a plan to deprecate existing APIs and migration to the new one(s).
