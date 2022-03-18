@@ -1,7 +1,7 @@
 
 ## Summary - Plasma Alternative
 ### General Motivation
-Ray is a general-purpose and powerful computing framework and makes it simple to scale any compute-intensive Python workload. By storing the objects in Plasma, data can be efficiently (0-copy) shared between Ray tasks. We propose to provide a plasma-like object store with more functionalities target for different situations (e.g. to better support [[Kubernetes](https://kubernetes.io/zh/)](https://kubernetes.io/zh/)). In other words, we can simultaneously have multiple plasma object-store variants with different functionalities. (e.g. users can choose a variant at `ray.init()`).
+Ray is a general-purpose and powerful computing framework and makes it simple to scale any compute-intensive Python workload. By storing the objects in Plasma, data can be efficiently (0-copy) shared between Ray tasks. We propose to provide a plasma-like object store with more functionalities target for different situations (e.g. to better support [Kubernetes](https://kubernetes.io/)). In other words, we can simultaneously have multiple plasma object-store variants with different functionalities. (e.g. users can choose a variant at `ray.init()`).
 
 [**[Vineyard]**](https://github.com/v6d-io/v6d) is also an in-memory immutable data manager that provides out-of-the-box high-level abstraction and zero-copy in-memory sharing for distributed data in big data tasks. It aims to optimize the end-to-end performance of complex data analytics jobs on cloud platforms. It manages various data structures produced in the job, and cross-system data sharing can be conducted without serialization/deserialization overheads by decoupling metadata and data payloads.
 
@@ -85,6 +85,9 @@ class ClientImplInterface{
 
   // query the capacity of the object store.
   virtual int64_t store_capacity() = 0;
+  
+  // get the current debug string from the plasma store server.
+  std::string DebugString() = 0;
 };
 ```
 
@@ -96,13 +99,13 @@ class ClientImplInterface{
 
 ### Example - Code
 
-To share the objects with out-of-Ray systems, vineyard provides API to persist a Ray object into an object that external systems can recognize(e.g. vineyard object in this proposal). The conversion should be zero-copy. The conversion APIs are provided by vineyard.
+To share the objects with out-of-Ray systems, vineyard provides API to persist a Ray object into an object that external systems can recognize(e.g. vineyard object in this proposal). The conversion should be zero-copy. The conversion APIs are provided by vineyard. We add a new option `plasma_store_impl` for ray to specify underlying object store, we reuse the option `plasma_store_socket_name` to specify the IPC socket path in this case.
 ```python
 # users get objects from ray then put (zero-copy) them into vineyard or vice versa.
 import ray
 import vineyard as v6d
 
-ray.init(plasma_store_impl="vineyard")
+ray.init(plasma_store_impl="vineyard", plasma_store_socket_name="/tmp/vineyard.sock")
 
 ray_data = [1,2,3,4]
 ray_object_ref = ray.put(y)
@@ -113,7 +116,7 @@ v6d_object_id = v6d.from_ray(ray_object_ref) # 0-copy
 print(v6d.get(v6d_object_id)) # [1,2,3,4]
 ```
 
-### Lifecycle Management
+### Hidden Assumption/Dependency
 
 The goal of  lifecycle management in local plasma store is to drop some not-in-use objects (evict or spill) when we we ran out of memory. Both plasma and vineyard have thier own lifecycle management, and their behavior may be different. We think that raylet logic should not rely on the underlying lifecycle management strategies  (e.g. different eviction policy).  We propose to define a **protocol** here that both vineyard and plasma should agree. For example, the protocol will define when a object adds/remove its reference, when object can be evicted/spilled. In other word The protocol defines the impact on lifecycle management in server-side when calling the above  `ClientImplInterface` API in client-side. Since most of concerns about the integration may happens in this part, we may need further discussions about these protocols.
 
@@ -121,17 +124,17 @@ The goal of  lifecycle management in local plasma store is to drop some not-in-u
 
 The Ray keeps two type of "reference count", one is `ref_count` in plasma to track the local plasma object, and the other is the `reference_count` in core_worker to track the primary copy. In this proposal, we will not change the logic of `reference_count`, and the vineyard server will have its own `ref_count`.
 
-**Protocol #1**: A object will increase its `ref_count` iff the `Get(...)` or `CreateAndSpillIfNeeded(...)`  is invoked. ([Create](https://github.com/ray-project/ray/blob/master/src/ray/object_manager/plasma/store.cc#L193), [Get](https://github.com/ray-project/ray/blob/master/src/ray/object_manager/plasma/store.cc#L106))
+**Protocol #1**: A object will increase its `ref_count` iff the `Get(...)` , `TryCreateImmediately(...)`or `CreateAndSpillIfNeeded(...)`  is invoked. ([Create](https://github.com/ray-project/ray/blob/bb4ff42eeca50a5b91dd569caafdd71bf771b66e/src/ray/object_manager/plasma/store.cc#L198), [Get](https://github.com/ray-project/ray/blob/bb4ff42eeca50a5b91dd569caafdd71bf771b66e/src/ray/object_manager/plasma/store.cc#L110))
 
-**Protocol #2:** A object will decrease its `refer_count` iff the `release(...)` or `Disconnect(...)`is invoked. ([Release](https://github.com/ray-project/ray/blob/master/src/ray/object_manager/plasma/store.cc#L268), [DIsconnect](https://github.com/ray-project/ray/blob/master/src/ray/object_manager/plasma/store.cc#L337))
+**Protocol #2:** A object will decrease its `ref_count` iff the `release(...)` or `Disconnect(...)`is invoked. ([Release](https://github.com/ray-project/ray/blob/bb4ff42eeca50a5b91dd569caafdd71bf771b66e/src/ray/object_manager/plasma/store.cc#L277), [Disconnect](https://github.com/ray-project/ray/blob/bb4ff42eeca50a5b91dd569caafdd71bf771b66e/src/ray/object_manager/plasma/store.cc#L346))
 
 #### Object eviction
 
 As mentioned above, the eviction policy may be different in different store variants. Currently, the policies of Plasma and Vineyard are both based on LRU.
 
-**Protocol #3:** Eviction only happens in an eviction request and create request. ([evict]( https://github.com/ray-project/ray/blob/master/src/ray/object_manager/plasma/store.cc#L441), [create](https://github.com/ray-project/ray/blob/master/src/ray/object_manager/plasma/object_lifecycle_manager.cc#L189))
+**Protocol #3:** Eviction only happens in an eviction request and create request. ([evict]( https://github.com/ray-project/ray/blob/bb4ff42eeca50a5b91dd569caafdd71bf771b66e/src/ray/object_manager/plasma/store.cc#L451), [create](https://github.com/ray-project/ray/blob/bb4ff42eeca50a5b91dd569caafdd71bf771b66e/src/ray/object_manager/plasma/object_lifecycle_manager.cc#L191))
 
-**Protocol #4:** Servers can only evict the objects that are not needed by clients, (a.k.a.reference count = 0). specially, pinned object should never be evcited. ([AddtoCache](https://github.com/ray-project/ray/blob/master/src/ray/object_manager/plasma/object_lifecycle_manager.cc#L159))
+**Protocol #4:** Servers can only evict the objects that are not needed by clients, (a.k.a.reference count = 0). specially, pinned object should never be evcited. ([AddtoCache](https://github.com/ray-project/ray/blob/bb4ff42eeca50a5b91dd569caafdd71bf771b66e/src/ray/object_manager/plasma/object_lifecycle_manager.cc#L160))
 
 #### Object spilling
 
@@ -145,17 +148,45 @@ We put the `PlasmaProxy` on a thread in Raylet instead of the `PlasmaStoreRunner
 
 The `PlasmaProxy` will share fate with raylet, if vineyard is running into issues, `PlasmaProxy` will complain that (we can use heartbeat here). I think ray can treat the `PlasmaProxy` as the third-party object store instance, it will throw exceptions just like the original plasma runner.
 
-**Protocol #5:** The spilling only happens in a object creation.(we trigger spilling when memory usage > threshold([triggle](https://github.com/ray-project/ray/blob/master/src/ray/object_manager/plasma/store.cc#L140))) ([spill](https://github.com/ray-project/ray/blob/master/src/ray/object_manager/plasma/create_request_queue.cc#L93))
+**Protocol #5:** The spilling only happens in a object creation.(we trigger spilling when memory usage > threshold([triggle](https://github.com/ray-project/ray/blob/bb4ff42eeca50a5b91dd569caafdd71bf771b66e/src/ray/object_manager/plasma/store.cc#L174))) ([spill](https://github.com/ray-project/ray/blob/bb4ff42eeca50a5b91dd569caafdd71bf771b66e/src/ray/object_manager/plasma/create_request_queue.cc#L97))
 
-**Protocol #6:** The spilling only happens when eviction can not meet the requirement. ([create object will first trigger eviction](https://github.com/ray-project/ray/blob/master/src/ray/object_manager/plasma/object_lifecycle_manager.cc#L189))
+**Protocol #6:** The spilling only happens when eviction can not meet the requirement. ([create object will first trigger eviction](https://github.com/ray-project/ray/blob/bb4ff42eeca50a5b91dd569caafdd71bf771b66e/src/ray/object_manager/plasma/object_lifecycle_manager.cc#L191))
 
 **Protocol #7:** The spilling only happens in primary objects.(the spill_objects_callback will handle the spillng).
 
+**Protocol #8:** Shouldn't unpin objects when spilling is initiated.
+
 #### Object Delete
 
-**Protocol #8:** `Delete()`a object only when (1) it exists, (2) has been sealed, (3) not used by any clients. or it will do nothing.
+**Protocol #9:** `Delete()`a object only when (1) it exists, (2) has been sealed, (3) not used by any clients. or it will do nothing.
 
 We believe that if a third-party object store client can follow the above protocol when implementation the `ClientImplInterface`. Then the ray logic can be seamlessly built on top of the third-party object store.
+
+### Special Cases
+
+#### Dupilicate IDs in multiple raylet.
+
+The third-party object store should not break the invariants within Ray. e.g when we start multiple raylet connect to the third-party object store (there could be lots of duplicated object ids).
+
+**[with visbility]** For vineyard-like third-party object store which has session/visibility/isolation mechanism, we can open a new session for each raylet (it is ok to have duplicated object ids which are seperated in different sessions.)
+
+**[w/o visbility]** For other third-party object stores which do not provide such isolation control. we can add prefix to the duplicated object ids to distinguish them (this should be handled in `xxxClinetImpl` which inherits the `ClientImplInterface`).
+
+#### Failure Mode
+
+The third-party objects' failure mode should be consistent with plasma: which means a it should behave the same as plasma when object-store/ralet crashes. We introduce `XXXPlasmaProxy` to handle the failure. The Third-party should provide internal mechanism to block the connection when `XXXPlasmaProxy` runs into issues.
+
+**[Situation 1]** When raylet crashes, workers can not get objects from third-party object store. Since the third-party object store will know it via the heartbeat of `XXXPlasmaProxy`, then it will close the connection of related client (the same session of `XXXPlasmaProxy` ). This is a recoverable failure for vineyard, when the raylet restart, it can connect to the previous session.
+
+**[Situation 2]** When the third-party store crashes, the worker will not able to use the objects. The `XXXPlasmaProxy` will also know the fate of third-party object store just like Situation 1. Since the `XXXPlasmaProxy` is running on a thread of raylet, it can complain just like plasma runner crashes. This is an unrecoverable failure for vineyard. Since Raylet can not control the fate of vineyard.
+
+**[Situation 3]** When the `XXXPlasmaProxy` crashes, the third-party store will behave like the raylet crashes, it will close the connection, forbid the clients in the same session to get objects. the raylet will behave like the object store crashes, it will throw exception just like original plasma runner. This is a recoverable failure for vineyard, raylet can restart PlasmaProxy, then connect to the prevoius session.
+
+#### Callback Overhead
+
+The cost of a callback depends on the underlying store implementation. The abstraction here can be compatible with different object store. For plasma, the `PlasmaProxy` will execute the callback via in-process function call, for standalone store service like vineyard, the `VineyardPlasmaProy` will execute the callback via IPC. Supporting the third-party object store will not incurs a performance hit for current coude path (plasma-version).
+
+If the IPC of third-party object store really obstacles the performance of ray scheduler (e.g. obtain the memory usage of the plasma store, and today ray design adopts the direct function call is to avoid to obtain the stale memory usage). We can share meta between ray and third-party object store via SHM. For example, the third-party object store write the memory usage to SHM after each creation/deletion, and the ray read the memory usage from SHM when required.
 
 ## Compatibility, Deprecation, and Migration Plan
 An important part of the proposal is to explicitly point out any compability implications of the proposed change. If there is any, we should thouroughly discuss a plan to deprecate existing APIs and migration to the new one(s).
