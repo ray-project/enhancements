@@ -160,9 +160,9 @@ The `PlasmaProxy` will share fate with raylet, if vineyard is running into issue
 
 We believe that if a third-party object store client can follow the above invariants when implementation the `ClientImplInterface`. Then the ray logic can be seamlessly built on top of the third-party object store.
 
-#### Dupilicate IDs in multiple raylet.
+#### Dupilicate IDs in multiple ray cluster.
 
-The third-party object store should not break the invariants within Ray. e.g when we start multiple raylet connect to the third-party object store (there could be lots of duplicated object ids).
+The third-party object store should not break the invariants within Ray. e.g when we have multiple ray clusters all connect to the third-party object store (there could be lots of duplicated object ids).
 
 **[with visbility]** For vineyard-like third-party object store which has session/visibility/isolation mechanism, we can open a new session for each raylet (it is ok to have duplicated object ids which are seperated in different sessions.)
 
