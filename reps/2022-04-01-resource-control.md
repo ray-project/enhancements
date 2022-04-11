@@ -67,7 +67,7 @@ Users could turn on/off resource control by setting the relevant fields of runti
 
 ### How to manage cgroups
 #### cgroup versions
-The cgroup has two versions: cgroup v1 and cgroup v2. [Cgroup v2](https://www.kernel.org/doc/Documentation/cgroup-v2.txt) was made official with the release of Linux 4.5. But only a few systems are known to use croup v2 by default: Fedora (since 31), Arch Linux (since April 2021), openSUSE Tumbleweed (since c. 2021), Debian GNU/Linux (since 11) and Ubuntu (since 21.10). It means that, although a lot of persons are using the Linux with high versions, they can't use cgroup v2 if they don't make a special configration and reboot.
+The cgroup has two versions: cgroup v1 and cgroup v2. [Cgroup v2](https://www.kernel.org/doc/Documentation/cgroup-v2.txt) was made official with the release of Linux 4.5. But only a few systems are known to use croup v2 by default(refer to [here](https://rootlesscontaine.rs/getting-started/common/cgroup2/)): Fedora (since 31), Arch Linux (since April 2021), openSUSE Tumbleweed (since c. 2021), Debian GNU/Linux (since 11) and Ubuntu (since 21.10). It means that, although a lot of persons are using the Linux with high versions, they can't use cgroup v2 if they don't make a special configration and reboot.
 
 Check if cgroup v2 has been enabled in your linux system:
 ```
@@ -80,7 +80,7 @@ grubby --update-kernel=ALL --args="systemd.unified_cgroup_hierarchy=1"
 reboot
 ```
 
-[Cgroup v2](https://www.kernel.org/doc/Documentation/cgroup-v2.txt) seems more reasonable and easy to use, but we should also support cgroup v1 because v1 is widely used and has been hard coded to the [OCI](https://opencontainers.org/) standards. You can see this [blog](https://www.redhat.com/sysadmin/fedora-31-control-group-v2) for more.
+Overall, cgroup v2 seems more reasonable and easy to use, but we should also support cgroup v1 because v1 is widely used and has been hard coded to the [OCI](https://opencontainers.org/) standards. You can see this [blog](https://www.redhat.com/sysadmin/fedora-31-control-group-v2) for more.
 
 #### cgroupfs
 The traditional way to manage cgroups is writing the file system directly. It is usually referred to as cgroupfs, like:
@@ -111,7 +111,7 @@ The reason of using cgroupfs:
 
 The reason of using systemd:
 - Systemd is highly recommended by [runc](https://github.com/opencontainers/runc/blob/main/docs/cgroup-v2.md.) for cgroup v2.
-- If we use systemfs in a systemd based system, there will be more than one component which manage the cgroup tree.
+- If we use cgroupfs in a systemd based system, there will be more than one component which manage the cgroup tree.
 - In the systemd [docs](https://www.freedesktop.org/wiki/Software/systemd/ControlGroupInterface/), we can know that  create/delete cgroups will be unavailable to userspace applications, unless done via systemd's APIs.
 - The systemd has a good abstract API of cgroups. 
 
@@ -121,12 +121,15 @@ The reason of using systemd:
 
 The Cgroup Manager is used to create or delete cgroups, and bind worker processes to cgroups. We plan to integrate the Cgroup Manager in the Agent. 
 
-We should abstract the Cgroup Manager because we have more than one way to manager cgroups in linux: cgroupfs and systemd.
+We should abstract the Cgroup Manager because there are more than one way to manager cgroups in linux: cgroupfs and systemd.
 
 2. Generate the command line of cgroup.
 
 Agent should generete the command line from cgroup manager. The command line will be append to the `command_prefix` field of runtime env context. A command line sample is like:
-    `mkdir /sys/fs/cgroup/{worker_id} && echo "200000 1000000" > /sys/fs/cgroup/foo/cpu.max && echo {pid} > /sys/fs/cgroup/foo/cgroup.procs`
+
+```
+mkdir /sys/fs/cgroup/{worker_id} && echo "200000 1000000" > /sys/fs/cgroup/foo/cpu.max && echo {pid} > /sys/fs/cgroup/foo/cgroup.procs
+```
 
 3. Start worker process with the command line.
 
