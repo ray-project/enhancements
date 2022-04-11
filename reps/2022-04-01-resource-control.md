@@ -9,7 +9,7 @@ So, the goal of this proposal is to achieve resource control for worker processe
 
 ### Should this change be within `ray` or outside?
 
-These changes would be within Ray core.
+These changes would be within Ray Core.
 
 ## Stewardship
 ### Required Reviewers
@@ -74,12 +74,12 @@ When we run `ray.init` with a `runtime_env` and `eager_install` is enabled, the 
     `mkdir /sys/fs/cgroup/{worker_id} && echo "200000 1000000" > /sys/fs/cgroup/foo/cpu.max && echo {pid} > /sys/fs/cgroup/foo/cgroup.procs`
 
 When we create a `Task` or `Actor` with a `runtime_env`(or a inherited `runtime_env`), the main steps are:
-  - (**Step 3**) The worker submits the task.
-  - (**Step 4**) The `task_spec` is received by the Raylet after scheduling.
-  - (**Step 5**) The Raylet sends the RPC `GetOrCreateRuntimeEnv` to the Agent.
-  - (**Step 6**) The agent generates `command_prefix` in `runtime_env_context` and replies the RPC.
-  - (**Step 7**) The Raylet starts the new worker process with the `runtime_env_context`.
-  - (**Step 8**) The `setup_worker.py` setups the `resource_control` by `command_prefix` for the new worker process.
+  - (**Step 4**) The worker submits the task.
+  - (**Step 5**) The `task_spec` is received by the Raylet after scheduling.
+  - (**Step 6**) The Raylet sends the RPC `GetOrCreateRuntimeEnv` to the Agent.
+  - (**Step 7**) The agent generates `command_prefix` in `runtime_env_context` and replies the RPC.
+  - (**Step 8**) The Raylet starts the new worker process with the `runtime_env_context`.
+  - (**Step 9**) The `setup_worker.py` setups the `resource_control` by `command_prefix` for the new worker process.
 
 #### Cgroup Manager
 The Cgroup Manager is used to create or delete cgroups, and bind worker processes to cgroups. We plan to integrate the Cgroup Manager in the Agent.
@@ -112,7 +112,7 @@ NOTE: The entire config options is [here](https://man7.org/linux/man-pages/man5/
 #### About Cgroup v1 and v2
 [Cgroup v2](https://www.kernel.org/doc/Documentation/cgroup-v2.txt) is more reasonable, but we should also support cgroup v1 because v1 is widely used and has been hard coded to the [OCI](https://opencontainers.org/) standards. You can see this [blog](https://www.redhat.com/sysadmin/fedora-31-control-group-v2) for more.
 
-Change if cgroup v2 has been enabled in your linux system:
+Check if cgroup v2 has been enabled in your linux system:
 ```
 mount | grep '^cgroup' | awk '{print $1}' | uniq
 ```
