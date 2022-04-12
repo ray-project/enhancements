@@ -60,6 +60,7 @@ Users could turn on/off resource control by setting the relevant fields of runti
 ```python
     from ray.runtime_env import RuntimeEnv, ResourceControlConfig
     runtime_env = ray.runtime_env.RuntimeEnv(
+        enable_resource_control=True,
         resource_control_config=ResourceControlConfig(
             cpu_enabled=True, memory_enabled=True, cpu_strict_usage=False, memory_strict_usage=True)
     )
@@ -67,7 +68,7 @@ Users could turn on/off resource control by setting the relevant fields of runti
 
 ### How to manage cgroups
 #### cgroup versions
-The cgroup has two versions: cgroup v1 and cgroup v2. [Cgroup v2](https://www.kernel.org/doc/Documentation/cgroup-v2.txt) was made official with the release of Linux 4.5. But only a few systems are known to use croup v2 by default(refer to [here](https://rootlesscontaine.rs/getting-started/common/cgroup2/)): Fedora (since 31), Arch Linux (since April 2021), openSUSE Tumbleweed (since c. 2021), Debian GNU/Linux (since 11) and Ubuntu (since 21.10). It means that, although a lot of persons are using the Linux with high versions, they can't use cgroup v2 if they don't make a special configration and reboot.
+The cgroup has two versions: cgroup v1 and cgroup v2. [Cgroup v2](https://www.kernel.org/doc/Documentation/cgroup-v2.txt) was made official with the release of Linux 4.5. But only a few systems are known to use croup v2 by default(refer to [here](https://rootlesscontaine.rs/getting-started/common/cgroup2/)): Fedora (since 31), Arch Linux (since April 2021), openSUSE Tumbleweed (since c. 2021), Debian GNU/Linux (since 11) and Ubuntu (since 21.10). For other Linux distributions, even if they use newer Linux kernels, users still need to change a configuration (see below) and reboot the system to enable cgroup v2.
 
 Check if cgroup v2 has been enabled in your linux system:
 ```
@@ -80,7 +81,7 @@ grubby --update-kernel=ALL --args="systemd.unified_cgroup_hierarchy=1"
 reboot
 ```
 
-Overall, cgroup v2 seems more reasonable and easy to use, but we should also support cgroup v1 because v1 is widely used and has been hard coded to the [OCI](https://opencontainers.org/) standards. You can see this [blog](https://www.redhat.com/sysadmin/fedora-31-control-group-v2) for more.
+Overall, cgroup v2 has better design and is easier to use, but we should also support cgroup v1 because v1 is widely used and has been hard coded to the [OCI](https://opencontainers.org/) standards. See this [blog](https://www.redhat.com/sysadmin/fedora-31-control-group-v2) for more information.
 
 #### cgroupfs
 The traditional way to manage cgroups is writing the file system directly. It is usually referred to as cgroupfs, like:
@@ -91,16 +92,16 @@ echo {pid} > /sys/fs/cgroup/foo/cgroup.procs # Bind process.
 ```
 NOTE: This is an example based on cgroup v2. The commmand lines in cgroup v1 is defferent and incompatible.
 
-We also could use the [libcgroup](https://github.com/libcgroup/libcgroup/blob/main/README) to simplify the implementation. This library support both cgroup v1 and cgroup v2. 
+We can also use the [libcgroup](https://github.com/libcgroup/libcgroup/blob/main/README) to simplify the implementation. This library support both cgroup v1 and cgroup v2. 
 
 #### systemd
-Systemd, the init daemon of most of linux hosts, is also a cgroup driver which can use cgroup to manage processes. It provide a wrapped way to bind process and cgroup, like:
+Systemd, the init daemon of most of linux hosts, is also a cgroup driver which can use cgroup to manage processes. It provide a wrapped way to bind process and cgroup, so that we don't have to manually manage the cgroup files. For example:
 ```
 systemctl set-property {worker_id}.service CPUQuota=20% # Bind process and cgroup automatically.
 systemctl start {worker_id}.service
 ```
 
-NOTE: The entire config options is [here](https://man7.org/linux/man-pages/man5/systemd.resource-control.5.html). And we can also use `StartTransientUnit` to create cgroup with worker process simply. This is a [dbus](https://www.freedesktop.org/wiki/Software/systemd/dbus/) API and there is a [dbus-python](https://dbus.freedesktop.org/doc/dbus-python/) module we can used.
+NOTE: The entire config options is [here](https://man7.org/linux/man-pages/man5/systemd.resource-control.5.html). And we can also use `StartTransientUnit` to create cgroup with worker process simply. This is a [dbus](https://www.freedesktop.org/wiki/Software/systemd/dbus/) API and there is a [dbus-python](https://dbus.freedesktop.org/doc/dbus-python/) python lib that we can use.
 
 #### Why we should support both cgroupfs and systemd
 The cgroupfs and the systemd are two mainstream ways to manage cgroups. In [container technology](https://kubernetes.io/docs/tasks/administer-cluster/kubeadm/configure-cgroup-driver/), this two ways are also supported. We should also support both of them.
@@ -111,17 +112,19 @@ The reason of using cgroupfs:
 
 The reason of using systemd:
 - Systemd is highly recommended by [runc](https://github.com/opencontainers/runc/blob/main/docs/cgroup-v2.md.) for cgroup v2.
-- If we use cgroupfs in a systemd based system, there will be more than one component which manage the cgroup tree.
-- In the systemd [docs](https://www.freedesktop.org/wiki/Software/systemd/ControlGroupInterface/), we can know that  create/delete cgroups will be unavailable to userspace applications, unless done via systemd's APIs.
+- If we use cgroupfs in a systemd based system, there will be more than one components which simultaneously manage the cgroup tree.
+- In the systemd [docs](https://www.freedesktop.org/wiki/Software/systemd/ControlGroupInterface/), we can know that, in future, create/delete cgroups will be unavailable to userspace applications, unless done via systemd's APIs.
 - The systemd has a good abstract API of cgroups. 
 
-### Support using cgroups in Ray
+So, we should support both cgroupfs and systemd. And we can provide a config which is used to change the cgroup manager.
 
-1. Cgroup manager in the Agent
+### Changes needed in Ray
+
+1. Add a Cgroup manager module in the Dashboard Agent
 
 The Cgroup Manager is used to create or delete cgroups, and bind worker processes to cgroups. We plan to integrate the Cgroup Manager in the Agent. 
 
-We should abstract the Cgroup Manager because there are more than one way to manager cgroups in linux: cgroupfs and systemd.
+Cgroup Manager should expose an abstract interface that can hide the differences between cgroupfs/systemd and cgroup v1/v2.
 
 2. Generate the command line of cgroup.
 
@@ -137,7 +140,7 @@ Currently, we use `setup_worker.py` to enforce the runtime environments. `setup_
 
 4. Delete cgroup.
 
-When worker processes die, we should delete the cgroup which is created for the processes. This work is only needed for cgroupfs because systemd could handle it.
+When worker processes die, we should delete the cgroup which is created for the processes. This work is only needed for cgroupfs because systemd can automatically delete the cgroup when the process dies.
 
 So, we should add a new RPC named `CleanForDeadWorker` in `RuntimeEnvService`. The Raylet should send this PRC to the Agent and the Agent will delete the cgroup.
 
