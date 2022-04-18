@@ -5,15 +5,15 @@
 Current Ray's serialization has some issues:
 
 1. Doesn't support out-of-band serialization in Java worker. Cause some performance issues in Java worker.
-1. Hard to add a new serializer for a specific class.
-1. Doesn't support cross-language serialization for custom classes.
+2. Hard to add a new serializer for a specific class.
+3. Doesn't support cross-language serialization for custom classes.
 
 In order to resolve the above issues. We propose to refactor the current serialization code path, provide a standard way for users to develop their own serializers.
 In conclusion:
 
 1. Provide pluggable ways for users to implement custom serialization, including:
    1. Cross-language serialization.
-   1. Out of band serialization and other optimizations.
+   2. Out of band serialization and other optimizations.
 2. Unify the current serialization code path to this new pluggable design. Make code cleaner.
 
 ### Should this change be within `ray` or outside?
@@ -40,7 +40,7 @@ Firstly, if users wants to implement custom serialization, they should register 
 Note that a unique string ID should be provided for class identification in cross-language serialization.
 
 ```python
-// In Python
+# In Python
 ray.register_serializer("ArrowTable", type(arrow_table_obj), ArrowTableSerializer())
 ray.register_serializer("Protobuf", type(protobuf_obj), ProtobufSerializer())
 ```
@@ -113,7 +113,7 @@ ClassWithOOB {
 }
 ```
 
-Here if a user imlements a serializer for this class, he will put `int a` to in-band buffer, and `byte[] d` to the out-of-band buffer.
+Here if a user implements a serializer for this class, he will put `int a` to in-band buffer, and `byte[] d` to the out-of-band buffer.
 The buffer layout will be:
 
 | Class ID hash | hash("ClassWithOOB") |
@@ -130,7 +130,7 @@ When we get this buffer in another language, we'll firstly check whether a seria
 Unify all existing object serialization to this API.
 
 1. Implement internal object serializer, such as RayError, ActorHandle, etc.
-1. By default, if no serializer is registered, use current serializer as the fallback. For example, pickle5 in Python, FST in Java. **In this case, cross-language serialization is disabled.**
+2. By default, if no serializer is registered, use current serializer as the fallback. For example, pickle5 in Python, FST in Java. **In this case, cross-language serialization is disabled.**
 
 #### Implement Individual Popular Formats' Serializers
 
