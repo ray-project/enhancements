@@ -4,17 +4,19 @@
 
 Current Ray's serialization has some issues:
 
-1. Doesn't support out-of-band serialization in Java worker. Cause some performance issues in Java worker.
-2. Hard to add a new serializer for a specific class.
-3. Doesn't support cross-language serialization for custom classes.
+1. Doesn't support [out-of-band(OOB) data](https://en.wikipedia.org/wiki/Out-of-band_data). So we can't do zero-copy reading/writing. There was a requirement for zero-copy reading Arrow data in Java, but we couldn't achieve it because of this.
+2. Type loss in cross-lang serialization. e.g. `short` will become `int` from Java to Python.
+3. Doesn't support common classes (e.g. Map).
+4. Doesn't support cross-language serialization for custom classes and it's hard to add a new serializer for a specific class.
 
-In order to resolve the above issues. We propose to refactor the current serialization code path, provide a standard way for users to develop their own serializers.
-In conclusion:
+In order to resolve the above issues. We propose to refactor the current serialization code path, to
 
 1. Provide pluggable ways for users to implement custom serialization, including:
    1. Cross-language serialization.
    2. Out of band serialization and other optimizations.
-2. Unify the current serialization code path to this new pluggable design. Make code cleaner.
+2. Unify the current serialization code path to this new pluggable design. Make code cleaner. Also, provide a unified interface across different languages.
+
+With a standard way to implement serializers, we can solve issue 3 and 4 easily, solve issue 2 by register different serializer for `int` and `short`, solve issue 1 by implementing an advanced serializer with OOB optimization.
 
 ### Should this change be within `ray` or outside?
 
@@ -24,7 +26,7 @@ It should be a part of the main `ray` project.
 
 ### Required Reviewers
 
-Hao Chen, Qing Wang, Eric Liang, Zhi Lin, Simon Mo, Jiajun Yao, Siyuan Zhuang
+Hao Chen, Qing Wang, Eric Liang, Zhi Lin, Simon Mo, Jiajun Yao, Siyuan Zhuang, Clark Zinzow
 
 ### Shepherd of the Proposal (should be a senior committer)
 
@@ -129,12 +131,13 @@ When we get this buffer in another language, we'll firstly check whether a seria
 
 Unify all existing object serialization to this API.
 
-1. Implement internal object serializer, such as RayError, ActorHandle, etc.
-2. By default, if no serializer is registered, use current serializer as the fallback. For example, pickle5 in Python, FST in Java. **In this case, cross-language serialization is disabled.**
+1. Implement serializers for internal classes, such as RayError, ActorHandle, etc.
+2. Use Msgpack as the serializer for the primitive types.
+3. By default, if no serializer is registered, use current serializer as the fallback. For example, pickle5 in Python, FST in Java. **In this case, cross-language serialization is disabled.**
 
 #### Implement Individual Popular Formats' Serializers
 
-ArrowTable, Protobuf and so on.
+Arrow, Protobuf and so on.
 
 ## Compatibility, Deprecation, and Migration Plan
 
@@ -144,6 +147,7 @@ There won't be any user-level compatibility change.
 
 Unit tests for core components.
 Compatibility is covered by CI.
+Performance benchmarks.
 Additional unit tests for individual serializers in the future.
 
 ## Follow-on Work
