@@ -4,12 +4,12 @@
 
 Current Ray's serialization has some issues:
 
-1. Doesn't support out-of-band serialization in Java worker. Cause some perfomance issues in Java worker.
+1. Doesn't support out-of-band serialization in Java worker. Cause some performance issues in Java worker.
 1. Hard to add a new serializer for a specific class.
-1. Doens't support cross-language serialization for custom classes.
+1. Doesn't support cross-language serialization for custom classes.
 
 In order to resolve the above issues. We propose to refactor the current serialization code path, provide a standard way for users to develop their own serializers.
-In conculution:
+In conclusion:
 
 1. Provide pluggable ways for users to implement custom serialization, including:
    1. Cross-language serialization.
@@ -24,7 +24,7 @@ It should be a part of the main `ray` project.
 
 ### Required Reviewers
 
-Hao Chen, Qing Wang, Eric Liang, Zhi Lin, Simon Mo
+Hao Chen, Qing Wang, Eric Liang, Zhi Lin, Simon Mo, Jiajun Yao, Siyuan Zhuang
 
 ### Shepherd of the Proposal (should be a senior committer)
 
@@ -36,14 +36,16 @@ Hao Chen
 
 #### Register Serializer
 
-Firstly, if a user wants to implement custom serialization, he should register his serializer to Ray.
+Firstly, if users wants to implement custom serialization, they should register their serializer to Ray.
 Note that a unique string ID should be provided for class identification in cross-language serialization.
 
-```java
+```python
 // In Python
-Ray.register_serializer("ArrowTable", type(arrow_table_obj), ArrowTableSerializer());
-Ray.register_serializer("Protobuf", type(protobuf_obj), ProtobufSerializer());
+ray.register_serializer("ArrowTable", type(arrow_table_obj), ArrowTableSerializer())
+ray.register_serializer("Protobuf", type(protobuf_obj), ProtobufSerializer())
+```
 
+```java
 // In Java
 Ray.registerSerializer("ArrowTable", ArrowTable.class, new ArrowTableSerializer());
 Ray.registerSerializer("Protobuf", Protobuf.class, new ProtobufSerializer());
@@ -53,7 +55,7 @@ Ray will maintain a map from ClassID to Serializer in memory. This relationship 
 
 #### Implement Serializer
 
-Then, he needs to implement this custom serializer, implements the interface shown below:
+Then, the user needs to implement this custom serializer, implements the interface shown below:
 Let's take Python as an example. Other languages will be similar.
 
 ```python
@@ -66,7 +68,7 @@ class MySerializer(RaySerializer):
 
 ```
 
-`serialize`method should return a `SerializedResult`, which contains 2 fields: in-band buffer and out-of-band buffers.
+`serialize`method should return a `RaySerializationResult`, which contains 2 fields: in-band buffer and out-of-band buffers.
 `inBandBuffer` is nothing else than a byte array. Users can use this field to achieve normal in-band serialization.
 
 ```python
@@ -119,7 +121,7 @@ The buffer layout will be:
 | In-band data | a |
 | Out of band data list | [d] |
 
-When we get this buffer in another language, we'll firstly check whether a serializer for "ClassWithOOB" is registered. If not, an serialization exception will be thrown. Else, we put in-band and out-of-band data to the `deseriaze` method of that serializer, get the result and continue processing.
+When we get this buffer in another language, we'll firstly check whether a serializer for "ClassWithOOB" is registered. If not, an serialization exception will be thrown. Else, we put in-band and out-of-band data to the `deserialize` method of that serializer, get the result and continue processing.
 
 ### Work Items
 
