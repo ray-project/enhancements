@@ -62,8 +62,8 @@ Let's take Python as an example. Other languages will be similar.
 class MySerializer(RaySerializer):
     def serialize(self, object: MyClass) -> RaySerializationResult:
         pass
-    def deserialize(self, in_band_data: bytes,
-                    out_of_band_data: List[bytes]) -> MyClass:
+    def deserialize(self, in_band_data: memoryview,
+                    out_of_band_data: List[memoryview]) -> MyClass:
         pass
 
 ```
@@ -74,24 +74,24 @@ class MySerializer(RaySerializer):
 ```python
 class RaySerializationResult:
     def __init__(self):
-        self.in_band_buffer: bytes = None
+        self.in_band_buffer: memoryview = None
         self.out_of_band_buffers: List[RayOutOfBandBUffer] = None
 ```
 
-`OutOfBandBuffer` is for advanced users. They can use this to do out-of-band optimization. Ray will call `OutOfBandBuffer#write` only once when constructing the final buffer sent to the network.
+`RayOutOfBandBUffer` is for advanced users. They can use this to do out-of-band optimization. Ray will call `RayOutOfBandBUffer#write` only once when constructing the final buffer sent to the network.
 
 ```python
 class MyOutOfBandBuffer(RayOutOfBandBUffer):
     def get_size(self) -> int:
         pass
     # dest is a byte array with size == get_size()
-    def write_to(self, dest: bytes):
+    def write_to(self, dest: memoryview):
         pass
 ```
 
 ### Final Buffer Protocol
 
-```
+```plaintext
 +---------------+----------------+-------------------------------------
 |  ClassIDHash  |  in-band data  |   … oob-buf0 … oob-buf1 … oob-buf2 …
 +---------------+----------------+-------------------------------------
@@ -117,9 +117,9 @@ Here if a user implements a serializer for this class, he will put `int a` to in
 The buffer layout will be:
 
 | Class ID hash | hash("ClassWithOOB") |
-| --- | --- |
-| In-band data | a |
-| Out of band data list | [d] |
+| ------------- | -------------------- |
+| In-band data  |        a             |
+| Out of band data list |    [d]       |
 
 When we get this buffer in another language, we'll firstly check whether a serializer for "ClassWithOOB" is registered. If not, an serialization exception will be thrown. Else, we put in-band and out-of-band data to the `deserialize` method of that serializer, get the result and continue processing.
 
@@ -175,7 +175,7 @@ class MyClass:
 class RaySerializer:
     def serialize(self, object):
         pass
-    def deserialize(self, in_band_data: bytes, out_of_band_data: List[bytes]):
+    def deserialize(self, in_band_data: memoryview, out_of_band_data: List[memoryview]):
         pass
 
 class RayOutOfBandBUffer:
@@ -189,19 +189,19 @@ class MyOutOfBandBuffer(RayOutOfBandBUffer):
     def get_size(self) -> int:
         pass
     # dest is a byte array with size == get_size()
-    def write_to(self, dest: bytes):
+    def write_to(self, dest: memoryview):
         pass
 
 class RaySerializationResult:
     def __init__(self):
-        self.in_band_buffer: bytes = None
+        self.in_band_buffer: memoryview = None
         self.out_of_band_buffers: List[RayOutOfBandBUffer] = None
 
 class MySerializer(RaySerializer):
     def serialize(self, object: MyClass) -> RaySerializationResult:
         pass
-    def deserialize(self, in_band_data: bytes,
-                    out_of_band_data: List[bytes]) -> MyClass:
+    def deserialize(self, in_band_data: memoryview,
+                    out_of_band_data: List[memoryview]) -> MyClass:
         pass
 
 ```
