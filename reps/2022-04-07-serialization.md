@@ -188,7 +188,7 @@ Note that in real world we might simply wrap Msgpack to do serialization for com
 ```python
 class ListSerializer(RaySerializer):
 
-    def serialize(self, list_object: List[str]) -> RaySerializationResult:
+    def serialize(self, list_object: List[bytearray]) -> RaySerializationResult:
         result = RaySerializationResult()
         result.in_band_buffer = bytearray()
         # Total element count.
@@ -203,7 +203,8 @@ class ListSerializer(RaySerializer):
             result.out_of_band_buffers += element_res.out_of_band_buffers
         return result
 
-    def deserialize(self, serialization_result: RaySerializationResult, oob_offset: int = 0) -> Tuple[List, int]:
+    def deserialize(self, serialization_result: RaySerializationResult,
+                    oob_offset: int = 0) -> Tuple[List, int]:
         in_band = serialization_result.in_band_buffer
         oob = serialization_result.out_of_band_buffers
 
