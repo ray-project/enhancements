@@ -12,8 +12,8 @@ Current Ray's serialization has some issues:
 In order to resolve the above issues. We propose to refactor the current serialization code path, to
 
 1. Provide pluggable ways for users to implement custom serialization, including:
-   1. Cross-language serialization.
-   2. Out of band serialization and other optimizations.
+    1. Cross-language serialization.
+    2. Out of band serialization and other optimizations.
 2. Unify the current serialization code path to this new pluggable design. Make code cleaner. Also, provide a unified interface across different languages.
 
 With a standard way to implement serializers, we can solve issue 3 and 4 easily, solve issue 2 by register different serializer for `int` and `short`, solve issue 1 by implementing an advanced serializer with OOB optimization.
@@ -55,6 +55,19 @@ Ray.registerSerializer("Protobuf", Protobuf.class, new ProtobufSerializer());
 
 Ray will maintain a map from ClassID to Serializer in memory. This relationship won't be persisted, which means you need to register them again when the process is restarted.
 
+As the first step, this API is only used by Ray core. That means we can simply hard code them without needing persistence.
+If we are to expose this API to users, we can consider to add the persistance feature in the future.
+
+We'll also provide a `ray.get_serializer` to get the serializer by either language-specific type or unique string ID, or call `ray.serialize/deserialize` to do serialization directly.
+
+```python
+ray.get_serializer("ArrowTable")
+ray.get_serializer(type(arrow_table_obj))
+
+ray.serialize(arrow_table_obj)
+ray.deserialize(ray_serialized_result)
+```
+
 #### Implement Serializer
 
 Then, the user needs to implement this custom serializer, implements the interface shown below:
@@ -64,39 +77,160 @@ Let's take Python as an example. Other languages will be similar.
 class MySerializer(RaySerializer):
     def serialize(self, object: MyClass) -> RaySerializationResult:
         pass
-    def deserialize(self, in_band_data: memoryview,
-                    out_of_band_data: List[memoryview]) -> MyClass:
+    def deserialize(self, serialization_result: RaySerializationResult,
+                    oob_offset: int = 0) -> Tuple[MyClass, int]:
         pass
 
 ```
 
-`serialize`method should return a `RaySerializationResult`, which contains 2 fields: in-band buffer and out-of-band buffers.
-`inBandBuffer` is nothing else than a byte array. Users can use this field to achieve normal in-band serialization.
+`serialize` method should return a `RaySerializationResult`, which mainly contains 2 fields: in-band buffer and out-of-band buffer.
+`in_band_buffer` is nothing else than a byte buffer. Users can use this field to achieve normal in-band serialization.
 
 ```python
 class RaySerializationResult:
-    def __init__(self):
-        self.in_band_buffer: memoryview = None
-        self.out_of_band_buffers: List[RayOutOfBandBUffer] = None
+    in_band_buffer: bytearray
+    out_of_band_buffers: Iterable[memoryview]
 ```
 
-`RayOutOfBandBUffer` is for advanced users. They can use this to do out-of-band optimization. Ray will call `RayOutOfBandBUffer#write` only once when constructing the final buffer sent to the network.
+out_of_band_buffers is for advanced users, which can be used to achieve zero-copy.
+
+The `oob_offset` in `deserialize` is used for nested serialization. Indicates the start offset of the OOB buffers. `deserialize` method should return the new `oob_offset` as the second element of its return value.
+If you don't use OOB buffers, just return it as it is.
+Check the "Nested Serialization" session for more details.
+
+### Example(in-band)
+
+Consider such a class with a transient field. Now the user wants Ray to automatically do the serialization for this class in task arguments and return value when crossing language.
 
 ```python
-class MyOutOfBandBuffer(RayOutOfBandBUffer):
-    def get_size(self) -> int:
-        pass
-    # dest is a byte array with size == get_size()
-    def write_to(self, dest: memoryview):
-        pass
+class MyClass:
+    state: str
+    transient_field
 ```
+
+The only thing the user needs to do is to implement a serializer for this class in corresponding languages and register it:
+
+```python
+# In Python
+class MyClassSerializer(RaySerializer):
+
+    def serialize(self, obj: MyClass) -> RaySerializationResult:
+        return RaySerializationResult(bytes(obj.state))
+
+    def deserialize(self, serialization_result: RaySerializationResult,
+                    oob_offset: int = 0) -> Tuple[MyClass, int]:
+        return (MyClass(in_band_buffer), oob_offset)
+
+ray.register_serializer("MyClass", type(MyClass), MyClassSerializer())
+```
+
+```java
+class MyClassSerializer implements RaySerializer {
+    @Override
+    public RaySerializationResult serialize(MyClass obj) {
+        return new RaySerializationResult(obj.state);
+    }
+    @Override
+    public Pair<MyClass, Integer> deserialize(RaySerializationResult serializationResult, int oobOffset) {
+        return new Pair<>(new MyClass(in_band_data), oobOffset);
+    }
+}
+
+Ray.registerSerializer("MyClass", MyClass.class, new MyClassSerializer());
+```
+
+Now everything is done. Ray will automatically apply your serializer to Ray task's arguments and return value when crossing languages.
+
+### Out-of-band serialization
+
+Let's take `bytearray` as an example.
+
+```python
+# In Python
+class ByteArraySerializer(RaySerializer):
+
+    def serialize(self, byte_array: bytearray) -> RaySerializationResult:
+        return RaySerializationResult(None, [memoryview(byte_array)])
+
+    def deserialize(self, serialization_result: RaySerializationResult,
+                    oob_offset: int = 0) -> Tuple[MyClass, int]:
+        return (serialization_result.out_of_band_buffers[0].obj, oob_offset)
+```
+
+Now bytes object will be out-of-band serialized.
+
+In the same process, no copy will happen to out-of-band buffers.
+
+For example, in the following code, no copy will happen:
+
+```python
+b = bytearray(b'\x01\x02\x03')
+serialization_result: RaySerializationResult = ray.serialize(b)
+deserialized_bytes: bytearray = ray.deserialize(serialization_result)
+```
+
+`deserialized_bytes` and `b` will be backed by the same memory.
+
+When the serialized result needs to go through network, for example, in cross-language situation, only 1 copy will happen. That is from `RaySerializationResult` to the network buffer.
+
+### Nested Serialization
+
+Let's take `List[bytearray]` as an example to see how to handle nested types. We've already implemented a serializer for `bytearray` above.
+
+Note that in real world we might simply wrap Msgpack to do serialization for common classes. Here we rebuild the wheel only to show how it works.
+
+```python
+class ListSerializer(RaySerializer):
+
+    def serialize(self, list_object: List[str]) -> RaySerializationResult:
+        result = RaySerializationResult()
+        result.in_band_buffer = bytearray()
+        # Total element count.
+        result.in_band_buffer.extend(to_bytes(len(list_object))))
+        for element in list_object:
+            element_res = ray.serialize(element)
+            # in band buffer length
+            result.in_band_buffer.extend(to_bytes(len(element_res.in_band_buffer)))
+            # in band buffer
+            result.in_band_buffer.extend(element_res.in_band_buffer)
+            # append out of band buffer
+            result.out_of_band_buffers += element_res.out_of_band_buffers
+        return result
+
+    def deserialize(self, serialization_result: RaySerializationResult, oob_offset: int = 0) -> Tuple[List, int]:
+        in_band = serialization_result.in_band_buffer
+        oob = serialization_result.out_of_band_buffers
+
+        result = []
+        pos = 0
+        # read element count
+        count, pos = get_int(in_band, pos)
+        for i in range(count):
+            # read element size
+            element_size, pos = get_int(in_band, pos)
+            # read element in-band data
+            element_in_band_data = in_band_buffer[pos: pos + element_size]
+            pos = pos + element_size
+            # nested serialization here
+            element, oob_offset = ray.deserialize(element_in_band_data, oob, oob_offset)
+            result.append(element)
+        return (result, oob_offset)
+```
+
+### Fallback Serializer
+
+By default, if no serializer is registered, use serializer in current Ray's version as the fallback. For example, pickle5 in Python, FST in Java.
+**In this case, cross-language serialization is disabled,** since the protocol are different between different frameworks.
+
+**Also, nested serialization is disabled in this case.** Because the fallback third-party serialization framework is out of our control.
+It's possible to modify the third-party framework to make it use Ray's serializer, but I think it's a massive work and not worth it. Maybe a follow-up work item.
 
 ### Final Buffer Protocol
 
 ```plaintext
-+---------------+----------------+-------------------------------------
-|  ClassIDHash  |  in-band data  |   … oob-buf0 … oob-buf1 … oob-buf2 …
-+---------------+----------------+-------------------------------------
++---------------+----------------+------------------------
+|  ClassIDHash  |  in-band data  |  oob-buf1, oob-buf2...
++---------------+----------------+------------------------
 ```
 
 A msgpack buffer which includes 3 parts:
@@ -104,40 +238,19 @@ The 1st part is the class ID which is used to find the corresponding serializer.
 The 2nd part is the serialized data of the real object.
 The last part is a list of out-of-band buffers in memory.
 
-#### Examples
-
-##### Custom Object with OOB Fields
-
-```java
-ClassWithOOB {
-    int a; // in-band serialized
-    byte[] d; // out-of-band serialized
-}
-```
-
-Here if a user implements a serializer for this class, he will put `int a` to in-band buffer, and `byte[] d` to the out-of-band buffer.
-The buffer layout will be:
-
-| Class ID hash | hash("ClassWithOOB") |
-| ------------- | -------------------- |
-| In-band data  |        a             |
-| Out of band data list |    [d]       |
-
-When we get this buffer in another language, we'll firstly check whether a serializer for "ClassWithOOB" is registered. If not, an serialization exception will be thrown. Else, we put in-band and out-of-band data to the `deserialize` method of that serializer, get the result and continue processing.
-
 ### Work Items
 
-#### Refactor Serialization Code Path
+P0:
 
-Unify all existing object serialization to this API.
+* Refactor Serialization Code Path, unify all existing serialization code to this API.
 
-1. Implement serializers for internal classes, such as RayError, ActorHandle, etc.
-2. Use Msgpack as the serializer for the primitive types.
-3. By default, if no serializer is registered, use current serializer as the fallback. For example, pickle5 in Python, FST in Java. **In this case, cross-language serialization is disabled.**
+P1:
 
-#### Implement Individual Popular Formats' Serializers
+* Serializers for common classes like list, dict.
 
-Arrow, Protobuf and so on.
+P2:
+
+* Serializers for Popular Formats' Serializers, e.g. Arrow.
 
 ## Compatibility, Deprecation, and Migration Plan
 
@@ -149,63 +262,3 @@ Unit tests for core components.
 Compatibility is covered by CI.
 Performance benchmarks.
 Additional unit tests for individual serializers in the future.
-
-## Follow-on Work
-
-### Integrate Ray Serializers to Fallback Serializers(To be discussed)
-
-Consider such a class:
-
-```java
-class A {
-    ArrowTable arrowTable;
-}
-```
-
-Here in `A`, `ArrowTable`is another class that has registered a serializer to Ray. But `A` hasn't.
-Now if we want to serialize `A`, since A hasn't been registered, we will use fallback serializer FST to serialize it. But because FST doesn't know how to serialize `ArrowTable`(only Ray knows), an exception will be thrown.
-So firstly we need to discuss whether it's an issue or it's by design.
-If it's by design we don't need to do anything. And the compatibility is fine because in the current version it can't be serialized, either. Users need to register class A separately.
-If it's an issue and we need to resolve it, a lot of things need to be done. We need to integrate Ray Serializers to FST, Pickle5, and MessagePack.
-
-## Attachments
-
-```python
-from typing import List, Set, Dict, Tuple, Optional
-
-class MyClass:
-    pass
-
-class RaySerializer:
-    def serialize(self, object):
-        pass
-    def deserialize(self, in_band_data: memoryview, out_of_band_data: List[memoryview]):
-        pass
-
-class RayOutOfBandBUffer:
-    def get_size(self) -> int:
-        pass
-    # dest is a byte array with size == get_size()
-    def write_to(self, dest: bytes):
-        pass
-
-class MyOutOfBandBuffer(RayOutOfBandBUffer):
-    def get_size(self) -> int:
-        pass
-    # dest is a byte array with size == get_size()
-    def write_to(self, dest: memoryview):
-        pass
-
-class RaySerializationResult:
-    def __init__(self):
-        self.in_band_buffer: memoryview = None
-        self.out_of_band_buffers: List[RayOutOfBandBUffer] = None
-
-class MySerializer(RaySerializer):
-    def serialize(self, object: MyClass) -> RaySerializationResult:
-        pass
-    def deserialize(self, in_band_data: memoryview,
-                    out_of_band_data: List[memoryview]) -> MyClass:
-        pass
-
-```
