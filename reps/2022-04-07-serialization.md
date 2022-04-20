@@ -247,17 +247,9 @@ The last part is a list of out-of-band buffers in memory.
 
 ### Work Items
 
-P0:
-
-* Refactor Serialization Code Path, unify all existing serialization code to this API.
-
-P1:
-
-* Serializers for common classes like list, dict.
-
-P2:
-
-* Serializers for Popular Formats' Serializers, e.g. Arrow.
+* [P0] Refactor Serialization Code Path, unify all existing serialization code to this API.
+* [P1] Serializers for common classes like list, dict.
+* [P2] Serializers for Popular Formats' Serializers, e.g. Arrow.
 
 ## Compatibility, Deprecation, and Migration Plan
 
