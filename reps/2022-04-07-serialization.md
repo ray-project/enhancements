@@ -159,7 +159,7 @@ class ByteArraySerializer(RaySerializer):
         return RaySerializationResult(None, [memoryview(byte_array)])
 
     def deserialize(self, serialization_result: RaySerializationResult,
-                    oob_offset: int = 0) -> Tuple[MyClass, int]:
+                    oob_offset: int = 0) -> Tuple[bytearray, int]:
         return (serialization_result.out_of_band_buffers[0].obj, oob_offset)
 ```
 
@@ -204,7 +204,7 @@ class ListSerializer(RaySerializer):
         return result
 
     def deserialize(self, serialization_result: RaySerializationResult,
-                    oob_offset: int = 0) -> Tuple[List, int]:
+                    oob_offset: int = 0) -> Tuple[List[bytearray], int]:
         in_band = serialization_result.in_band_buffer
         oob = serialization_result.out_of_band_buffers
 
