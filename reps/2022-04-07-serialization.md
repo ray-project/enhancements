@@ -6,7 +6,7 @@ Current Ray's serialization has some issues:
 
 1. Doesn't support [out-of-band(OOB) data](https://en.wikipedia.org/wiki/Out-of-band_data). So we can't do zero-copy reading/writing. There was a requirement for zero-copy reading Arrow data in Java, but we couldn't achieve it because of this.
 2. Type loss in cross-lang serialization. e.g. `short` will become `int` from Java to Python.
-3. Doesn't support common classes (e.g. Map).
+3. Doesn't support commonly used classes (e.g. Map).
 4. Doesn't support cross-language serialization for custom classes and it's hard to add a new serializer for a specific class.
 
 In order to resolve the above issues. We propose to refactor the current serialization code path, to
@@ -16,7 +16,12 @@ In order to resolve the above issues. We propose to refactor the current seriali
     2. Out of band serialization and other optimizations.
 2. Unify the current serialization code path to this new pluggable design. Make code cleaner. Also, provide a unified interface across different languages.
 
-With a standard way to implement serializers, we can solve issue 3 and 4 easily, solve issue 2 by register different serializer for `int` and `short`, solve issue 1 by implementing an advanced serializer with OOB optimization.
+With a standard way to implement serializers, we can
+
+* Solve issue 4 immediately.
+* Solve issue 3 by providing build-in serializers for commonly used classes.
+* Solve issue 2 by register different serializer for `int` and `short`.
+* Solve issue 1 by implementing an advanced serializer with OOB optimization.
 
 ### Should this change be within `ray` or outside?
 
@@ -83,19 +88,19 @@ class MySerializer(RaySerializer):
 
 ```
 
-`serialize` method should return a `RaySerializationResult`, which mainly contains 2 fields: in-band buffer and out-of-band buffer.
-`in_band_buffer` is nothing else than a byte buffer. Users can use this field to achieve normal in-band serialization.
+`serialize` method should return a `RaySerializationResult`, which mainly contains 2 fields: in-band buffer and out-of-band buffers.
+`in_band_buffer` is nothing else than a byte array. Users can use this field to achieve normal in-band serialization.
 
 ```python
 class RaySerializationResult:
-    in_band_buffer: bytearray
-    out_of_band_buffers: Iterable[memoryview]
+    in_band_buffer: bytes
+    out_of_band_buffers: Sequence[memoryview]
 ```
 
-out_of_band_buffers is for advanced users, which can be used to achieve zero-copy.
+out_of_band_buffers is for advanced users, which can be used to achieve zero-copy. Check "Out-of-band serialization" session for examples.
 
 The `oob_offset` in `deserialize` is used for nested serialization. Indicates the start offset of the OOB buffers. `deserialize` method should return the new `oob_offset` as the second element of its return value.
-If you don't use OOB buffers, just return it as it is.
+**If you don't use OOB buffers, just return it as it is.**
 Check the "Nested Serialization" session for more details.
 
 ### Example(in-band)
@@ -104,7 +109,7 @@ Consider such a class with a transient field. Now the user wants Ray to automati
 
 ```python
 class MyClass:
-    state: str
+    state: bytes
     transient_field
 ```
 
@@ -114,12 +119,12 @@ The only thing the user needs to do is to implement a serializer for this class 
 # In Python
 class MyClassSerializer(RaySerializer):
 
-    def serialize(self, obj: MyClass) -> RaySerializationResult:
-        return RaySerializationResult(bytes(obj.state))
+    def serialize(self, instance: MyClass) -> RaySerializationResult:
+        return RaySerializationResult(instance.state)
 
     def deserialize(self, serialization_result: RaySerializationResult,
                     oob_offset: int = 0) -> Tuple[MyClass, int]:
-        return (MyClass(in_band_buffer), oob_offset)
+        return (MyClass(in_band_buffer.obj), oob_offset)
 
 ray.register_serializer("MyClass", type(MyClass), MyClassSerializer())
 ```
@@ -127,11 +132,12 @@ ray.register_serializer("MyClass", type(MyClass), MyClassSerializer())
 ```java
 class MyClassSerializer implements RaySerializer {
     @Override
-    public RaySerializationResult serialize(MyClass obj) {
-        return new RaySerializationResult(obj.state);
+    public RaySerializationResult serialize(MyClass instance) {
+        return new RaySerializationResult(instance.state);
     }
     @Override
-    public Pair<MyClass, Integer> deserialize(RaySerializationResult serializationResult, int oobOffset) {
+    public Pair<MyClass, Integer> deserialize(
+        RaySerializationResult serializationResult, int oobOffset) {
         return new Pair<>(new MyClass(in_band_data), oobOffset);
     }
 }
