@@ -160,10 +160,10 @@ class ByteArraySerializer(RaySerializer):
 
     def deserialize(self, serialization_result: RaySerializationResult,
                     oob_offset: int = 0) -> Tuple[bytearray, int]:
-        return (serialization_result.out_of_band_buffers[0].obj, oob_offset)
+        return (serialization_result.out_of_band_buffers[0].obj, oob_offset + 1)
 ```
 
-Now bytes object will be out-of-band serialized.
+Now `bytearray` objects will be out-of-band serialized.
 
 In the same process, no copy will happen to out-of-band buffers.
 
