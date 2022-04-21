@@ -5,7 +5,7 @@
 Current Ray's serialization has some issues:
 
 1. Doesn't support [out-of-band(OOB) data](https://en.wikipedia.org/wiki/Out-of-band_data). So we can't do zero-copy reading/writing. There was a requirement for zero-copy reading Arrow data in Java, but we couldn't achieve it because of this.
-2. Type loss in cross-lang serialization. e.g. `short` will become `int` from Java to Python.
+2. Type loss in cross-lang serialization for primitive types. e.g. `int` may be deserialized to `short` or `byte`.
 3. Doesn't support commonly used classes (e.g. Map).
 4. Doesn't support cross-language serialization for custom classes and it's hard to add a new serializer for a specific class.
 
@@ -20,7 +20,7 @@ With a standard way to implement serializers, we can
 
 * Solve issue 4 immediately.
 * Solve issue 3 by providing build-in serializers for commonly used classes.
-* Solve issue 2 by register different serializer for `int` and `short`.
+* Solve issue 2 by registering different serializers for primitive types.
 * Solve issue 1 by implementing an advanced serializer with OOB optimization.
 
 ### Should this change be within `ray` or outside?
@@ -130,6 +130,7 @@ ray.register_serializer("MyClass", type(MyClass), MyClassSerializer())
 ```
 
 ```java
+// In Java
 class MyClassSerializer implements RaySerializer {
     @Override
     public RaySerializationResult serialize(MyClass instance) {
@@ -160,10 +161,10 @@ class ByteArraySerializer(RaySerializer):
 
     def deserialize(self, serialization_result: RaySerializationResult,
                     oob_offset: int = 0) -> Tuple[bytearray, int]:
-        return (serialization_result.out_of_band_buffers[0].obj, oob_offset)
+        return (serialization_result.out_of_band_buffers[0].obj, oob_offset + 1)
 ```
 
-Now bytes object will be out-of-band serialized.
+Now `bytearray` objects will be out-of-band serialized.
 
 In the same process, no copy will happen to out-of-band buffers.
 
