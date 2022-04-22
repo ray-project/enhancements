@@ -161,9 +161,23 @@ When `G_1` finds the backup of object `O_A` is unavailable, `G_1` will send a RP
 
 ## Compatibility, Deprecation, and Migration Plan
 
+Fully forward compatible, the behavior of the object store will same as usual when the high-available mode is disabled.
 
 ## Test Plan and Acceptance Criteria
 
+We plan to use a ray job to test the object store HA. About this job:
+
+1. Multiple node, and each node has two type actors: producer and consumer.
+    - **producer**: Produce data and cache `ObjectRef`. Add or delete objects according to a certain strategy, for testing object gc.
+    - **consumer**: Get the `ActorHandle` for producer via actor name, and borrower object randomly through `ray.get`.
+2. Adjust data scale according to parameters, include:
+    - Data size, proportion of plasma store.
+    - The number of objects.
+
+Acceptance criteria:
+
+1. Performance reduction is acceptable when no process or node failure.
+2. Any one raylet process of any workers processes failure, and the job will finish in the end.
 
 ## (Optional) Follow-on Work
 
