@@ -156,7 +156,7 @@ ray.init(global_owner_number=16)
 - **Passive**: When a global owner is waiting for collected information from Raylets, the global owner needs to handle timeouts, which can be difficult.
 - Relatively complicated.
 
-#### How to solve object borrower failure?
+#### How to solve the object borrower failure problem?
 
 ##### Star Topology
 
@@ -173,7 +173,7 @@ As the following illustration shows, the worker `W_A` owns the object `O_A`, and
 
 ![image_3_star_topology](https://user-images.githubusercontent.com/11995469/164456154-2163f505-d835-4d23-9901-fac6d867d368.png)
 
-#### How to solve loss of all copies?
+#### How to solve the loss of all copies problem?
 
 ##### Multiple Primary Copies
 
