@@ -228,10 +228,33 @@ class ListSerializer(RaySerializer):
 ### Fallback Serializer
 
 By default, if no serializer is registered, use serializer in current Ray's version as the fallback. For example, pickle5 in Python, FST in Java.
-**In this case, cross-language serialization is disabled,** since the protocol are different between different frameworks.
 
-**Also, nested serialization is disabled in this case.** Because the fallback third-party serialization framework is out of our control.
-It's possible to modify the third-party framework to make it use Ray's serializer, but I think it's a massive work and not worth it. Maybe a follow-up work item.
+We'll register a fallback serializer to Ray. For example, pickle5 fallback serializer will be something like the following, all OOB buffers of pickle5 will be wrapped to Ray's OOB buffer.
+
+```python
+# pseudo code, might not be runnable
+class Pickle5FallbackSerializer(RaySerializer):
+    def serialize(self, instance) -> RaySerializationResult:
+        oob_buffers = []
+        in_band = pickle5.dumps(instance, buffer_callback=oob_buffers.append)
+        return RaySerializationResult(in_band, oob_buffers)
+
+
+    def deserialize(self, serialization_result: RaySerializationResult,
+                    oob_offset: int = 0):
+        in_band = serialization_result.in_band_buffer
+        oob = serialization_result.out_of_band_buffers
+        return pickle5.loads(in_band, buffers=oob)
+```
+
+Nested serialization will still work in this case. When registering a serializer to Ray, we'll also register it to the fallback serializer(with some wrapping).
+
+With this, we can make full use of the sophisticated serialization library. In one language, Users don't need to write boring serializers for every custom class. They only need to write serializers for some key classes.
+
+**There is one flaw in this case: cross-language serialization is disabled.** since the protocol are different between different frameworks.
+If users want to do cross-language serialization, unfortunately, they still need to implement a simple wrapper serializer.
+
+This can be mitigated if we can find a full-featured cross-language serialization library as the fallback serializer. But we can't find one by now. Maybe we can use [Fury](https://docs.google.com/document/d/1nrKrXnyRqiIQqLV1P6i3t6TXQEwduoyLeHLMT2DV-fc/edit?usp=sharing) in the future after it's open-source.
 
 ### Final Buffer Protocol
 
