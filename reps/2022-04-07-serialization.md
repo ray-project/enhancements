@@ -48,7 +48,7 @@ Note that a unique string ID should be provided for class identification in cros
 
 ```python
 # In Python
-ray.register_serializer("ArrowTable", type(arrow_table_obj), ArrowTableSerializer())
+ray.register_serializer("ArrowTable", ArrowTable, ArrowTableSerializer())
 ray.register_serializer("Protobuf", type(protobuf_obj), ProtobufSerializer())
 ```
 
