@@ -43,7 +43,7 @@ Hao Chen
 
 #### Register Serializer
 
-Firstly, if users wants to implement custom serialization, they should register their serializer to Ray.
+Firstly, if users want to implement custom serialization, they should register their serializers to Ray.
 Note that a unique string ID should be provided for class identification in cross-language serialization.
 
 ```python
