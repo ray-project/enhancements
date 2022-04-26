@@ -6,7 +6,7 @@ Current Ray's serialization has some issues:
 
 1. Doesn't support [out-of-band(OOB) data](https://en.wikipedia.org/wiki/Out-of-band_data) in Java workers. So we can't do zero-copy reading/writing. There was a requirement for zero-copy reading Arrow data in Java, but we couldn't achieve it because of this.
 2. Type loss in cross-lang serialization for primitive types. e.g. `short` may be deserialized to `int` from a task to another.
-3. Doesn't support commonly used classes (e.g. Map).
+3. Doesn't support commonly used container types (e.g. Map).
 4. Doesn't support cross-language serialization for custom classes and it's hard to add a new serializer for a specific class.
 
 In order to resolve the above issues. We propose to refactor the current serialization code path, to
@@ -43,12 +43,12 @@ Hao Chen
 
 #### Register Serializer
 
-Firstly, if users wants to implement custom serialization, they should register their serializer to Ray.
+Firstly, if users want to implement custom serialization, they should register their serializers to Ray.
 Note that a unique string ID should be provided for class identification in cross-language serialization.
 
 ```python
 # In Python
-ray.register_serializer("ArrowTable", type(arrow_table_obj), ArrowTableSerializer())
+ray.register_serializer("ArrowTable", ArrowTable, ArrowTableSerializer())
 ray.register_serializer("Protobuf", type(protobuf_obj), ProtobufSerializer())
 ```
 
