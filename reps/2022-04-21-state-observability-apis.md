@@ -51,7 +51,9 @@ It- Useful for beginners to advanced users.
 ### Status quo
 The below table shows if the existing APIs support the states above. Each column explains if the API is available for each client (Python API, CLI, REST API). Each row indicates available states in Ray. 
 
-TODO(sang): Add a picture.
+<img width="826" alt="Screen Shot 2022-04-26 at 11 14 28 AM" src="https://user-images.githubusercontent.com/18510752/165365387-32a11ea4-bd0b-4df5-aeaa-f74e89a5332d.png">
+<img width="854" alt="Screen Shot 2022-04-26 at 11 14 13 AM" src="https://user-images.githubusercontent.com/18510752/165365343-0f912117-feda-4050-838d-59bb30c0dd03.png">
+
 
 ### Proposed APIs
 All states should be visible to the users through properly documented / stable / consistently named APIs. This section proposes the state APIs to observe the following resources. 
@@ -61,7 +63,8 @@ All states should be visible to the users through properly documented / stable /
 - Yellow, P0: API exists, but we need refinement or renaming.
 - Blue, P1: Less critical states. Could be missing or not refined.
 
-TODO(sang): Add a picture
+<img width="806" alt="Screen Shot 2022-04-26 at 11 15 05 AM" src="https://user-images.githubusercontent.com/18510752/165365485-25727a08-2a08-4691-a554-fbe5b7544cde.png">
+<img width="807" alt="Screen Shot 2022-04-26 at 11 15 17 AM" src="https://user-images.githubusercontent.com/18510752/165365506-1e2c6bc7-c365-4405-a4ca-2c7257051d69.png">
 
 ### Terminologies
 - Consumer: Consumers of state APIs. In Ray, (e.g., dashboard, CLI, and Python APIs).
@@ -76,7 +79,7 @@ Currently, there are two big architectural problems.
 
 We propose to use the Ray API server (which is known as the dashboard server) as a stateless, read-only, centralized component to provide state information across Ray. An API server will be responsible for providing an interface (either gRPC or REST, depending on what API server is standardized), caching, and querying data from sources (raylet, GCS, agent, workers), and post-processing the aggregated state information. Having a centralized component with a standardized interface will bring several benefits such as (1) all consumers can avoid having diverged implementation, (2) APIs will become language agonistic, (3) and good maintainability and low complexity with the expenses of performance. Since state APIs don't have strict performance requirements, the tradeoff wouldn't be a big problem.
 
-TODO(sang): Add a picture
+<img width="359" alt="Screen Shot 2022-04-26 at 11 15 44 AM" src="https://user-images.githubusercontent.com/18510752/165365580-f953181a-67b8-4797-883d-d9b726d2780e.png">
 
 Alternatively, we can allow consumers to directly query the states from each component (which resembles how the private GCS-based state APIs work). Although it is a viable option and could be slightly more scalable (because there's no centralized component), it has several drawbacks. (1) some logic is hard to generalize (e.g., service discovery) from all consumers. (2) APIs will be difficult to be used by some consumers (e.g., dashboard) (3) we will need to develop APIs for each language. 
 
