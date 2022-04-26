@@ -6,7 +6,7 @@ Current Ray's serialization has some issues:
 
 1. Doesn't support [out-of-band(OOB) data](https://en.wikipedia.org/wiki/Out-of-band_data). So we can't do zero-copy reading/writing. There was a requirement for zero-copy reading Arrow data in Java, but we couldn't achieve it because of this.
 2. Type loss in cross-lang serialization. e.g. `short` will become `int` from Java to Python.
-3. Doesn't support commonly used classes (e.g. Map).
+3. Doesn't support commonly used container types (e.g. Map).
 4. Doesn't support cross-language serialization for custom classes and it's hard to add a new serializer for a specific class.
 
 In order to resolve the above issues. We propose to refactor the current serialization code path, to
