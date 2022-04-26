@@ -281,7 +281,7 @@ There won't be any user-level compatibility change.
 
 ## Test Plan and Acceptance Criteria
 
-*Unit tests for core components.
-*Compatibility is covered by CI.
-*Performance benchmarks.
-*Additional unit tests for individual serializers in the future.
+* Unit tests for core components.
+* Compatibility is covered by CI.
+* Performance benchmarks.
+* Additional unit tests for individual serializers in the future.
