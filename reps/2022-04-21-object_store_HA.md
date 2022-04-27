@@ -32,8 +32,6 @@ Changes are within Ray core.
 
 ### Problem statement
 
-**TODO: Is it better to have a separate section or separate document for the detailed design and let this REP mainly focus on motivation and high-level design?**
-
 #### Problem 1: Object Owner Failure
 
 The owner of an object stores the metadata of the object, such as reference count and locations of the object. If the owner dies, other workers which hold the object ref cannot access the data of the object anymore because all copies of the object will be deleted from the Object Store.
