@@ -49,13 +49,13 @@ Note that a unique string ID should be provided for class identification in cros
 ```python
 # In Python
 ray.register_serializer("ArrowTable", ArrowTable, ArrowTableSerializer())
-ray.register_serializer("Protobuf", type(protobuf_obj), ProtobufSerializer())
+ray.register_serializer("MyClass", MyClass, MyClassSerializer())
 ```
 
 ```java
 // In Java
 Ray.registerSerializer("ArrowTable", ArrowTable.class, new ArrowTableSerializer());
-Ray.registerSerializer("Protobuf", Protobuf.class, new ProtobufSerializer());
+Ray.registerSerializer("MyClass", MyClass.class, new MyClassSerializer());
 ```
 
 Ray will maintain a map from ClassID to Serializer in memory. This relationship won't be persisted, which means you need to register them again when the process is restarted.
@@ -67,7 +67,7 @@ We'll also provide a `ray.get_serializer` to get the serializer by either langua
 
 ```python
 ray.get_serializer("ArrowTable")
-ray.get_serializer(type(arrow_table_obj))
+ray.get_serializer(ArrowTable)
 
 ray.serialize(arrow_table_obj)
 ray.deserialize(ray_serialized_result)
@@ -82,26 +82,23 @@ Let's take Python as an example. Other languages will be similar.
 class MySerializer(RaySerializer):
     def serialize(self, object: MyClass) -> RaySerializationResult:
         pass
-    def deserialize(self, serialization_result: RaySerializationResult,
-                    oob_offset: int = 0) -> Tuple[MyClass, int]:
+    def deserialize(self, in_band_buffer: bytes,
+                    oob_iterator: Iterator[memoryview]) -> MyClass:
         pass
 
 ```
 
 `serialize` method should return a `RaySerializationResult`, which mainly contains 2 fields: in-band buffer and out-of-band buffers.
-`in_band_buffer` is nothing else than a byte array. Users can use this field to achieve normal in-band serialization.
 
 ```python
 class RaySerializationResult:
     in_band_buffer: bytes
-    out_of_band_buffers: Sequence[memoryview]
+    out_of_band_buffers: Iterable[memoryview]
 ```
 
-out_of_band_buffers is for advanced users, which can be used to achieve zero-copy. Check "Out-of-band serialization" session for examples.
+`in_band_buffer` is nothing else than a byte array. When deserializing, in `deserialize` method, Ray will pass `in_band_buffer` back as it as. Users can use this field to achieve normal in-band serialization.
 
-The `oob_offset` in `deserialize` is used for nested serialization. Indicates the start offset of the OOB buffers. `deserialize` method should return the new `oob_offset` as the second element of its return value.
-**If you don't use OOB buffers, just return it as it is.**
-Check the "Nested Serialization" session for more details.
+`out_of_band_buffers` is for advanced users, which can be used to achieve zero-copy. When deserializing, Ray will pass an iterator of the OOB buffers to `deserialize` method. Check "Out-of-band serialization" session for examples.
 
 ### Example(in-band)
 
@@ -122,11 +119,11 @@ class MyClassSerializer(RaySerializer):
     def serialize(self, instance: MyClass) -> RaySerializationResult:
         return RaySerializationResult(instance.state)
 
-    def deserialize(self, serialization_result: RaySerializationResult,
-                    oob_offset: int = 0) -> Tuple[MyClass, int]:
-        return (MyClass(in_band_buffer.obj), oob_offset)
+    def deserialize(self, in_band_buffer: bytes,
+                    oob_iterator: Iterator[memoryview]) -> MyClass:
+        return MyClass(in_band_buffer.obj)
 
-ray.register_serializer("MyClass", type(MyClass), MyClassSerializer())
+ray.register_serializer("MyClass", MyClass, MyClassSerializer())
 ```
 
 ```java
@@ -137,9 +134,9 @@ class MyClassSerializer implements RaySerializer {
         return new RaySerializationResult(instance.state);
     }
     @Override
-    public Pair<MyClass, Integer> deserialize(
-        RaySerializationResult serializationResult, int oobOffset) {
-        return new Pair<>(new MyClass(in_band_data), oobOffset);
+    public MyClass deserialize(
+        ByteBuffer inBandBuffer, Iterator<ByteBuffer> oobIterator) {
+        return new MyClass(in_band_data);
     }
 }
 
@@ -159,9 +156,9 @@ class ByteArraySerializer(RaySerializer):
     def serialize(self, byte_array: bytearray) -> RaySerializationResult:
         return RaySerializationResult(None, [memoryview(byte_array)])
 
-    def deserialize(self, serialization_result: RaySerializationResult,
-                    oob_offset: int = 0) -> Tuple[bytearray, int]:
-        return (serialization_result.out_of_band_buffers[0].obj, oob_offset + 1)
+    def deserialize(self, in_band_buffer: bytes,
+                    oob_iterator: Iterator[memoryview]) -> bytearray:
+        return next(oob_iterator).obj
 ```
 
 Now `bytearray` objects will be out-of-band serialized.
@@ -204,25 +201,22 @@ class ListSerializer(RaySerializer):
             result.out_of_band_buffers += element_res.out_of_band_buffers
         return result
 
-    def deserialize(self, serialization_result: RaySerializationResult,
-                    oob_offset: int = 0) -> Tuple[List[bytearray], int]:
-        in_band = serialization_result.in_band_buffer
-        oob = serialization_result.out_of_band_buffers
-
+    def deserialize(self, in_band_buffer: bytes,
+                    oob_iterator: Iterator[memoryview]) -> List[bytearray]:
         result = []
         pos = 0
         # read element count
-        count, pos = get_int(in_band, pos)
+        count, pos = get_int(in_band_buffer, pos)
         for i in range(count):
             # read element size
-            element_size, pos = get_int(in_band, pos)
+            element_size, pos = get_int(in_band_buffer, pos)
             # read element in-band data
             element_in_band_data = in_band_buffer[pos: pos + element_size]
             pos = pos + element_size
             # nested serialization here
-            element, oob_offset = ray.deserialize(element_in_band_data, oob, oob_offset)
+            element = ray.deserialize(element_in_band_data, oob_iterator)
             result.append(element)
-        return (result, oob_offset)
+        return result
 ```
 
 ### Fallback Serializer
@@ -232,22 +226,41 @@ By default, if no serializer is registered, use serializer in current Ray's vers
 We'll register a fallback serializer to Ray. For example, pickle5 fallback serializer will be something like the following, all OOB buffers of pickle5 will be wrapped to Ray's OOB buffer.
 
 ```python
-# pseudo code, might not be runnable
+# Pseudo code
 class Pickle5FallbackSerializer(RaySerializer):
     def serialize(self, instance) -> RaySerializationResult:
-        oob_buffers = []
-        in_band = pickle5.dumps(instance, buffer_callback=oob_buffers.append)
-        return RaySerializationResult(in_band, oob_buffers)
+        pickle_oob_buffers = []
+        in_band = pickle5.dumps(instance, buffer_callback=pickle_oob_buffers.append)
+        ray_oob_buffers = convert_to_ray_oob_buffers(pickle_oob_buffers)
+        return RaySerializationResult(in_band, ray_oob_buffers)
 
-
-    def deserialize(self, serialization_result: RaySerializationResult,
-                    oob_offset: int = 0):
-        in_band = serialization_result.in_band_buffer
-        oob = serialization_result.out_of_band_buffers
-        return pickle5.loads(in_band, buffers=oob)
+    def deserialize(self, in_band_buffer: bytes,
+                    oob_iterator: Iterator[memoryview]):
+        return pickle5.loads(in_band_buffer, buffers=list(oob_iterator))
 ```
 
 Nested serialization will still work in this case. When registering a serializer to Ray, we'll also register it to the fallback serializer(with some wrapping).
+
+```python
+# Pseudo code
+def register_serializer(class_name: str, class_type: type, serializer):
+    # Register to Ray...
+    ...
+    # Wrap Ray's serializer
+    def _serialize_wrapper(obj):
+        def _deserialize_wrapper(in_band, pickle_oob_buffers):
+            ray_oob_buffers = convert_to_ray_oob_buffer(pickle_oob_buffers)
+            return serializer.deserialize(in_band, iter(ray_oob_buffers))
+
+        ray_result = serializer.serialize(obj)
+        pickle_oob_buffers = convert_to_pickle_oob_buffers(ray_result.out_of_band_buffers)
+        return (
+            _deserialize_wrapper,
+            (ray_result.in_band_buffer, pickle_oob_buffers)
+        )
+    # Register to pickle5
+    pickle.CloudPickler.dispatch[class_type] = _serialize_wrapper
+```
 
 With this, we can make full use of the sophisticated serialization library. In one language, Users don't need to write boring serializers for every custom class. They only need to write serializers for some key classes.
 
