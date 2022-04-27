@@ -264,7 +264,7 @@ def register_serializer(class_name: str, class_type: type, serializer):
 
 With this, we can make full use of the sophisticated serialization library. In one language, Users don't need to write boring serializers for every custom class. They only need to write serializers for some key classes.
 
-**There is one flaw in this case: cross-language serialization is disabled.** since the protocol are different between different frameworks.
+**Cross-language serialization is disabled in this case.** since the protocol are different between different frameworks.
 If users want to do cross-language serialization, unfortunately, they still need to implement a simple wrapper serializer.
 
 This can be mitigated if we can find a full-featured cross-language serialization library as the fallback serializer. But we can't find one by now. Maybe we can use [Fury](https://docs.google.com/document/d/1nrKrXnyRqiIQqLV1P6i3t6TXQEwduoyLeHLMT2DV-fc/edit?usp=sharing) in the future after it's open-source.
