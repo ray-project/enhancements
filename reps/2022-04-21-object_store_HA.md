@@ -106,7 +106,12 @@ Every Raylet maintains an RPC connection to every global owner to watch the stat
 - RPCs sent by other workers to `G` should be retried until the state of `G's` Actor becomes `Alive`.
 - The reply callback of some RPCs will not be invoked until the rebuilding state of `G` is set to `READY`.
 
-We prefer __Option.2__, and due to the difficulty of implementation, we are more trend to choose the __active__ way to restore `G`
+We prefer __Option.2__, and due to the difficulty of implementation, we are more trend to choose the __Active__ way to restore `G`, here are some cons of the __Passive__ way:
+
+- Raylets need to subscribe to the actor state notifications in order to know the new RPC address of a restarted actor and reconnect to it. To implement this, we need to add something similar to "actor manager" in core worker to Raylet. This is an additional coding effort.
+- Raylets pushing collected information to the restarted actor v.s. the actor pulling information from Raylets is just like push-based v.s. pull-based resource reporting. This is what we've already discussed and we've concluded that pull-based resource reporting is easier to maintain and test. I believe this conclusion also applies to object reference and location reporting.
+
+
 
 **Pros**:
 
@@ -143,8 +148,8 @@ We make sure there are multiple (configurable) primary copies of the same object
 # Set the number of global owner (default is zero) and the number of HA object's primary copies (default is zero).
 ray.init(
     job_config=ray.job_config.JobConfig(
-        global_owner_num=16,
-        primary_copies_num=3,
+        num_global_owners=16,
+        num_primary_copies=3,
     )
 )
 
@@ -192,4 +197,4 @@ Acceptance criteria:
 
 - **Global Owner**: Automatically adjust the number of global owner according to the number of objects in the ray cluster.
 - **Star Topology**: Change the synchronous RPC sent to `G` when deserializing on `Worker C` to asynchronous.
-- **Multiple Primary Copies**: Rebuild failed copies, keeping the number of copies unchanged.
+- **Multiple Primary Copies**: Recreate new primary copies upon loss of any primary copy to meet the required number of primary copies.
