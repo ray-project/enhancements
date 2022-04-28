@@ -35,17 +35,18 @@ State APIs can be categorized into 3 types.
 **Logical states**
 - Aligned with logical concepts in which users need to learn to use Ray.
 It- Useful for beginners to advanced users.
-- E.g., Actor, Task, Objects, Resources, Placement Group, Runtime Env
+- E.g., actors, tasks, objects, resources, placement groups, runtime environments
+
 
 **Physical states**
 - States from physical components.
 - When users scale up, it will become important to observe physical states. 
-- Logs, Cluster Health, Worker processes, Nodes
+- E.g., logs, cluster health, worker processes, nodes
 
 **Internal states**
 - Internal information about Ray.
 - They are mostly useful for maintainers to debug bugs, but users can also be benefited. 
-- Scheduling states, Events, Internal states of Ray components 
+- E.g., scheduling states, events, internal states of Ray components 
 
 
 ### Status quo
