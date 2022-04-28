@@ -1,5 +1,9 @@
 # Ray Enhancement Proposals
-This repo tracks Ray Enhancement Proposals (REP). The REP process is the main way to propose, discuss, and decide on features and other major changes to the Ray project. We'll start with a simple decision-making process (and evolve it over time): For each REP, there will be a round of voting among Ray committers; if the result is not unanimous, Eric Liang (@ericl) and Philipp Moritz (@pcmoritz) will be the final deciders on whether to accept the change.
+This repo tracks Ray Enhancement Proposals (REP). The REP process is the main way to propose, discuss, and decide on features and other major changes to the Ray project. We'll start with a simple decision-making process (and evolve it over time):.
+- First, a draft PR is created against the repo with a draft REP. A senior Ray committer should be designated as the shepherd and assigned to the PR.
+- The shepherd will review the PR and get it into a polished state for further review by Ray committers.
+- Once the PR is reviewable, we will hold a vote on the ``ray-committers`` mailing list. In most cases this should reach consensus; if the result is not unanimous, Eric Liang (@ericl) and Philipp Moritz (@pcmoritz) will be the final deciders on whether to accept the change.
+- Based on the results of the vote and possible final decision, the PR will either be merged (REP approved) or closed (REP rejected) with a short summary of the decision.
 
 You can find a list of PRs for REPs here (both open and merged PRs are available for comment): https://github.com/ray-project/enhancements/pulls?q=is%3Apr
 
