@@ -9,7 +9,7 @@ So, the goal of this proposal is to achieve resource control for worker processe
 
 ### Should this change be within `ray` or outside?
 
-These changes would be within Ray Core.
+The resource control ablility will be implemented in a runtime environments plugin. So the changes should no longer be within Ray core, but scoped to ray.experimental.cgroup_env_plugin (moved to util eventually).
 
 ## Stewardship
 ### Required Reviewers
@@ -21,50 +21,50 @@ These changes would be within Ray Core.
 ## Design and Architecture
 
 ### Cluster level API
-We should add some new system configs for the resource control.
-- worker_resource_control_method: Set to "cgroup" by default.
-- cgroup_manager: Set to "cgroupfs" by default. We should also support `systemd`.
-- cgroup_mount_path: Set to `/sys/fs/cgroup/` by default.
-- cgroup_unified_hierarchy: Whether to use cgroup v2 or not. Set to `False` by default.
-- cgroup_use_cpuset: Whether to use cpuset. Set to `False` by default.
+We should add some new environment variables for configuration in the `cgroup_env_plugin`.
+- RAY_CGROUP_MANAGER: Set to "cgroupfs" by default. We should also support `systemd`.
+- RAY_CGROUP_MOUNT_PATH: Set to `/sys/fs/cgroup/` by default.
+- RAY_CGROUP_UNIFIED_HIERARCHY: Whether to use cgroup v2 or not. Set to `False` by default.
+- RAY_CGROUP_USE_CPUSET: Whether to use cpuset. Set to `False` by default.
 
 ### User level API
 Users could turn on/off resource control by setting the relevant fields of runtime env (in job level or task/actor level).
 #### Simple API using a flag
 ```python
     runtime_env = {
-        "enable_resource_control": True,
+        "plugins": {
+            "resource_control": {
+                "enable": True,
+                "cpu_enabled": True,
+                "memory_enabled": True,
+                "cpu_strict_usage": False,
+                "memory_strict_usage": True,
+            }
+        }
     }
 ```
 
 ```python
     from ray.runtime_env import RuntimeEnv
     runtime_env = ray.runtime_env.RuntimeEnv(
-        enable_resource_control=True
-    )
-```
-
-#### Entire APIs
-```python
-    runtime_env = {
-        "enable_resource_control": True,
-        "resource_control_config": {
-            "cpu_enabled": True,
-            "memory_enabled": True,
-            "cpu_strict_usage": False,
-            "memory_strict_usage": True,
+        plugins={
+            "resource_control": {
+                "enable": True,
+                "cpu_enabled": True,
+                "memory_enabled": True,
+                "cpu_strict_usage": False,
+                "memory_strict_usage": True,
+            }
         }
-    }
-```
-
-```python
-    from ray.runtime_env import RuntimeEnv, ResourceControlConfig
-    runtime_env = ray.runtime_env.RuntimeEnv(
-        enable_resource_control=True,
-        resource_control_config=ResourceControlConfig(
-            cpu_enabled=True, memory_enabled=True, cpu_strict_usage=False, memory_strict_usage=True)
     )
 ```
+
+The meanings of the config items:
+- enable: The switch of the resource control. Set to `False` by default.
+- cpu_enabled: Enable the cpu resource control. The cpu quota is set from sceduling, e.g. from the `num_cpus` opton of `@ray.remote(num_cpus=1)`. This is a soft limit which means that, it doesn't limit the worker's cpu usage if the cpus are not busy.
+- memory_enabled: Enable the memory resource control. Same as `cpu_enabled`, this is also a soft limit.
+- cpu_strict_usage: Limit the cpu resource strictly. Worker couldn't exceed the cpu quota even though the cpus are not busy.
+- memory_strict_usage: Limit the memory resource strictly which is same as `cpu_strict_usage`.
 
 ### How to manage cgroups
 #### cgroup versions
@@ -74,6 +74,8 @@ Check if cgroup v2 has been enabled in your linux system:
 ```
 mount | grep '^cgroup' | awk '{print $1}' | uniq
 ```
+
+NOTE: Cgroup v2 is also not supported in the Ray released images, e.g. `rayproject/ray:latest`.
 
 And you can try to enable cgroup v2:
 ```
@@ -116,19 +118,19 @@ The reason of using systemd:
 - In the systemd [docs](https://www.freedesktop.org/wiki/Software/systemd/ControlGroupInterface/), we can know that, in future, create/delete cgroups will be unavailable to userspace applications, unless done via systemd's APIs.
 - The systemd has a good abstract API of cgroups. 
 
-So, we should support both cgroupfs and systemd. And we can provide a config which is used to change the cgroup manager.
+So, we should support both cgroupfs and systemd. And we we provide a environment variable named `RAY_CGROUP_MANAGER` which is used to change the cgroup manager in cluster level.
 
 ### Changes needed in Ray
 
-1. Add a Cgroup manager module in the Dashboard Agent
+1. Add a cgroup runtime environment plugin
 
-The Cgroup Manager is used to create or delete cgroups, and bind worker processes to cgroups. We plan to integrate the Cgroup Manager in the Agent. 
+The cgroup plugin is used to create or delete cgroups, and bind worker processes to cgroups. It is loaded in the Agent. 
 
-Cgroup Manager should expose an abstract interface that can hide the differences between cgroupfs/systemd and cgroup v1/v2.
+The cgroup plugin should expose an abstract interface that can hide the differences between cgroupfs/systemd and cgroup v1/v2.
 
 2. Generate the command line of cgroup.
 
-Agent should generete the command line from cgroup manager. The command line will be append to the `command_prefix` field of runtime env context. A command line sample is like:
+Agent should generete the command line from the cgroup plugin. The command line will be append to the `command_prefix` field of runtime env context. A command line sample is like:
 
 ```
 mkdir /sys/fs/cgroup/{worker_id} && echo "200000 1000000" > /sys/fs/cgroup/foo/cpu.max && echo {pid} > /sys/fs/cgroup/foo/cgroup.procs
@@ -138,28 +140,22 @@ mkdir /sys/fs/cgroup/{worker_id} && echo "200000 1000000" > /sys/fs/cgroup/foo/c
 
 Currently, we use `setup_worker.py` to enforce the runtime environments. `setup_worker.py` will merge the `command_prefix` of runtime env context and real worker command. In the same way, the command about cgroup will be run with worker process.
 
-4. Delete cgroup.
+
+4. The enhancement of runtime environment pluggability
 
 When worker processes die, we should delete the cgroup which is created for the processes. This work is only needed for cgroupfs because systemd can automatically delete the cgroup when the process dies.
 
-So, we should add a new RPC named `CleanForDeadWorker` in `RuntimeEnvService`. The Raylet should send this PRC to the Agent and the Agent will delete the cgroup.
+So, we should make some changes to allow echo runtime environment plugin to do some works when worker processes die.
+- Add `worker_id` field to the exsiting PRC request `GetOrCreateRuntimeEnvRequest` and `DeleteRuntimeEnvIfPossibleRequest`. This two RPCs are used to create and delete runtime environment from the Raylet to the Agent.
+- Add two method, named `create_for_worker` and `delete_for_worker`, in the plugin interface. We already have two method named `create` and `delete` in the interface. The difference is that, `delete` are called only when there is no worker using the runtime environment(The reference counting to be zero), but `delete_for_worker` are called every time when a process dies.
 
+Another change is that when should support loading runtime env plugins when we start the Ray nodes. For example:
 ```
-message CleanForDeadWorkerRequest {
-  string worker_id = 1;
-}
-
-message CleanForDeadWorkerReply {
-  AgentRpcStatus status = 1;
-  string error_message = 2;
-}
-
-service RuntimeEnvService {
-...
-  rpc CleanForDeadWorker(CleanForDeadWorkerRequest)
-      returns (CleanForDeadWorkerReply);
-}
+ray start --head --runtime-env-plugins="ray.experimental.cgroup_env_plugin:ray.experimental.test_env_plugin"
 ```
+We will load the plugins and make configuration and validation. We should also add a new field `name` in the plugin interface to define the plugin name.
+
+For more details, please see the [doc](https://docs.google.com/document/d/1x1JAHg7c0ewcOYwhhclbuW0B0UC7l92WFkF4Su0T-dk/edit?usp=sharing). 
 
 ## Compatibility, Deprecation, and Migration Plan
 
