@@ -239,13 +239,25 @@ class Pickle5FallbackSerializer(RaySerializer):
         return pickle5.loads(in_band_buffer, buffers=list(oob_iterator))
 ```
 
-Nested serialization will still work in this case. When registering a serializer to Ray, we'll also register it to the fallback serializer(with some wrapping).
+Nested serialization will still work in this case.
+When registering fallback serializer, we can provide a `register_callback` to receive notifications of serializer registration.
+
+```python
+def register_fallback_serializer(serializer, register_callback=None):
+    pass
+
+def register_serializer(class_name: str, class_type: type, serializer):
+    # Register to Ray
+    ...
+    # Notify fallback serializer
+    __fallback_serializer_notify_fn(class_name, class_type, serializer)
+```
+
+In this callback we'll register Ray serializer to the fallback serializer(with some wrapping).
 
 ```python
 # Pseudo code
-def register_serializer(class_name: str, class_type: type, serializer):
-    # Register to Ray...
-    ...
+def register_to_pickle5(class_name: str, class_type: type, serializer):
     # Wrap Ray's serializer
     def _serialize_wrapper(obj):
         def _deserialize_wrapper(in_band, pickle_oob_buffers):
@@ -260,6 +272,8 @@ def register_serializer(class_name: str, class_type: type, serializer):
         )
     # Register to pickle5
     pickle.CloudPickler.dispatch[class_type] = _serialize_wrapper
+
+ray.register_fallback_serializer(Pickle5FallbackSerializer(), register_to_pickle5)
 ```
 
 With this, we can make full use of the sophisticated serialization library. In one language, Users don't need to write boring serializers for every custom class. They only need to write serializers for some key classes.
