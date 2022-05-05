@@ -16,7 +16,7 @@ The resource control ability will be implemented in a runtime environments plugi
 @ericl, @edoakes, @simon-mo, @chenk008 @raulchen 
 
 ### Shepherd of the Proposal (should be a senior committer)
-@ericl
+@edoakes
 
 ## Design and Architecture
 
