@@ -93,7 +93,7 @@ class MySerializer(RaySerializer):
 ```python
 class RaySerializationResult:
     in_band_buffer: bytes
-    out_of_band_buffers: Iterable[memoryview]
+    out_of_band_buffers: Optional[Iterable[memoryview]]
 ```
 
 `in_band_buffer` is nothing else than a byte array. When deserializing, in `deserialize` method, Ray will pass `in_band_buffer` back as it as. Users can use this field to achieve normal in-band serialization.
@@ -219,15 +219,15 @@ class ListSerializer(RaySerializer):
         return result
 ```
 
-### Fallback Serializer
+### Language Default Serializer
 
-By default, if no serializer is registered, use serializer in current Ray's version as the fallback. For example, pickle5 in Python, FST in Java.
+By default, if no serializer is registered, use serializer in current Ray's version as the default. For example, pickle5 in Python, FST in Java.
 
-We'll register a fallback serializer to Ray. For example, pickle5 fallback serializer will be something like the following, all OOB buffers of pickle5 will be wrapped to Ray's OOB buffer.
+We'll register a language default serializer to Ray. For example, we'll use pickle5 as the default serializer in Python, the code will be something like the following, all OOB buffers of pickle5 will be wrapped to Ray's OOB buffer.
 
 ```python
 # Pseudo code
-class Pickle5FallbackSerializer(RaySerializer):
+class Pickle5DefaultSerializer(RaySerializer):
     def serialize(self, instance) -> RaySerializationResult:
         pickle_oob_buffers = []
         in_band = pickle5.dumps(instance, buffer_callback=pickle_oob_buffers.append)
@@ -240,20 +240,20 @@ class Pickle5FallbackSerializer(RaySerializer):
 ```
 
 Nested serialization will still work in this case.
-When registering fallback serializer, we can provide a `register_callback` to receive notifications of serializer registration.
+When registering a language default serializer, we can provide a `register_callback` to receive notifications of serializer registration.
 
 ```python
-def register_fallback_serializer(serializer, register_callback=None):
+def register_language_default_serializer(serializer, register_callback=None):
     pass
 
 def register_serializer(class_name: str, class_type: type, serializer):
     # Register to Ray
     ...
-    # Notify fallback serializer
-    __fallback_serializer_notify_fn(class_name, class_type, serializer)
+    # Notify default serializer
+    __default_serializer_notify_fn(class_name, class_type, serializer)
 ```
 
-In this callback we'll register Ray serializer to the fallback serializer(with some wrapping).
+In this callback we'll register Ray serializer to the default serializer(with some wrapping).
 
 ```python
 # Pseudo code
@@ -273,7 +273,7 @@ def register_to_pickle5(class_name: str, class_type: type, serializer):
     # Register to pickle5
     pickle.CloudPickler.dispatch[class_type] = _serialize_wrapper
 
-ray.register_fallback_serializer(Pickle5FallbackSerializer(), register_to_pickle5)
+ray.register_language_default_serializer(Pickle5DefaultSerializer(), register_to_pickle5)
 ```
 
 With this, we can make full use of the sophisticated serialization library. In one language, Users don't need to write boring serializers for every custom class. They only need to write serializers for some key classes.
@@ -281,7 +281,7 @@ With this, we can make full use of the sophisticated serialization library. In o
 **Cross-language serialization is disabled in this case.** since the protocol are different between different frameworks.
 If users want to do cross-language serialization, unfortunately, they still need to implement a simple wrapper serializer.
 
-This can be mitigated if we can find a full-featured cross-language serialization library as the fallback serializer. But we can't find one by now. Maybe we can use [Fury](https://docs.google.com/document/d/1nrKrXnyRqiIQqLV1P6i3t6TXQEwduoyLeHLMT2DV-fc/edit?usp=sharing) in the future after it's open-source.
+This can be mitigated if we can find a full-featured cross-language serialization library as the default serializer. But we can't find one by now. Maybe we can use [Fury](https://docs.google.com/document/d/1nrKrXnyRqiIQqLV1P6i3t6TXQEwduoyLeHLMT2DV-fc/edit?usp=sharing) in the future after it's open-source.
 
 ### Final Buffer Protocol
 
