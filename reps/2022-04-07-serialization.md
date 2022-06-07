@@ -83,7 +83,7 @@ class MySerializer(RaySerializer):
     def serialize(self, object: MyClass) -> RaySerializationResult:
         pass
     def deserialize(self, in_band_buffer: bytes,
-                    oob_iterator: Iterator[memoryview]) -> MyClass:
+                    oob_buffers: Map[str, Map[int, memoryview]]) -> MyClass:
         pass
 
 ```
@@ -93,7 +93,8 @@ class MySerializer(RaySerializer):
 ```python
 class RaySerializationResult:
     in_band_buffer: bytes
-    out_of_band_buffers: Optional[Iterable[memoryview]]
+    # serializer ID -> buffer ID -> buffer
+    out_of_band_buffers: Optional[Map[str, Map[int, memoryview]]]
 ```
 
 `in_band_buffer` is nothing else than a byte array. When deserializing, in `deserialize` method, Ray will pass `in_band_buffer` back as it as. Users can use this field to achieve normal in-band serialization.
@@ -120,8 +121,8 @@ class MyClassSerializer(RaySerializer):
         return RaySerializationResult(instance.state)
 
     def deserialize(self, in_band_buffer: bytes,
-                    oob_iterator: Iterator[memoryview]) -> MyClass:
-        return MyClass(in_band_buffer.obj)
+                    oob_buffers: Map[str, Map[int, memoryview]]) -> MyClass:
+        return MyClass(in_band_buffer)
 
 ray.register_serializer("MyClass", MyClass, MyClassSerializer())
 ```
@@ -154,11 +155,13 @@ Let's take `bytearray` as an example.
 class ByteArraySerializer(RaySerializer):
 
     def serialize(self, byte_array: bytearray) -> RaySerializationResult:
-        return RaySerializationResult(None, [memoryview(byte_array)])
+        
+        return RaySerializationResult(to_bytes(0), {"ByteArray": {0: memoryview(byte_array)}})
 
     def deserialize(self, in_band_buffer: bytes,
-                    oob_iterator: Iterator[memoryview]) -> bytearray:
-        return next(oob_iterator).obj
+                    oob_buffers: Map[str, Map[int, memoryview]]) -> bytearray:
+        oob_id = to_int(in_band_buffer)
+        return oob_buffers["ByteArray"][oob_id].obj
 ```
 
 Now `bytearray` objects will be out-of-band serialized.
@@ -197,12 +200,12 @@ class ListSerializer(RaySerializer):
             result.in_band_buffer.extend(to_bytes(len(element_res.in_band_buffer)))
             # in band buffer
             result.in_band_buffer.extend(element_res.in_band_buffer)
-            # append out of band buffer
-            result.out_of_band_buffers += element_res.out_of_band_buffers
+            # merge out of band buffer
+            result.out_of_band_buffers.deep_merge(element_res.out_of_band_buffers)
         return result
 
     def deserialize(self, in_band_buffer: bytes,
-                    oob_iterator: Iterator[memoryview]) -> List[bytearray]:
+                    oob_buffers: Map[str, Map[int, memoryview]]) -> List[bytearray]:
         result = []
         pos = 0
         # read element count
@@ -214,7 +217,7 @@ class ListSerializer(RaySerializer):
             element_in_band_data = in_band_buffer[pos: pos + element_size]
             pos = pos + element_size
             # nested serialization here
-            element = ray.deserialize(element_in_band_data, oob_iterator)
+            element = ray.deserialize(element_in_band_data, oob_buffers)
             result.append(element)
         return result
 ```
@@ -235,8 +238,8 @@ class Pickle5DefaultSerializer(RaySerializer):
         return RaySerializationResult(in_band, ray_oob_buffers)
 
     def deserialize(self, in_band_buffer: bytes,
-                    oob_iterator: Iterator[memoryview]):
-        return pickle5.loads(in_band_buffer, buffers=list(oob_iterator))
+                    oob_buffers: Map[str, Map[int, memoryview]]):
+        return pickle5.loads(in_band_buffer, buffers=convert_to_pickle_oob_buffers(oob_buffers))
 ```
 
 Nested serialization will still work in this case.
@@ -262,7 +265,7 @@ def register_to_pickle5(class_name: str, class_type: type, serializer):
     def _serialize_wrapper(obj):
         def _deserialize_wrapper(in_band, pickle_oob_buffers):
             ray_oob_buffers = convert_to_ray_oob_buffer(pickle_oob_buffers)
-            return serializer.deserialize(in_band, iter(ray_oob_buffers))
+            return serializer.deserialize(in_band, ray_oob_buffers)
 
         ray_result = serializer.serialize(obj)
         pickle_oob_buffers = convert_to_pickle_oob_buffers(ray_result.out_of_band_buffers)
