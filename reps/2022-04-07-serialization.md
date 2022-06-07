@@ -155,8 +155,8 @@ Let's take `bytearray` as an example.
 class ByteArraySerializer(RaySerializer):
 
     def serialize(self, byte_array: bytearray) -> RaySerializationResult:
-        
-        return RaySerializationResult(to_bytes(0), {"ByteArray": {0: memoryview(byte_array)}})
+        unique_id = random_id()
+        return RaySerializationResult(unique_id, {"ByteArray": {unique_id: memoryview(byte_array)}})
 
     def deserialize(self, in_band_buffer: bytes,
                     oob_buffers: Map[str, Map[int, memoryview]]) -> bytearray:
