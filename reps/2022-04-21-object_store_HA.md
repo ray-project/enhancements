@@ -49,11 +49,11 @@ Data of objects stored in the plasma store. For now, the plasma store is a threa
 ### Proposed Design
 
 We implement
-# Options to implement object HA with checkpoint
+#### Options to implement object HA with checkpoint
 
 We implement object HA based on the checkpoint, so we can walk around **Problem 3: Loss of All Copies**
 
-## Option 1: Ownerless objects
+##### Option 1: Ownerless objects
 
 Every checkpointed object will be ownerless. When `ray.get` on a checkpointed object and the object data is not local, data will be loaded from checkpoint and stored in local object store as a secondary copy.
 
@@ -72,7 +72,7 @@ In this case, We don't need metadata anymore, so we don't need to manage it anym
   - Some features aren't easy to support. e.g. locality-aware scheduling.
     - Missing features.
 
-## Option 2: Divided owners on owner failure
+##### Option 2: Divided owners on owner failure
 
 Once the owner of a checkpointed object is dead, subsequent access to the object on a worker will make the worker the new owner of the object. The metadata about this object in the reference table of the worker will be rewritten. If multiple workers hold the same object ref and want to access it after owner failure, each worker will become the new owner of the object, independently. i.e. multiple owners after owner failure.
 
@@ -103,7 +103,7 @@ If both worker A and B are the new owners of an object and both pass object refs
   - Corner case handling such as RPC failures.
     - Potentially high dev cost.
 
-## Option 3: Global owner(s)
+##### Option 3: Global owner(s)
 
 We use highly available processes as global owners of checkpointed objects. Such highly available processes can be GCS or a group of named actors with `max_restarts=-1`. We reuse the existing ownership assignment RPCs to assign a checkpointed object to a global owner and encode the immutable info (an `owner_is_gcs` flag or the actor name) about the global owner into the owner address. The process to get an RPC client to the owner needs to be updated to be able to return a working RPC client to the up-to-date IP:port of the owner.
 
