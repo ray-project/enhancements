@@ -48,99 +48,84 @@ Data of objects stored in the plasma store. For now, the plasma store is a threa
 
 ### Proposed Design
 
-#### How to solve the object owner failure problem?
+We implement
+# Options to implement object HA with checkpoint
 
-**Global Owner**: A group of special Ray actors with `max_restarts=-1` will be created to own all objects of a job created by `ray.put` and the returned object (either from normal-task or actor-task). When one of the special actors fails, the restarted instance will rebuild the reference table based on information provided by Raylets and other non-special workers.
+We implement object HA based on the checkpoint, so we can walk around **Problem 3: Loss of All Copies**
 
-These actors will be distributed onto different nodes with best effort. A job-level configuration will be added (disabled by default) to enable this feature and set the number of the global owners.
+## Option 1: Ownerless objects
 
-Just need to consider how to restore data on B after A restarts, as well as rebuild various RPC links and recover subscriptions, such as `WaitForRefRemoved` and `WaitForObjectFree`.
+Every checkpointed object will be ownerless. When `ray.get` on a checkpointed object and the object data is not local, data will be loaded from checkpoint and stored in local object store as a secondary copy.
 
+In this case, We don't need metadata anymore, so we don't need to manage it anymore, and **problems 1 and 2** don't exist.
 
-##### Option 1: Syncing reference table of owners to a highly available external storage.
+- Pros
+  - The logic/protocol should be relatively straightforward.
+- Cons
+  - No pulling/pushing object data between nodes.
+    - High IO pressure on external storage.
+    - External storage bottleneck.
+    - Bad loading performance.
+  - Existing code is purely ownership-based. Need to add many if-elses to support ownerless objects. (e.g. location pubsub. GC.)
+    - High dev cost.
+    - Maintenance burden.
+  - Some features aren't easy to support. e.g. locality-aware scheduling.
+    - Missing features.
 
-We keep the in-memory reference table of owners in sync with a high-availability external storage. When an owner restarts from failure, it can restore the reference table from the external storage and recreate the RPC connections with borrowers and Raylets.
+## Option 2: Divided owners on owner failure
 
-**Pros**:
+Once the owner of a checkpointed object is dead, subsequent access to the object on a worker will make the worker the new owner of the object. The metadata about this object in the reference table of the worker will be rewritten. If multiple workers hold the same object ref and want to access it after owner failure, each worker will become the new owner of the object, independently. i.e. multiple owners after owner failure.
 
-- Less intrusive to the design of object store.
+If both worker A and B are the new owners of an object and both pass object refs to worker C, worker C only records the owner of the object once. e.g. If worker C receives the object ref from worker A first, then worker C treats worker A as the owner of the object.
 
-**Cons**:
+**Problem 2** will cause the owner to release the reference of the object in advance. In the current case, it can be handled in the same way as the owner fails.
 
-- Deployment is more complicated.
-- The modification of the reference table is a high-frequency operation. Syncing with an external storage may hurt performance.
-- Potentially some tricky consistency issues when an owner fails.
+- Pros
+  - The ownership protocol is still distributed. Critical updates to the owner reference table are still in-process.
+    - Good performance on metadata updates.
+- Cons
+  - Owner collision. e.g. Raylet also stores and uses owner addresses and communicates with owners. How do we update the owner info in Raylet, especially if two workers on the same node claim the new owner of an object?
+    - High dev cost to sync new owner info to Raylet.
+    - High dev cost to maintain N owners of an object in Raylet.
+  - Primary copy collision. Imaging multiple workers on the same node call `ray.get` on an object.
+    - If we allow only one copy loaded into the local object store, we need to update the GC strategy to only unpin the primary copy if all owners say the object is out-of-scope.
+      - High dev cost.
+    - If we store multiple copies (i.e. one copy per owner), we need to update object manager and plasma store by changing the object key from object ID to object ID + owner address.
+      - High dev cost.
+      - High memory pressure to object store.
+      - High IO pressure on external storage.
+      - External storage bottleneck.
+      - Bad loading performance.
+  - No pulling/pushing object data between nodes.
+    - High IO pressure on external storage.
+    - External storage bottleneck.
+    - Bad loading performance.
+  - Corner case handling such as RPC failures.
+    - Potentially high dev cost.
 
-##### Option 2: Rebuild failed global owner via the information in the whole cluster
+## Option 3: Global owner(s)
 
-There are two options, the active way and passive way, to rebuild the reference table and the RPC connections when a global owner restarts.
+We use highly available processes as global owners of checkpointed objects. Such highly available processes can be GCS or a group of named actors with `max_restarts=-1`. We reuse the existing ownership assignment RPCs to assign a checkpointed object to a global owner and encode the immutable info (an `owner_is_gcs` flag or the actor name) about the global owner into the owner address. The process to get an RPC client to the owner needs to be updated to be able to return a working RPC client to the up-to-date IP:port of the owner.
 
-**The Active Way**:
+Note that we don't need to restore the reference table in global owners by pulling info from the cluster because objects are already checkpointed. Checkpoint info is stored in the reference table and it will be encoded when serializing an object ref, hence checkpoint info is recoverable. If borrowers detected owner failure, they will try to reconnect to the owner and the recovered owner will recover the reference count and borrower list via these new RPC connections.
 
-The global owner actively collect information about the alive objects it owns to rebuild the reference table. Here are the details steps of global owner `G` rebuild:
+- Pros
+  - No major protocol changes compared to the existing ownership assignment protocol.
+    - Low dev cost.
+  - No owner address updates because the `owner_is_gcs` flag or the actor name is encoded in it.
+    - Low dev cost.
+- Cons
+  - Centralized/semi-centralized architecture.
+    - Potentially bottleneck.
+    - Bad performance.
+  - Corner case handling such as RPC failures.
+    - Potentially high dev cost.
 
-1. `G` begins to rebuild the reference table, and sets the rebuilding status to `REBUILDING`.
-2. `G` sends RPCs to all Raylets and ask every Raylet to traverse all local workers and reply with the information of all objects owned by `G`. `G` then uses the information to rebuild the reference table and re-establish RPC connections.
-3. `G` sets the rebuilding state to `READY`.
+We prefer named actors rather than GCS as global owners.
 
-**Note**:
-
-- RPCs sent by other workers to `G` should be retried until the state of `G's` Actor becomes `Alive`.
-- The reply callback of some RPCs will not be invoked until the rebuilding state of `G` is set to `READY`.
-
-**The Passive Way**:
-
-Every Raylet maintains an RPC connection to every global owner to watch the status of the global owners. When the global owner `G` dies and the job is not finished yet. Each raylet will collect and merge the reference table of all workers on this node, and report to `G`. Details:
-
-1. Raylet will find out that `G` is dead through RPC disconnection.
-2. When Raylet knows that `G` is restarted, Raylet sends the information below to `G`:
-    - References of all objects which are owned by `G`. (Collected by traversing all local workers.)
-    - Objects which are owned by `G` and are local (the data is in the local Object Store).
-    - The spill URLs of locally spilled objects which are owned by `G`.
-3. `G` will reconnect to the Raylet and the workers on it after receiving the above collected information from this Raylet.
-4. `G` sets the state to `READY` after finished rebuilding reference table.
-5. The reply callback of some RPCs (`WaitForObjectFree`) will not be called until the rebuilding state of `G` is set to `READY`.
-
-**Note**:
-
-- RPCs sent by other workers to `G` should be retried until the state of `G's` Actor becomes `Alive`.
-- The reply callback of some RPCs will not be invoked until the rebuilding state of `G` is set to `READY`.
-
-We prefer __Option.2__, and due to the difficulty of implementation, we are more trend to choose the __Active__ way to restore `G`, here are some cons of the __Passive__ way:
-
-- Raylets need to subscribe to the actor state notifications in order to know the new RPC address of a restarted actor and reconnect to it. To implement this, we need to add something similar to "actor manager" in core worker to Raylet. This is an additional coding effort.
-- Raylets pushing collected information to the restarted actor v.s. the actor pulling information from Raylets is just like push-based v.s. pull-based resource reporting. This is what we've already discussed and we've concluded that pull-based resource reporting is easier to maintain and test. I believe this conclusion also applies to object reference and location reporting.
-
-
-
-**Pros**:
-
-- No need to rely on an external storage.
-- Performance will not be affected.
-
-**Cons**:
-
-- **Active**: The rebuilding process may take a long time.
-- **Passive**: When a global owner is waiting for collected information from Raylets, the global owner needs to handle timeouts, which can be difficult.
-- Relatively complicated.
-
-#### How to solve the object borrower failure problem?
-
-##### Star Topology
-
-We use star topology instead of tree topology when the number of global owners is greater than zero to make sure the owner directly lends an object to other workers. As the illustration shows:
-
-![image_1_star_topology](https://user-images.githubusercontent.com/11995469/165585288-c6fc4ba4-efd6-42b5-935b-ea5979d0e735.png)
-
-1. `Worker C` borrows `Object A` from `Worker B` as before, and adds `Worker C` to `Worker B's` borrowers list.
-2. Send a sync RPC to `G`, and borrows `Object A` from `G` when `object A` deserializes in `Worker C`.
-3. Send an async RPC to delete `Worker C` from borrowers on `Worker B`.
-
-#### How to solve the loss of all copies problem?
-
-##### Multiple Primary Copies
-
-We make sure there are multiple (configurable) primary copies of the same object. We can create these additional copies asynchronously to reduce performance penalty, and creating another copy once the object is sealed.
+- The number of global owners is configurable, hence scalable.
+- No need to embed (part of) core worker code into GCS.
+- No increased complexity for GCS.
 
 #### API:
 
@@ -195,6 +180,4 @@ Acceptance criteria:
 
 ## (Optional) Follow-on Work
 
-- **Global Owner**: Automatically adjust the number of global owner according to the number of objects in the ray cluster.
-- **Star Topology**: Change the synchronous RPC sent to `G` when deserializing on `Worker C` to asynchronous.
-- **Multiple Primary Copies**: Recreate new primary copies upon loss of any primary copy to meet the required number of primary copies.
+- **Prototype test**
