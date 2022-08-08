@@ -52,7 +52,7 @@ We implement
 #### Options to implement object HA with checkpoint
 
 We implement object HA based on the checkpoint, so we can walk around **Problem 3: Loss of All Copies**,
-Discussion details are here: https://github.com/ray-project/enhancements/pull/10#issuecomment-1127719640
+previously discussed options: https://github.com/ray-project/enhancements/pull/10#issuecomment-1127719640
 
 We use highly available processes as global owners of checkpointed objects. Such highly available processes can be GCS or a group of named actors with `max_restarts=-1`. We reuse the existing ownership assignment RPCs to assign a checkpointed object to a global owner and encode the immutable info (an `owner_is_gcs` flag or the actor name) about the global owner into the owner address. The process to get an RPC client to the owner needs to be updated to be able to return a working RPC client to the up-to-date IP:port of the owner.
 
