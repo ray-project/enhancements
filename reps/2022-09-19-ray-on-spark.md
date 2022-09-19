@@ -27,6 +27,15 @@ TODO
 
 ## Design and Architecture
 
+### Preparation
+
+We need to have a spark cluster (apache/spark >= 3.3)
+We need install ray packages on every node of the cluster, by:
+```
+pip install ray
+pip install "ray[debug,dashboard,tune,rllib,serve]"
+```
+
 ### How to setup Ray cluster over spark cluster ?
 
 A spark cluster is like:
@@ -38,13 +47,13 @@ will be executed concurrently, and each task is allocated with several resources
 one task is allocate with 1 cpu core. If we want to setup a Ray cluster with  16 cpu cores resources
 in total, we can create a spark barrier mode with 16 tasks.
  
-- Inside each spark job task, launch the Ray Node (head / worker) and make the task run until
+- Inside each spark executor, launch one Ray Node (head / worker) and keep the spark job running until
 the Ray cluster destroyed. Note: one spark executor might contain multiple spark tasks,
 but we will only launch one ray node for each spark executor.
 e.g., suppose in executor1, there’re 3 spark tasks launched, then in task of local-rank-0,
 we launch a ray node with –num-cpus=3. Using the following commands to launch ray node in spark tasks:
   - **Head node:** ray start —head --num-cpus=X --num-gpus=Y --memory=Z
-  - **Worker node:** ray start —head --num-cpus=X --num-gpus=Y --memory=Z
+  - **Worker node:** ray start —head --num-cpus=X --num-gpus=Y --memory=Z --address={head_ip}:{port}
 
  
 - After Ray cluster launched, the Ray application can be submitted to the ray cluster via
@@ -72,7 +81,7 @@ So, I suggest to launch Ray head node on spark task side, we can pick the first 
 head node.
 Issue: How to send the ray head node IP / port to spark driver side ?
 So that on spark driver side user can run  the ray application on the ray cluster.
-Because the spark barrier job keeps running when the ray cluster is up, we cannot user
+Because the spark barrier job keeps running when the ray cluster is up, we cannot use
 `rdd.collect()` to send the head node IP / port  back to driver side, we need to broadcast
 the spark driver IP to task side and then in spark task, we can send the  head node IP / port
 back to driver node by TCP connection.
@@ -103,12 +112,11 @@ environment so that we can restrict Ray node only uses the GPUs allocated to cor
 #### Initialize ray cluster on spark API
 
 ```
-ray_cluster_address, ray_cluster_handler = ray.spark.init_cluster(num_spark_tasks)
+ray_cluster_address, ray_cluster_handler = ray.spark.init_cluster(num_cpus, num_gpus, memory)
 ```
 
-Init a ray cluster on the spark cluster, the total resources of the ray cluster equals to the total resources of the sum of `num_spark_tasks` spark tasks.
+Init a ray cluster on the spark cluster, the argumens specified the ray cluster can use how much cpus / gpus / memory.
 
-After this function called, the computing resources are booked from the spark cluster, and a ray cluster is set up, and a background spark job keep running until the ray cluster shutdown.
 
 Returns a `ray_cluster_address` string (Ray Head node IP / port) and a `ray_cluster_handler`
 
@@ -132,7 +140,8 @@ On databricks notebook, we can make databricks runtime automatically calls `ray_
 
 ## Compatibility, Deprecation, and Migration Plan
 
-N/A
+Support apache/spark >= 3.3 and latest ray version.
+
 
 ## Test Plan and Acceptance Criteria
 
