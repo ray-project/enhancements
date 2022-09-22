@@ -47,20 +47,26 @@ will be executed concurrently, and each task is allocated with several resources
 one task is allocate with 1 cpu core. If we want to setup a Ray cluster with  16 cpu cores resources
 in total, we can create a spark barrier mode with 16 tasks.
  
-- Inside each spark executor, launch one Ray Node (head / worker) and keep the spark job running until
+- In spark driver side, launch Ray head node, by:
+```
+ray start —head --num-cpus=0
+```
+This makes the Ray head node only works as a manager node, without worker node functionality.
+
+- Inside each spark executor, launch one Ray worker worker and keep the spark job running until
 the Ray cluster destroyed. Note: one spark executor might contain multiple spark tasks,
 but we will only launch one ray node for each spark executor.
 e.g., suppose in executor1, there’re 3 spark tasks launched, then in task of local-rank-0,
-we launch a ray node with –num-cpus=3. Using the following commands to launch ray node in spark tasks:
-  - **Head node:** ray start —head --num-cpus=X --num-gpus=Y --memory=Z
-  - **Worker node:** ray start —head --num-cpus=X --num-gpus=Y --memory=Z --address={head_ip}:{port}
+we launch a ray node with –num-cpus=3. Using the following commands to launch ray worker node in spark tasks:
+```
+ray start —head --num-cpus=X --num-gpus=Y --memory=Z --address={head_ip}:{port}
+```
 
- 
 - After Ray cluster launched, the Ray application can be submitted to the ray cluster via
 the Ray Head Node address / port.
  
-- When user want to shutdown the Ray cluster, cancel the spark job and kill all ray node services.
- 
+- When user want to shutdown the Ray cluster, cancel the spark job and kill all ray node services. 
+
 By this approach, in a spark cluster, we can create multiple isolated Ray clusters, each cluster
 uses resources restricted to each spark job allocated resources.
 
@@ -74,17 +80,10 @@ on the ray cluster with little overhead.
 
 
 #### Launch Ray head node on spark driver node or spark task side ?
-Because we need to allocate compute resources to the ray head node, If launching in spark task side,
-it might consume driver side resources, and if there are too many users sharing the spark cluster,
-spark driver resources might be exhausted.
-So, I suggest to launch Ray head node on spark task side, we can pick the first spark task to launch
-head node.
-Issue: How to send the ray head node IP / port to spark driver side ?
-So that on spark driver side user can run  the ray application on the ray cluster.
-Because the spark barrier job keeps running when the ray cluster is up, we cannot use
-`rdd.collect()` to send the head node IP / port  back to driver side, we need to broadcast
-the spark driver IP to task side and then in spark task, we can send the  head node IP / port
-back to driver node by TCP connection.
+In spark driver side.
+Because we can set Ray head node with `num-cpus` = 0, so that no ray task will be scheduled
+to ray head node, so that we can launch ray head node in driver side, it won't consume
+too much computing / memory resources of driver node.
 
 
 #### How to select the port number used by Ray node ?
@@ -123,7 +122,20 @@ Returns a `ray_cluster_address` string (Ray Head node IP / port) and a `ray_clus
 
 #### Initialize ray client API.
 
-Now User can run ray application on the returned ray cluster, by executing `ray.init(address=ray_cluster_address)`, and then run any ray application code.
+Now User can run ray application on the returned ray cluster, by executing
+`ray.init(address=ray_cluster_address)`,
+and then run any ray application code.
+
+For each ray node, it might have different / random CPUs assigned ,
+but for the whole ray cluster, the resources amount allocated is deterministic.
+
+e.g., your case: (8-CPU nodes, or 4-GPU nodes),
+suppose on a spark cluster with config:
+
+spark.task.cpus 2 # means 2 cpu cores per spark task
+spark.task.resource.gpu.amount 1 # means 1 GPU per spark task
+Then the Ray on spark routine will create a spark job with 4 spark tasks running concurrently,
+which means it books (8-CPU nodes, or 4-GPU nodes) resources for ray cluster.
 
 
 ### Shutdown ray cluster on spark
