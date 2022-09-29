@@ -54,10 +54,8 @@ ray start —head --num-cpus=0
 This makes the Ray head node only works as a manager node, without worker node functionality.
 
 - Inside each spark executor, launch one Ray worker worker and keep the spark job running until
-the Ray cluster destroyed. Note: one spark executor might contain multiple spark tasks,
-but we will only launch one ray node for each spark executor.
-e.g., suppose in executor1, there’re 3 spark tasks launched, then in task of local-rank-0,
-we launch a ray node with –num-cpus=3. Using the following commands to launch ray worker node in spark tasks:
+the Ray cluster destroyed. Each ray worker node will be assigned with resources equal to the corresponding
+spark task (CPU / GPU / Memory). The command used to start ray node is:
 ```
 ray start —head --num-cpus=X --num-gpus=Y --memory=Z --address={head_ip}:{port}
 ```
@@ -86,6 +84,19 @@ to ray head node, so that we can launch ray head node in driver side, it won't c
 too much computing / memory resources of driver node.
 
 
+#### Shall we make ray worker node the same shape (assigned with the same resources amount) ?
+
+Yes. Otherwise, the Ray cluster setup will be nondeterministic,
+and you could get very strange results with bad luck on the node sizing.
+
+
+#### What's recommended ray node shape ?
+
+cpu cores >= 4 and memory >= 10 GB
+This corresponding to:
+spark.task.cpus config >= 4 and (SPARK_WORKER_MEMORY / TASK_SLOTS_PER_SPARK_WORKER) >= 10GB
+
+
 #### How to select the port number used by Ray node ?
 Ray node requires listening on several port, a spark cluster might be shared by many users,
 each users might setup their own ray cluster concurrently, to avoid port conflicts,
@@ -95,10 +106,7 @@ if failed we can retry on another free port.
 
 #### How much memory shall we allocate to Ray node service ( set via ray script --memory option) ?
 Spark does not provide explicit API for getting task allowed memory,
-I propose:
 SPARK_WORKER_MEMORY / SPARK_WORKER_CORES * RAY_NODE_NUM_CPUS
-But how to get SPARK_WORKER_MEMORY and SPARK_WORKER_CORES in spark task is an issue.
-
 
 #### How to make ray respect spark GPU resource scheduling ?
 In spark task, we can get GPU IDs allocated to this task, so, when launching
@@ -106,25 +114,44 @@ Ray node, besides specifying `--num-gpus` options, we need specify `CUDA_VISIBLE
 environment so that we can restrict Ray node only uses the GPUs allocated to corresponding spark tasks.
 
 
+#### How to support all options of ray start
+Provide a ray_node_options argument (dict type).
+
+
+#### Where should the code live: ray repo or spark repo?
+Ray repo.
+Putting in spark repo is hard, It would be very hard to pass vote.
+Past examples includes horovod, petastorm, xgboost, tensorflow-spark, all of them tried to put in spark repo but failed.
+
+
+#### Does it support autoscaling ?
+Currently no. This implementation relies on spark barrier mode job, which does not support autoscaling currently.
+
+
+#### What’s the level of isolation spark provides ?
+Resources isolation.
+Each ray cluster are isolated and will use its own resources allocated to the corresponding spark job.
+
+
 ### API Proposal
 
 #### Initialize ray cluster on spark API
 
 ```
-ray_cluster_address, ray_cluster_handler = ray.spark.init_cluster(num_cpus, num_gpus, memory)
+ray_cluster_on_spark = ray.spark.init_cluster(num_cpus, num_gpus, memory)
 ```
 
-Init a ray cluster on the spark cluster, the argumens specified the ray cluster can use how much cpus / gpus / memory.
+Or
 
+```
+ray_cluster_on_spark = ray.spark.init_cluster(num_spark_tasks)
+```
 
-Returns a `ray_cluster_address` string (Ray Head node IP / port) and a `ray_cluster_handler`
+Initialize a ray cluster on the spark cluster, the arguments specified the ray cluster can use how much cpus / gpus / memory.
+And connect to the cluster.
 
+Returns an instance of type `RayClusterOnSpark``
 
-#### Initialize ray client API.
-
-Now User can run ray application on the returned ray cluster, by executing
-`ray.init(address=ray_cluster_address)`,
-and then run any ray application code.
 
 For each ray node, it might have different / random CPUs assigned ,
 but for the whole ray cluster, the resources amount allocated is deterministic.
@@ -143,7 +170,7 @@ which means it books (8-CPU nodes, or 4-GPU nodes) resources for ray cluster.
 When user want to shutdown the ray cluster, he can call:
 
 ```
-ray_cluster_handler.shutdown()
+ray_cluster_on_spark.shutdown()
 ```
 
 It will terminate the ray cluster.
