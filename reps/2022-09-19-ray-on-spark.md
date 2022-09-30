@@ -85,9 +85,12 @@ too much computing / memory resources of driver node.
 
 
 #### Shall we make ray worker node the same shape (assigned with the same resources amount) ?
-
 Yes. Otherwise, the Ray cluster setup will be nondeterministic,
 and you could get very strange results with bad luck on the node sizing.
+
+
+#### how to deterministically config resources per node ?
+In each spark task, launch one ray worker node. Each spark task has the same assigned resources shape.
 
 
 #### What's recommended ray node shape ?
