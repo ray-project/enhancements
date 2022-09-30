@@ -100,6 +100,16 @@ This corresponding to:
 spark.task.cpus config >= 4 and (SPARK_WORKER_MEMORY / TASK_SLOTS_PER_SPARK_WORKER) >= 10GB
 
 
+#### On a shared spark cluster, shall we let each user launch individual ray cluster, or one user can create a shared ray cluster and other user can also use it ?
+I think we can provide 2 API to support both cases.
+Shared mode:
+```ray.spark.get_or_create_shared_cluster```
+and
+```ray.spark.init_private_cluster```
+
+And if one shared mode ray cluster already exists, new ray cluster is not allowed to be launched.
+
+
 #### How to select the port number used by Ray node ?
 Ray node requires listening on several port, a spark cluster might be shared by many users,
 each users might setup their own ray cluster concurrently, to avoid port conflicts,
