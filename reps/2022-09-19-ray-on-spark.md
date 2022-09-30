@@ -89,8 +89,9 @@ Yes. Otherwise, the Ray cluster setup will be nondeterministic,
 and you could get very strange results with bad luck on the node sizing.
 
 
-#### how to deterministically config resources per node ?
+#### Does ray node 1:1 map with spark task or spark executor?
 In each spark task, launch one ray worker node. Each spark task has the same assigned resources shape.
+* All ray nodes will have homogeneous resources because spark task resource config must be homogeneous
 
 
 #### What's recommended ray node shape ?
@@ -121,6 +122,12 @@ if failed we can retry on another free port.
 Spark does not provide explicit API for getting task allowed memory,
 SPARK_WORKER_MEMORY / SPARK_WORKER_CORES * RAY_NODE_NUM_CPUS
 
+
+#### How to support Ray object store memory ?
+We can allocate part of the memory assigned to spark task to be ray object-store-memory.
+(30% percent by default)
+
+
 #### How to make ray respect spark GPU resource scheduling ?
 In spark task, we can get GPU IDs allocated to this task, so, when launching
 Ray node, besides specifying `--num-gpus` options, we need specify `CUDA_VISIBLE_DEVICES`
@@ -142,8 +149,13 @@ Currently no. This implementation relies on spark barrier mode job, which does n
 
 
 #### What’s the level of isolation spark provides ?
-Resources isolation.
-Each ray cluster are isolated and will use its own resources allocated to the corresponding spark job.
+Barrier mode spark task provides process-level isolation.
+No VM/container level isolation. Spark task does not support it.
+
+
+#### Custom resources support
+TPUs, specific accelerators, etc.
+Uncommon scenario, We can do it later?. Spark doesn't support this, spark can only schedule CPU, GPU, memory.
 
 
 ### API Proposal
