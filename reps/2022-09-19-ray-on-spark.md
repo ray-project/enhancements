@@ -155,7 +155,8 @@ We will calculate the memory reserved for the Ray object store in each Ray node 
 2. Divide the ``/dev/shm`` available space by the number of Spark tasks (Ray nodes) that can run
    concurrently on a single Spark worker node, obtaining an upper bound on the per-Ray-node object
    store memory allocation.
-3. Multiply the upper bound from (2) by ``0.8``.
+3. To provide a buffer and guard against accidental overutilization of mount space, multiply the
+   upper bound from (2) by ``0.8``.
 
 This allocation will ensure that we do not exhaust ``/dev/shm`` storage and accidentally spill to
 disk, which would hurt performance substantially.
