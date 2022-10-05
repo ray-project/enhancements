@@ -19,55 +19,78 @@ Yes. For better code maintemance.
 ## Stewardship
 ### Required Reviewers
 
-TODO
+- @jjyao
+- @ericl
 
 ### Shepherd of the Proposal (should be a senior committer)
 
-TODO
+- @jjyao
 
 ## Design and Architecture
 
-### Preparation
+### Prerequisites
 
-We need to have a spark cluster (apache/spark >= 3.3)
-We need install ray packages on every node of the cluster, by:
-```
-pip install ray
-pip install "ray[debug,dashboard,tune,rllib,serve]"
-```
+- The user have an active Spark cluster (apache/spark >= 3.3)
+
+- The user must install Ray packages on every node of the Spark cluster, e.g. via:
+
+  ```
+  pip install ray
+  ```
+
+  If the user's workload requires Ray add-ons, they must also be installed, e.g. via
+
+  ```
+  pip install "ray[debug,dashboard,tune,rllib,serve]"
+  ```
 
 ### How to setup Ray cluster over spark cluster ?
 
-A spark cluster is like:
+The architecture of a Spark cluster is as follows:
 ![spark-cluster-overview](https://spark.apache.org/docs/latest/img/cluster-overview.png)
 
-Setup ray cluster over spark cluster, we can do:
-- Create a spark barrier mode job,  a spark barrier mode job means all tasks in this spark job 
-will be executed concurrently, and each task is allocated with several resources, by default,
-one task is allocate with 1 cpu core. If we want to setup a Ray cluster with  16 cpu cores resources
-in total, we can create a spark barrier mode with 16 tasks.
- 
-- In spark driver side, launch Ray head node, by:
-```
-ray start —head --num-cpus=0
-```
-This makes the Ray head node only works as a manager node, without worker node functionality.
+Using Spark's barrier mode, we intend to represent each Ray worker node as a long-running Spark
+task, where the Ray worker node has the same set of resources as the Spark task. Multiple Spark
+tasks can run on a single Spark worker node, which means that multiple Ray worker nodes can run
+on a single Spark worker node. Finally, we intend to run the Ray head node on the Spark driver
+node with a fixed resource allocation.
 
-- Inside each spark executor, launch one Ray worker worker and keep the spark job running until
-the Ray cluster destroyed. Each ray worker node will be assigned with resources equal to the corresponding
-spark task (CPU / GPU / Memory). The command used to start ray node is:
+To clarify further, the following example demonstrates how a Ray cluster with 16 total worker CPU
+cores can be launched on a Spark cluster, assuming that each Ray node requires 4 CPU cores and
+10GB of memory:
+
+1. On the Spark driver node, launch the Ray head node as follows:
+
+```
+ray start --head --num-cpus=0
+```
+
+The Ray head node will operate solely as a  manager node, without worker node functionality.
+
+2. Create a Spark barrier mode job, which executes all tasks in the spark job concurrently. Each
+task is allocated a fixed number of CPUs and a fixed amount of memory. In this example, we will
+allocate 4 CPU cores to each Spark task and at least 10GB of memory (by ensuring that each Spark
+worker node has at least 10GB of memory reserved for every set of 4 CPU cores, as computed by
+``SPARK_WORKER_MEMORY`` / ``TASK_SLOTS_PER_WORKER`` under the assumption that the
+``spark.task.cpus`` configuration is set to ``4``).
+
+3. In each constituent Spark task, launch one Ray worker node in blocking mode and allocate to it
+the full set of resources available to the Spark task (4 CPUs, 10GB of memory). Keep the Spark task
+running until the Ray cluster destroyed. The command used to start each Ray worker node is as
+follows:
+
 ```
 ray start —head --num-cpus=X --num-gpus=Y --memory=Z --address={head_ip}:{port}
 ```
 
-- After Ray cluster launched, the Ray application can be submitted to the ray cluster via
-the Ray Head Node address / port.
- 
-- When user want to shutdown the Ray cluster, cancel the spark job and kill all ray node services. 
+4. After the Ray cluster is launched, the user's Ray application(s) can be submitted to the Ray
+cluster via the Ray head node address / port.
 
-By this approach, in a spark cluster, we can create multiple isolated Ray clusters, each cluster
-uses resources restricted to each spark job allocated resources.
+5. To shut down the Ray cluster, cancel the Spark barrier mode job and terminate all Ray node
+services that are running on the Spark driver and Spark workers.
 
+Finally, by adjusting the resource allocation for Ray nodes and Spark tasks, this approach enables
+users to run multiple Ray clusters in isolation of each other on a single Spark cluster, if desired.
 
 ### Key questions
 
@@ -89,16 +112,18 @@ Yes. Otherwise, the Ray cluster setup will be nondeterministic,
 and you could get very strange results with bad luck on the node sizing.
 
 
-#### Does ray node 1:1 map with spark task or spark executor?
-In each spark task, launch one ray worker node. Each spark task has the same assigned resources shape.
-* All ray nodes will have homogeneous resources because spark task resource config must be homogeneous
+#### Do Ray nodes have a 1:1 mapping with Spark tasks or with Spark workers?
+In each Spark task, we will launch one Ray worker node. All spark tasks are allocated the same
+number of resources. As a result, all Ray worker nodes will have homogeneous resources because Spark
+task resource configurations must be homogeneous.
 
+#### What is the recommended minimal resource allocation of a Ray node?
 
-#### What's recommended ray node shape ?
+Each Ray node should have at least 4 CPU cores and 10GB of available memory. This corresponds to
+a Spark task configuration of:
 
-cpu cores >= 4 and memory >= 10 GB
-This corresponding to:
-spark.task.cpus config >= 4 and (SPARK_WORKER_MEMORY / TASK_SLOTS_PER_SPARK_WORKER) >= 10GB
+- ``spark.task.cpus >= 4`` and
+- ``(SPARK_WORKER_MEMORY / TASK_SLOTS_PER_SPARK_WORKER) >= 10GB``
 
 
 #### On a shared spark cluster, shall we let each user launch individual ray cluster, or one user can create a shared ray cluster and other user can also use it ?
@@ -123,9 +148,18 @@ Spark does not provide explicit API for getting task allowed memory,
 SPARK_WORKER_MEMORY / SPARK_WORKER_CORES * RAY_NODE_NUM_CPUS
 
 
-#### How to support Ray object store memory ?
-We can allocate part of the memory assigned to spark task to be ray object-store-memory.
-(30% percent by default)
+#### How will we allocate memory for the Ray object store?
+We will calculate the memory reserved for the Ray object store in each Ray node as follows:
+
+1. Calculate the available space in the ``/dev/shm`` mount.
+2. Divide the ``/dev/shm`` available space by the number of Spark tasks (Ray nodes) that can run
+   concurrently on a single Spark worker node, obtaining an upper bound on the per-Ray-node object
+   store memory allocation.
+3. To provide a buffer and guard against accidental overutilization of mount space, multiply the
+   upper bound from (2) by ``0.8``.
+
+This allocation will ensure that we do not exhaust ``/dev/shm`` storage and accidentally spill to
+disk, which would hurt performance substantially.
 
 
 #### How to make ray respect spark GPU resource scheduling ?
