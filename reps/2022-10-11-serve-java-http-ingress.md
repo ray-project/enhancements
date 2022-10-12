@@ -142,12 +142,14 @@ On the other hand, every time we call replica, we need to use reflection to get 
 
 In order to solve the above problems, We need to hold the cache of method signatures.
 
-![image](https://user-images.githubusercontent.com/11265783/195103860-3c40a114-0195-4b08-ad82-30a671af7507.png)
+![image](https://user-images.githubusercontent.com/11265783/195356752-95cf595b-f235-477c-b041-47b3760ad0f5.png)
 
 Ray core uses the signature to decide which method to call. we want to be consistent with it.
 
 When init java replica, we will parse signatures from `Callable` class. Generate the following map. Key is the method signature, value is the pair of the method instance and the `Callable` instance.
-
+```java
+Map<String, Pair<Method, Object>> signatures;
+```
 If the user configures JAX-rs ingress, we will add one data to the signature cache. The key is always set to `__call__`, the left of the pair in the value is an instance of the `JaxrsIngressCallable.call` method and the right of the pair is an instance of `JaxrsIngressCallable`.
 
 For requests from HTTP proxy, the method signature will be fixed to `__call__`. The request from the serve handle will set the method signature on the client side and hit the signature cache on the server side.
