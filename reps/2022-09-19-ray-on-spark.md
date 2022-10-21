@@ -69,8 +69,7 @@ cores can be launched on a Spark cluster, assuming that each Ray node requires 4
 ray start --head --num-cpus=0
 ```
 
-The Ray head node will operate configured to optimistically not execute raylets due to combination of 
-locality-aware scheduling and the available cpu resources for raylet execution. 
+This ensures that CPU processing tasks will not execute on the head node.
 
 2. Create a Spark barrier mode job, which executes all tasks in the spark job concurrently. Each
 task is allocated a fixed number of CPUs and a fixed amount of memory. In this example, we will
