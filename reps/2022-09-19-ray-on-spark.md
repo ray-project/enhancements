@@ -50,10 +50,14 @@ The architecture of a Spark cluster is as follows:
 ![spark-cluster-overview](https://spark.apache.org/docs/latest/img/cluster-overview.png)
 
 Using Spark's barrier mode, we intend to represent each Ray worker node as a long-running Spark
-task, where the Ray worker node has the same set of resources as the Spark task. Multiple Spark
+task where the Ray worker node has the same set of resources as the Spark task. Multiple Spark
 tasks can run on a single Spark worker node, which means that multiple Ray worker nodes can run
 on a single Spark worker node. Finally, we intend to run the Ray head node on the Spark driver
 node with a fixed resource allocation.
+
+Note that if multiple ray-node-per-spark-worker issues occur (whether due to shared object store 
+location for workers, dashboard visualization confusion, or other unforeseen issues), the implementation 
+can be modified to only permit a single Ray cluster per Spark cluster. 
 
 To clarify further, the following example demonstrates how a Ray cluster with 16 total worker CPU
 cores can be launched on a Spark cluster, assuming that each Ray node requires 4 CPU cores and
@@ -65,7 +69,8 @@ cores can be launched on a Spark cluster, assuming that each Ray node requires 4
 ray start --head --num-cpus=0
 ```
 
-The Ray head node will operate solely as a  manager node, without worker node functionality.
+The Ray head node will operate configured to optimistically not execute raylets due to combination of 
+locality-aware scheduling and the available cpu resources for raylet execution. 
 
 2. Create a Spark barrier mode job, which executes all tasks in the spark job concurrently. Each
 task is allocated a fixed number of CPUs and a fixed amount of memory. In this example, we will
@@ -80,7 +85,7 @@ running until the Ray cluster destroyed. The command used to start each Ray work
 follows:
 
 ```
-ray start —head --num-cpus=X --num-gpus=Y --memory=Z --address={head_ip}:{port}
+ray start --num-cpus=X --num-gpus=Y --memory=Z --object-store-memory=M --address={head_ip}:{port}
 ```
 
 4. After the Ray cluster is launched, the user's Ray application(s) can be submitted to the Ray
