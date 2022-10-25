@@ -49,11 +49,11 @@ Yes. For better code maintemance.
 The architecture of a Spark cluster is as follows:
 ![spark-cluster-overview](https://spark.apache.org/docs/latest/img/cluster-overview.png)
 
-Using Spark's barrier mode, we intend to represent each Ray worker node as a long-running Spark
-task where the Ray worker node has the same set of resources as the Spark task. Multiple Spark
-tasks can run on a single Spark worker node, which means that multiple Ray worker nodes can run
-on a single Spark worker node. Finally, we intend to run the Ray head node on the Spark driver
-node with a fixed resource allocation.
+We intend to represent each Ray worker node as a long-running Spark
+task in which Ray worker nodes have the same set of resources as the Spark task initiating each of 
+the Ray workers. Multiple tasks can be run on a single Spark worker node, meaning that 
+multiple Ray worker nodes can run on a single Spark worker node. 
+Finally, we intend to run the Ray head node on the Spark driver node with a fixed resource allocation.
 
 Note that if multiple ray-node-per-spark-worker issues occur (whether due to shared object store 
 location for workers, dashboard visualization confusion, or other unforeseen issues), the implementation 
@@ -71,16 +71,16 @@ ray start --head --num-cpus=0
 
 This ensures that CPU processing tasks will not execute on the head node.
 
-2. Create a Spark barrier mode job, which executes all tasks in the spark job concurrently. Each
+2. Create a Spark job that executes all tasks in the spark job in standard map-reduce mode. Each
 task is allocated a fixed number of CPUs and a fixed amount of memory. In this example, we will
 allocate 4 CPU cores to each Spark task and at least 10GB of memory (by ensuring that each Spark
 worker node has at least 10GB of memory reserved for every set of 4 CPU cores, as computed by
 ``SPARK_WORKER_MEMORY`` / ``TASK_SLOTS_PER_WORKER`` under the assumption that the
 ``spark.task.cpus`` configuration is set to ``4``).
 
-3. In each constituent Spark task, launch one Ray worker node in blocking mode and allocate to it
+3. In each constituent Spark task, launch one Ray worker node and allocate to it
 the full set of resources available to the Spark task (4 CPUs, 10GB of memory). Keep the Spark task
-running until the Ray cluster destroyed. The command used to start each Ray worker node is as
+running until the Ray cluster is destroyed. The command used to start each Ray worker node is as
 follows:
 
 ```
@@ -90,29 +90,19 @@ ray start --num-cpus=X --num-gpus=Y --memory=Z --object-store-memory=M --address
 4. After the Ray cluster is launched, the user's Ray application(s) can be submitted to the Ray
 cluster via the Ray head node address / port.
 
-5. To shut down the Ray cluster, cancel the Spark barrier mode job and terminate all Ray node
+5. To shut down the Ray cluster, cancel the Spark job and terminate all Ray node
 services that are running on the Spark driver and Spark workers.
 
 Finally, by adjusting the resource allocation for Ray nodes and Spark tasks, this approach enables
 users to run multiple Ray clusters in isolation of each other on a single Spark cluster, if desired.
 
-Due to the fact that execution is performed via Spark BarrierExecution, a failed task (e.g., a 
-node loss event, a heartbeat timeout in the Spark cluster manager service for an executor, etc.) the 
-Spark task executing the ray job will be retried as a single concurrent unit. Because of this mode of 
-operation and the inability to perform map-reduce task resumption for this initial design, recovery 
-by a resumption of tasks 'in-place' is not possible.
 
 ### Key questions
-
-#### We use spark barrier mode job to launch a ray cluster, shall we make the spark barrier to be a background job and keep running, until user explicitly terminate it ?
-
-Yes. So every user only need to start ray cluster once and then user can run ray applications
-on the ray cluster with little overhead.
 
 
 #### Launch Ray head node on spark driver node or spark task side ?
 
-The head node will be initialized on the Spark Driver. To ensure that tasks will not submitted 
+The head node will be initialized on the Spark Driver. To ensure that tasks will not be submitted 
 to this node, we will configure `num-cpus`=0 for the head node. 
 Additionally, in order to ensure that the head node is running on hardware sufficient to ensure 
 that requisite ray system processes, a validation of minimum hardware configuration requirements will 
@@ -176,7 +166,7 @@ disk, which would hurt performance substantially.
 
 #### How to make ray respect spark GPU resource scheduling ?
 In spark task, we can get GPU IDs allocated to this task, so, when launching
-Ray node, besides specifying `--num-gpus` options, we need specify `CUDA_VISIBLE_DEVICES`
+Ray node, besides specifying `--num-gpus` options, we need to specify `CUDA_VISIBLE_DEVICES`
 environment so that we can restrict Ray node only uses the GPUs allocated to corresponding spark tasks.
 
 
@@ -191,27 +181,17 @@ Past examples includes horovod, petastorm, xgboost, tensorflow-spark, all of the
 
 
 #### Does it support autoscaling ?
-Currently no. This implementation relies on spark barrier mode job, which does not support autoscaling currently.
-In a future iteration, we plan to investigate (if warranted) using the Spark job scheduler to handle the 
-creation of ray worker nodes by mapping a single ray worker to a Spark job running in shared resource context (non-FIFO).
+We will be investigating and testing the feasibility of supporting autoscaling of ray worker nodes as 
+additional spark task slots become available upon the initiation of additional spark worker nodes.
 
 #### What is the fault tolerance of Barrier Execution mode and how are failures handled?
-BarrierRDD mapping forces all configured tasks to execute concurrently. With no concept of map-reduce 
-fault tolerance in this mode, faults that occur within processing (that are not related to loss of 
-an underlying VM that the Spark worker node and, by extension, the Ray worker node are running on) will 
-be retried as an atomic unit. That is, all pending task transactions that are submitted to the ray cluster 
-on all nodes will re-execute. 
-We intend to development a retry loop within the BarrierRDD mapping function to allow for a limited 
-number of retries of a task submission before raising an Exception up the stack to the Spark driver node 
-to terminate the ray cluster. 
-As mentioned above, a loss of a Spark worker is unrecoverable and will require a new initialization of a 
-ray cluster once the dropped node(s) are recovered by new VMs. 
-Note that this hardware-loss lack of fault tolerance will be mitigated if we end up pursuing a NodeProvider approach 
-in the future (wherein a new Spark Job would be submitted to a recovered VM worker node to resume execution in a retry loop).
+The current design uses standard job scheduling in Spark and will initiate task submission to new 
+Spark worker nodes in the event that a task group fails, similar to the functionality within Spark 
+during a task retry.
 
 #### What’s the level of isolation spark provides ?
-Barrier mode spark task provides process-level isolation.
-No VM/container level isolation. Spark task does not support it.
+Spark task execution provides process-level isolation.
+No VM/container level isolation. 
 
 
 #### Custom resources support
