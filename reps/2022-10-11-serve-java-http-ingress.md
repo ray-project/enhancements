@@ -61,7 +61,9 @@ Spring-web contains a lot of features that we don't need to use: IOC, DI, etc. T
 In order not to import too many unnecessary dependencies to the user's `Callable`. We choose JAX-RS to support HTTP ingress.
 
 For more information about JAX-RS and spring web, please click the following links.
+
 JAX-RS: https://projects.eclipse.org/projects/ee4j.rest
+
 Spring-web: https://docs.spring.io/spring-framework/docs/current/reference/html/web.html#mvc-ann-requestmapping
 
 #### Annotation parser: Jersey
