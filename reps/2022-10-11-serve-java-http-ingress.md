@@ -1,18 +1,26 @@
 ## Summary
+This enhancement proposal recommends adding an ingress feature to facilitate HTTP handling to the Ray Serve package in Java.
+
 ### General Motivation
-We want to call various methods of java deployment through the HTTP proxy, like the FastAPI ingress in python serve.
+We want to call various methods within a Ray Serve Java deployment through HTTP proxy, in a way that's similar to the [FastAPI ingress](https://docs.ray.io/en/latest/serve/http-guide.html#fastapi-http-deployments) in Python version.
+
 ### Should this change be within `ray` or outside?
-main `ray` project. Changes are made to the Ray Serve module.
+The main `ray` project. Changes are made to the Ray Serve module in the Java codebase.
 
 ## Stewardship
+
 ### Required Reviewers
 @simon-mo @sihanwang41
+
 ### Shepherd of the Proposal (should be a senior committer)
 @simon-mo
 
 ## Design and Architecture
-### Use case
-1. Define the model with JAX-RS
+
+### User Workflow
+
+1. Define the model with [JAX-RS API](https://docs.oracle.com/javaee/6/tutorial/doc/gilik.html)
+
 ```java
 @Path("user")
 public class UserRestService {
@@ -42,21 +50,25 @@ Deployment deployment =
             .ingress("jax-rs")
             .setNumReplicas(1)
             .create();
-deployment.deploy(true);
+deployment.deploy();
 ```
+
 3. Calling deployments via HTTP
+
 The URI is determined by the deployment name and JAX-RS @PATH annotations.
 ```java
 curl http://127.0.0.1:8000/deploymentName/user/helloWorld?name=test
 curl http://127.0.0.1:8000/deploymentName/user/paramPathTest/test
 ```
-### HTTP ingress
-#### Ingress API annotation: JAX-RS
-In java application development, restful API is generally implemented through two sets of annotations, spring web or JAX-RS.
 
-JAX-RS is a specification for implementing REST web services in Java, currently defined by the JSR-370. JAX-RS is just an API specification and has been implemented by many components: jersey,resteasy,etc.
+### HTTP Ingress Implementation
+#### Ingress API Annotation: JAX-RS
 
-Spring-web contains a lot of features that we don't need to use: IOC, DI, etc. The parsing of spring-web annotations depends on the spring framework.
+In Java application development, restful API is generally implemented through two sets of annotations, spring web or JAX-RS.
+
+JAX-RS is a specification for implementing REST web services in Java, currently defined by the JSR-370. JAX-RS is just an API specification and has been implemented by many components: jersey, resteasy, etc.
+
+Spring-web contains a lot of features that we don't need to use: IOC (inversion of control), DI (dependency injection), etc. The parsing of spring-web annotations depends on the spring framework.
 
 In order not to import too many unnecessary dependencies to the user's `Callable`. We choose JAX-RS to support HTTP ingress.
 
@@ -76,6 +88,7 @@ The most important thing is that the Jersey does not depend on a servlet contain
 For more information about Jersey, please click this link: https://eclipse-ee4j.github.io/jersey/
 
 ##### Maven dependency
+
 ```xml
 <dependency>
    <groupId>org.glassfish.jersey.core</groupId>
@@ -88,10 +101,13 @@ For more information about Jersey, please click this link: https://eclipse-ee4j.
    <version>2.30.1</version>
 </dependency>
 ```
-##### Jersey callable
+##### Jersey Callable Integration
+In order to integrate Jersey in the the current `ray.serve` package, we will need to take the following step:
+
 - convert `RequestWrapper` to jersey `ContainerRequest`
 - call `ApplicationHandler.apply` with `ContainerRequest`
 - return `ContainerResponse.getEntity` to the HTTP proxy
+
 ```java
 public class JaxrsIngressCallable {
   private ApplicationHandler app;
@@ -109,14 +125,16 @@ public class JaxrsIngressCallable {
   }
 }
 ```
+
 ### Extension of `callable`
-Normally, we use the class instance as a `Callable`. But in HTTP ingress, the `Callable` we use is wrapped with the Jersey application handler. We have two different implementations of `Callable`.
+Normally, we use the class instance as a `ray.serve.Callable`. But in HTTP ingress, the `ray.serve.Callable` we use is wrapped with the Jersey application handler. We have two different implementations of `ray.serve.Callable`.
 
-In python, when we add the `@ingress` annotation to an object, a new object will be generated, that is, a new `Callable` instance will be generated.
+In python, when we add the `@ingress` annotation to an object, a new object will be generated, that is, a new `ray.serve.Callable` instance will be generated.
 
-In java, we add annotations to the class, but it can not enhance the features of `Callable`. So we need a mechanism to generate different `Callable` instances according to different ingress types. 
+In java, we add annotations to the class, but it can not enhance the features of `ray.serve.Callable`. So we need a mechanism to generate different `ray.serve.Callable` instances according to different ingress types.
 
-Here we use java SPI to implement this feature. We add a `ServeCallableProvider` SPI. 
+Here we use java SPI to implement this feature. We add a `ServeCallableProvider` SPI.
+
 ```java
 public interface ServeCallableProvider {
   /**
@@ -141,9 +159,10 @@ public interface ServeCallableProvider {
   Map<String, Pair<Method, Object>> getSignatures(DeploymentWrapper deploymentWrapper, Object callable);
 }
 ```
+
 The current version of `Callable` is implemented as the default interface implementation. An additional implementation of the `ServeCallableProvider` is added for each additional ingress type.
 
-### Method signature cache
+### Method Signature Cache
 Typically, our `Callable` are user-provided class instances. In JAX-RS, the `Callable` is the jersey application handler when the replica is called using an HTTP proxy. When using the serve handle to call the replica, we cannot call any methods in the class. We are not compatible with the serve handle.
 
 On the other hand, every time we call replica, we need to use reflection to get the method that needs to be executed. This will reduce the performance and throughput of the replica
@@ -155,15 +174,18 @@ In order to solve the above problems, We need to hold the cache of method signat
 Ray core uses the signature to decide which method to call. we want to be consistent with it.
 
 When init java replica, we will parse signatures from the `Callable` class. Generate the following map. the key is the method signature, value is the pair of the method instance and the `Callable` instance.
+
 ```java
 Map<String, Pair<Method, Object>> signatures;
 ```
+
 If the user configures JAX-rs ingress, we will add one data to the signature cache. The key is always set to `__call__`, the left of the pair in the value is a `Method` instance of the `JaxrsIngressCallable.call` and the right of the pair is an instance of `JaxrsIngressCallable`.
 
 For requests from HTTP proxy, the method signature will be fixed to `__call__`. The request from the serve handle will set the method signature on the client side and hit the signature cache on the server side.
 
 ## Compatibility, Deprecation, and Migration Plan
 New features are incremental and do not affect any existing features. And we use SPI to make the modification of the java HTTP ingress meet the open-closed principle.
+
 ## Test Plan and Acceptance Criteria
 - Unit and integration test for core components
 - Benchmarks on java HTTP ingress performance
