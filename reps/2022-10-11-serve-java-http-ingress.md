@@ -6,7 +6,7 @@ main `ray` project. Changes are made to the Ray Serve module.
 
 ## Stewardship
 ### Required Reviewers
-@simon-mo
+@simon-mo @sihanwang41
 ### Shepherd of the Proposal (should be a senior committer)
 @simon-mo
 
