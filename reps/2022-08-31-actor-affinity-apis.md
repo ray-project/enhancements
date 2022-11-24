@@ -36,8 +36,8 @@ Yes, this will be a complement to ray core's ability to flexibly schedule actors
 
 Actor affinity/anti-affinity schedule API Design
 1. Scheduling Strategy adds an ActorAffinitySchedulingStrategy. 
-2. This strategy consists of several ActorAffinityMatchExpressions.
-3. ActorAffinityMatchExpression has 4 match types which are IN/NOT_IN/EXISTS/DOES_NOT_EXIST
+2. This strategy consists of several LabelMatchExpressions.
+3. LabelMatchExpression has 4 match types which are IN/NOT_IN/EXISTS/DOES_NOT_EXIST
 
 Use Case | ActorAffinityOperator
 -- | --
@@ -72,10 +72,10 @@ SchedulingStrategyT = Union[None, str,
                             ActorAffinitySchedulingStrategy]
 
 class ActorAffinitySchedulingStrategy:
-    def __init__(self, match_expressions: List[ActorAffinityMatchExpression]):
+    def __init__(self, match_expressions: List[LabelMatchExpression]):
         self.match_expressions = match_expressions
 
-class ActorAffinityMatchExpression:
+class LabelMatchExpression:
     """An expression used to represent an actor's affinity.
     Attributes:
         key: the key of label
@@ -84,7 +84,7 @@ class ActorAffinityMatchExpression:
         values: a list of label value
         soft: ...
     """
-    def __init__(self, key: str, operator: ActorAffinityOperator,
+    def __init__(self, key: str, operator: LabelMatchOperator,
                  values: List[str], soft: bool):
         self.key = key
         self.operator = operator
@@ -106,7 +106,7 @@ Step 2: Set actor affinity strategy.
 1. The target actor is expected to be scheduled with the actors whose label key is "location" and value in ["dc-1"].
 ```python
 match_expressions = [
-    ActorAffinityMatchExpression("location", ActorAffinityOperator.IN, ["dc_1"], False)
+    LabelMatchExpression("location", LabelMatchOperator.IN, ["dc_1"], False)
 ]
 actor_affinity_strategy = ActorAffinitySchedulingStrategy(match_expressions)
 actor = Actor.options(scheduling_strategy = actor_affinity_strategy).remote()
@@ -116,7 +116,7 @@ actor = Actor.options(scheduling_strategy = actor_affinity_strategy).remote()
 with the actors whose label key is "location" and value in ["dc-1"].
 ```python
 match_expressions = [
- ActorAffinityMatchExpression("location", ActorAffinityOperator.NOT_IN, ["dc_1"], False)
+ LabelMatchExpression("location", LabelMatchOperator.NOT_IN, ["dc_1"], False)
 ]
 actor_affinity_strategy = ActorAffinitySchedulingStrategy(match_expressions)
 actor = Actor.options(scheduling_strategy = actor_affinity_strategy).remote()
@@ -125,7 +125,7 @@ actor = Actor.options(scheduling_strategy = actor_affinity_strategy).remote()
 3. The target actor is expected to be scheduled with the actors whose label key exists "location".
 ```python
 match_expressions = [
- ActorAffinityMatchExpression("location", ActorAffinityOperator.EXISTS, [], False)
+ LabelMatchExpression("location", LabelMatchOperator.EXISTS, [], False)
 ]
 actor_affinity_strategy = ActorAffinitySchedulingStrategy(match_expressions)
 actor = Actor.options(scheduling_strategy = actor_affinity_strategy).remote()
@@ -134,7 +134,7 @@ actor = Actor.options(scheduling_strategy = actor_affinity_strategy).remote()
 4. The target actor is not expected to be scheduled with the actors whose label key exists "location".
 ```python
 match_expressions = [
- ActorAffinityMatchExpression("location", ActorAffinityOperator.DOES_NOT_EXIST, [], False)
+ LabelMatchExpression("location", ActorAffinityOperator.DOES_NOT_EXIST, [], False)
 ]
 actor_affinity_strategy = ActorAffinitySchedulingStrategy(match_expressions)
 actor = Actor.options(scheduling_strategy = actor_affinity_strategy).remote()
@@ -143,8 +143,8 @@ actor = Actor.options(scheduling_strategy = actor_affinity_strategy).remote()
 5. You can also set multiple expressions at the same time, and multiple expressions need to be satisfied when scheduling.
 ```python
 match_expressions = [
- ActorAffinityMatchExpression("location", ActorAffinityOperator.DOES_NOT_EXIST, [], False),
- ActorAffinityMatchExpression("version", ActorAffinityOperator.EXISTS, [], False)
+ LabelMatchExpression("location", LabelMatchOperator.DOES_NOT_EXIST, [], False),
+ LabelMatchExpression("version", LabelMatchOperator.EXISTS, [], False)
 ]
 actor_affinity_strategy = ActorAffinitySchedulingStrategy(match_expressions)
 actor = Actor.options(scheduling_strategy = actor_affinity_strategy).remote()
@@ -181,70 +181,70 @@ Set the labels for this actor API
 Actor affinity scheduling strategy API
 ```java
 public class ActorAffinitySchedulingStrategy implements SchedulingStrategy {
-  private ActorAffinitySchedulingStrategy(List<ActorAffinityMatchExpression> expressions) {
+  private ActorAffinitySchedulingStrategy(List<LabelMatchExpression> expressions) {
 }
 
-public class ActorAffinityMatchExpression {
+public class LabelMatchExpression {
   private String key;
-  private ActorAffinityOperator operator;
+  private LabelMatchOperator operator;
   private List<String> values;
   private boolean isSoft;
 
   /**
    * Returns an affinity expression to indicate that the target actor is expected to be scheduled
    * with the actors whose label meets one of the composed key and values. eg:
-   * ActorAffinityMatchExpression.in("location", new ArrayList<>() {{ add("dc-1");}}, false).
+   * LabelMatchExpression.in("location", new ArrayList<>() {{ add("dc-1");}}, false).
    *
    * @param key The key of label.
    * @param values A list of label values.
    * @param isSoft If true, the actor will be scheduled even there's no matched actor.
-   * @return ActorAffinityMatchExpression.
+   * @return LabelMatchExpression.
    */
-  public static ActorAffinityMatchExpression in(String key, List<String> values, boolean isSoft) {
-    return new ActorAffinityMatchExpression(key, ActorAffinityOperator.IN, values, isSoft);
+  public static LabelMatchExpression in(String key, List<String> values, boolean isSoft) {
+    return new LabelMatchExpression(key, LabelMatchOperator.IN, values, isSoft);
   }
 
   /**
    * Returns an affinity expression to indicate that the target actor is not expected to be
    * scheduled with the actors whose label meets one of the composed key and values. eg:
-   * ActorAffinityMatchExpression.notIn( "location", new ArrayList<>() {{ add("dc-1");}}, false).
+   * LabelMatchExpression.notIn( "location", new ArrayList<>() {{ add("dc-1");}}, false).
    *
    * @param key The key of label.
    * @param values A list of label values.
    * @param isSoft If true, the actor will be scheduled even there's no matched actor.
-   * @return ActorAffinityMatchExpression.
+   * @return LabelMatchExpression.
    */
-  public static ActorAffinityMatchExpression notIn(
+  public static LabelMatchExpression notIn(
       String key, List<String> values, boolean isSoft) {
-    return new ActorAffinityMatchExpression(key, ActorAffinityOperator.NOT_IN, values, isSoft);
+    return new LabelMatchExpression(key, LabelMatchOperator.NOT_IN, values, isSoft);
   }
 
   /**
    * Returns an affinity expression to indicate that the target actor is expected to be scheduled
    * with the actors whose labels exists the specified key. eg:
-   * ActorAffinityMatchExpression.exists("location", false).
+   * LabelMatchExpression.exists("location", false).
    *
    * @param key The key of label.
    * @param isSoft If true, the actor will be scheduled even there's no matched actor.
-   * @return ActorAffinityMatchExpression.
+   * @return LabelMatchExpression.
    */
-  public static ActorAffinityMatchExpression exists(String key, boolean isSoft) {
-    return new ActorAffinityMatchExpression(
-        key, ActorAffinityOperator.EXISTS, new ArrayList<String>(), isSoft);
+  public static LabelMatchExpression exists(String key, boolean isSoft) {
+    return new LabelMatchExpression(
+        key, LabelMatchOperator.EXISTS, new ArrayList<String>(), isSoft);
   }
 
   /**
    * Returns an affinity expression to indicate that the target actor is not expected to be
    * scheduled with the actors whose labels exists the specified key. eg:
-   * ActorAffinityMatchExpression.doesNotExist("location", false).
+   * LabelMatchExpression.doesNotExist("location", false).
    *
    * @param key The key of label.
    * @param isSoft If true, the actor will be scheduled even there's no matched actor.
-   * @return ActorAffinityMatchExpression.
+   * @return LabelMatchExpression.
    */
-  public static ActorAffinityMatchExpression doesNotExist(String key, boolean isSoft) {
-    return new ActorAffinityMatchExpression(
-        key, ActorAffinityOperator.DOES_NOT_EXIST, new ArrayList<String>(), isSoft);
+  public static LabelMatchExpression doesNotExist(String key, boolean isSoft) {
+    return new LabelMatchExpression(
+        key, LabelMatchOperator.DOES_NOT_EXIST, new ArrayList<String>(), isSoft);
   }
 
 }
@@ -282,7 +282,7 @@ locationValues.add("dc_1");
 locationValues.add("dc_2");
 ActorAffinitySchedulingStrategy schedulingStrategy =
     new ActorAffinitySchedulingStrategy.Builder()
-        .addExpression(ActorAffinityMatchExpression.in("location", locationValues, false))
+        .addExpression(LabelMatchExpression.in("location", locationValues, false))
         .build();
 ActorHandle<Counter> actor2 =
     Ray.actor(Counter::new, 1).setSchedulingStrategy(schedulingStrategy).remote();
@@ -294,7 +294,7 @@ List<String> values = new ArrayList<>();
 values.add("dc-1");
 ActorAffinitySchedulingStrategy schedulingStrategyNotIn =
     new ActorAffinitySchedulingStrategy.Builder()
-        .addExpression(ActorAffinityMatchExpression.notIn("location", values, false))
+        .addExpression(LabelMatchExpression.notIn("location", values, false))
         .build();
 ActorHandle<Counter> actor3 =
     Ray.actor(Counter::new, 1).setSchedulingStrategy(schedulingStrategyNotIn).remote();
@@ -304,7 +304,7 @@ ActorHandle<Counter> actor3 =
 ```java
 ActorAffinitySchedulingStrategy schedulingStrategyExists =
     new ActorAffinitySchedulingStrategy.Builder()
-        .addExpression(ActorAffinityMatchExpression.exists("version", false))
+        .addExpression(LabelMatchExpression.exists("version", false))
         .build();
 ActorHandle<Counter> actor4 =
     Ray.actor(Counter::new, 1).setSchedulingStrategy(schedulingStrategyExists).remote();
@@ -315,7 +315,7 @@ Assert.assertEquals(actor4.task(Counter::getValue).remote().get(10000), Integer.
 ```java
 ActorAffinitySchedulingStrategy schedulingStrategyDoesNotExist =
     new ActorAffinitySchedulingStrategy.Builder()
-        .addExpression(ActorAffinityMatchExpression.doesNotExist("version", false))
+        .addExpression(LabelMatchExpression.doesNotExist("version", false))
         .build();
 ActorHandle<Counter> actor5 =
     Ray.actor(Counter::new, 1).setSchedulingStrategy(schedulingStrategyDoesNotExist).remote();
@@ -325,8 +325,8 @@ ActorHandle<Counter> actor5 =
 ```java
 ActorAffinitySchedulingStrategy schedulingStrategy =
     new ActorAffinitySchedulingStrategy.Builder()
-        .addExpression(ActorAffinityMatchExpression.doesNotExist("version", false))
-        .addExpression(ActorAffinityMatchExpression.Exists("location", false))
+        .addExpression(LabelMatchExpression.doesNotExist("version", false))
+        .addExpression(LabelMatchExpression.Exists("location", false))
         .build();
 ActorHandle<Counter> actor6 =
     Ray.actor(Counter::new, 1).setSchedulingStrategy(schedulingStrategy).remote();
@@ -412,10 +412,10 @@ message ResourcesData {
   // heartbeat enabled.
   bool resources_available_changed = 3;
 
-  // Map<key, Map<value, reference_count>> Actors scheduled to this node and actor labels information
-  repeat Map<string, Map<string, int>> actor_labels = 15
+  // Map<label_type, Map<namespace, Map<label_key, label_value>>> Actors/Tasks/Nodes labels information
+  repeat Map<string, Map<string, Map<string, string>>> labels = 15
   // Whether the actors of this node is changed.
-  bool actor_labels_changed = 16,
+  bool labels_changed = 16,
 }
 
 
@@ -426,8 +426,8 @@ NodeResources {
   ResourceRequest load;
   /// Resources owned by normal tasks.
   ResourceRequest normal_task_resources
-  /// Actors scheduled to this node and actor labels information
-  absl::flat_hash_map<string, absl::flat_hash_map<string, int>> actor_labels;
+  /// Map<label_type, Map<namespace, Map<label_key, label_value>>> Actors/Tasks/Nodes labels information
+  absl::flat_hash_map<string, absl::flat_hash_map<string, absl::flat_hash_map<string, string>>> labels;
 }
 ```
 
@@ -465,12 +465,12 @@ Actor scheduling flowchart：
 ![Actor scheduling flowchart](https://user-images.githubusercontent.com/11072802/202128385-f72609c5-308d-4210-84ff-bf3ba6df381c.png)
 
 Node Resources synchronization mechanism:
-![Node Resources synchronization mechanism](https://user-images.githubusercontent.com/11072802/202128406-b4745e6e-3565-41a2-bfe3-78843379bf09.png)
+![Node Resources synchronization mechanism](https://user-images.githubusercontent.com/11072802/203783157-fad67f25-b046-49ac-b201-b54942073823.png)
 
 4. Scheduling optimization through ActorLabels  
 Now any node raylet has ActorLabels information for all nodes. 
 However, when ActorAffinity schedules, if it traverses the Labels of all Actors of each node, the algorithm complexity is very large, and the performance will be poor.   
-<b> Therefore, it is necessary to generate a full-cluster ActorLabels index table to improve scheduling performance. <b>
+<b> Therefore, it is necessary to generate a full-cluster ActorLabels index table to improve scheduling performance. </b>
 
 ```
 class GcsLabelManager {
@@ -491,18 +491,12 @@ class GcsLabelManager {
 }
 ```
 
-<b> VS.  putting Labels into the custom resource solution  <b>  
-<b>Advantages:<b>
-1. Compared with the scheme of putting Labels in the custom resource. This scheme can also reuse the resource synchronization mechanism. Then it won't destroy the concept of coustrom resouce.
-2. The Label index table of all nodes can be constructed from the ActorLabels information of each node. If you use Custom Resource, you can't build.
-3. If the Custom Resouces scheme is used, the accuracy of custom resouces scheduling will be affected. The current scheme is completely independent of existing scheduling policies and resources and will not affect them. The code is also more concise.
-
-
-<b>DisAdvantages:<b>
-1. The interface for resource reporting and updating needs to be adapted to ActorLabels in ResouceData.
-
-<b>Issue<b>
+**Issue**
 1. Because there must be a delay in resource synchronization under raylet scheduling. So if actor affinity is Soft semantics, there will be inaccurate scheduling.
+
+    a. If the user selects the Soft strategy. That means that the user can accept the fact that the scheduling has a certain probability of being inaccurate.
+
+    b. Most users schedule a batch of actors on the same node. In this case we can do exactly the right thing.
 
 
 ### Failures and Special Scenarios
@@ -523,8 +517,7 @@ This solution is to learn the PodAffinity/NodeAffinity features of K8s。
 https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#affinity-and-anti-affinity
 
 ### what's the alternative to achieve the same goal?
-1、Ray 
-Now ray placement group can achieve the same goal. But PG is too heavy and complicated to be user friendly
+
 ## Compatibility, Deprecation, and Migration Plan
 
 ## Test Plan and Acceptance Criteria
@@ -536,7 +529,7 @@ All APIs will be fully unit tested. All specifications in this documentation wil
 Later, if necessary, you can extend the semantics of "OR" by adding "is_or_semantics" to ActorAffinitySchedulingStrategy.
 ```
 class ActorAffinitySchedulingStrategy:
-    def __init__(self, match_expressions: List[ActorAffinityMatchExpression], is_or_semantics = false):
+    def __init__(self, match_expressions: List[LabelMatchExpression], is_or_semantics = false):
         self.match_expressions = match_expressions
         self.is_or_semantics = 
 ```
