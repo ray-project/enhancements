@@ -72,10 +72,10 @@ SchedulingStrategyT = Union[None, str,
                             ActorAffinitySchedulingStrategy]
 
 class ActorAffinitySchedulingStrategy:
-    def __init__(self, match_expressions: List[ActorAffinityMatchExpression]):
+    def __init__(self, match_expressions: List[LabelMatchExpression]):
         self.match_expressions = match_expressions
 
-class ActorAffinityMatchExpression:
+class LabelMatchExpression:
     """An expression used to represent an actor's affinity.
     Attributes:
         key: the key of label
@@ -84,7 +84,7 @@ class ActorAffinityMatchExpression:
         values: a list of label value
         soft: ...
     """
-    def __init__(self, key: str, operator: ActorAffinityOperator,
+    def __init__(self, key: str, operator: LabelMatchOperator,
                  values: List[str], soft: bool):
         self.key = key
         self.operator = operator
@@ -412,10 +412,10 @@ message ResourcesData {
   // heartbeat enabled.
   bool resources_available_changed = 3;
 
-  // Map<key, Map<value, reference_count>> Actors scheduled to this node and actor labels information
-  repeat Map<string, Map<string, int>> actor_labels = 15
+  // Map<label_type, Map<namespace, Map<label_key, label_value>>> Actors/Tasks/Nodes labels information
+  repeat Map<string, Map<string, Map<string, string>>> labels = 15
   // Whether the actors of this node is changed.
-  bool actor_labels_changed = 16,
+  bool labels_changed = 16,
 }
 
 
@@ -465,7 +465,7 @@ Actor scheduling flowchart：
 ![Actor scheduling flowchart](https://user-images.githubusercontent.com/11072802/202128385-f72609c5-308d-4210-84ff-bf3ba6df381c.png)
 
 Node Resources synchronization mechanism:
-![Node Resources synchronization mechanism](https://user-images.githubusercontent.com/11072802/202128406-b4745e6e-3565-41a2-bfe3-78843379bf09.png)
+![Node Resources synchronization mechanism](https://user-images.githubusercontent.com/11072802/203783157-fad67f25-b046-49ac-b201-b54942073823.png)
 
 4. Scheduling optimization through ActorLabels  
 Now any node raylet has ActorLabels information for all nodes. 
