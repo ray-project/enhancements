@@ -1,9 +1,9 @@
-Previous issues:
-https://github.com/ray-project/ray/issues/25846
 
 ## Summary - Ray for federated learning and privacy-preserving computing
 ### General Motivation
 Federated machine learning and privacy-preserving computing are getting wider. They're obviously distributed systems because they're always across parties(companies or ORGs.) To extend Ray ecosystem to federated learning and privacy-preserving computing domain, we should let users be easy to use Ray, for building their own federated learning and privacy-preserving computing applications without any concern on data privacy, task-attacks, illegal invasion, and etc.
+
+PS: I also found another related issue: https://github.com/ray-project/ray/issues/25846
 
 In this proposal, we'd like to build a connector layer on Ray, to provide the ability for users use Ray easily to build their such kind of system, with the secure issues addressed totally.
 
