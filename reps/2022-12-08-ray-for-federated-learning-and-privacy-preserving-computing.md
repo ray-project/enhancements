@@ -21,6 +21,7 @@ Yes.
 
 ## Stewardship
 ### Required Reviewers
+@jovany-wang
 ### Shepherd of the Proposal (should be a senior committer)
 
 
