@@ -2,7 +2,7 @@
 ### General Motivation
 
 Introduce the Labels mechanism. Give Labels to Actors/Tasks/Nodes/Objects. 
-Affinity features such as ActorAffinity/TaskAffinity/NodeAffinity can be realized through Labels.
+Affinity features such as ActorAffinity/NodeAffinity can be realized through Labels.
 
 
 ### Should this change be within `ray` or outside?
@@ -49,14 +49,9 @@ The apis of the actor-affinity/task-affinity/node-affinity scheduling.
 SchedulingStrategyT = Union[None, str,
                             PlacementGroupSchedulingStrategy,
                             ActorAffinitySchedulingStrategy,
-                            TaskAffinitySchedulingStrategy,
                             NodeAffinitySchedulingStrategy]
 
 class ActorAffinitySchedulingStrategy:
-    def __init__(self, match_expressions: List[LabelMatchExpression]):
-        self.match_expressions = match_expressions
-
-class TaskAffinitySchedulingStrategy:
     def __init__(self, match_expressions: List[LabelMatchExpression]):
         self.match_expressions = match_expressions
 
@@ -87,7 +82,112 @@ actor_1 = Actor.options(scheduling_strategy=ActorAffinitySchedulingStrategy([
             ])).remote()
 ```
 
+### Example
 
+* Affinity
+  * Co-locate the actors in the same batch of nodes, like nodes in the same zones
+* Anti-affinity
+  * Spread the actors of a service across nodes and/or availability zones, e.g. to reduce correlated failures.
+
+**1. Spread Demo**
+
+![spread demo](https://user-images.githubusercontent.com/11072802/207037933-8a9d9f1d-ee6e-472b-a877-669cef996db9.png)
+
+```
+@ray.remote
+Class Cat:
+    pass
+
+cats = []
+for i in range(4):
+    cat = Actor.options(
+            labels = {"type": "cat"},
+            scheduling_strategy=ActorAffinitySchedulingStrategy([
+                LabelMatchExpression(
+                    "type", LabelMatchOperator.NOT_IN, ["cat"], False)
+            ])).remote()
+    cats.apend(cat)
+```
+
+**2. Co-locate Demo**
+
+![co-locate demo](https://user-images.githubusercontent.com/11072802/207037951-df5bbf4a-442e-49e0-9561-39cfde45bf49.png)
+
+```
+@ray.remote
+Class Dog:
+    pass
+
+dogs = []
+# First schedule a dog to a random node.
+dog_1 = Dog.options(labels={"type":"dog"}).remote()
+dogs.apend(dog_1)
+
+# Then schedule the remaining dogs to the same node as the first dog.
+for i in range(3):
+    dog = Actor.options(scheduling_strategy=ActorAffinitySchedulingStrategy([
+                    LabelMatchExpression(
+                        "type", LabelMatchOperator.IN, ["dog"], False)
+                ])).remote()
+    dogs.apend(dog)
+```
+
+**2. Collocate and spread combination demo**
+
+![Collocate and spread combination demo](https://user-images.githubusercontent.com/11072802/207037895-125aab9d-d784-4a18-b777-1650c1d59226.png)
+
+```
+@ray.remote
+Class Cat:
+    pass
+
+@ray.remote
+Class Dog:
+    pass
+
+# First schedule cat to each node.
+cats = []
+for i in range(4):
+    cat = Actor.options(
+            labels = {
+                "type": "cat",
+                "id": "cat-" + str(i)
+            },
+            scheduling_strategy=ActorAffinitySchedulingStrategy([
+                    LabelMatchExpression(
+                        "type", LabelMatchOperator.NOT_IN, ["cat"], False)
+            ])).remote()
+    cats.apend(cat)
+
+# Then each node schedules 3 dogs.
+dogs = []
+for i in range(4):
+    node_dogs = []
+    for i in range(3):
+        dog = Actor.options(
+                labels = {
+                    "type": "dog",
+                },
+                scheduling_strategy=ActorAffinitySchedulingStrategy([
+                        LabelMatchExpression(
+                            "id", LabelMatchOperator.IN, ["cat-" + str(i)], False)
+                ])).remote()
+        node_dogs.apend(dog)
+    dogs.apend(node_dogs)
+```
+
+### Note
+1. Actor/NodeAffinity can be used together with the CustomResource mechanism.
+These two mechanisms are completely non-conflicting.  
+eg:
+```
+actor_1 = Actor.options(
+                        resources={"4c8g": 1},
+                        scheduling_strategy=ActorAffinitySchedulingStrategy([
+                            LabelMatchExpression(
+                                "location", LabelMatchOperator.IN, ["dc_1"], False)
+                        ])).remote()
+```
 ### Implementation plan
 
 ![LabelsAffinity](https://user-images.githubusercontent.com/11072802/203686851-894536d0-86fa-4fab-a5fe-2e656ac198e5.png)
@@ -175,7 +275,7 @@ podAntiAffinity | POD | In, NotIn, Exists, DoesNotExist
 
 ### what's the alternative to achieve the same goal?
 **Option 2: Use LabelAffinitySchedulingStrategy instead of Actor/Task/NodeAffinitySchedulingStrategy**  
-Some people think that ActorAffinity/TaskAffinity is dispatched to the Node corresponding to the actor/Task with these labels.  
+Some people think that ActorAffinity is dispatched to the Node corresponding to the actor/Task with these labels.  
 Why not assign both ActorLabels and TaskLabels to Node?   
 Then the scheduling API only needs to use the LabelAffinitySchedulingStrategy set of APIs to instead of Actor/Task/NodeAffinitySchedulingStrategy.  
 
@@ -222,7 +322,7 @@ Advantages:
 Example:  
 The user wants to affinity schedule to <b> some Actors and nodes in a special computer room. </b>   
 However, according to the results of internal user research, most of the requirements are just to realize Actor/Task "collocate" scheduling or spread scheduling.  
-So using a single ActorAffinity/TaskAffinity/NodeAffinity can already achieve practical effects.  
+So using a single ActorAffinity/NodeAffinity can already achieve practical effects.  
 
 And the same effect can be achieved by combining the option 1 with custom resources
 
@@ -277,3 +377,6 @@ class ActorAffinitySchedulingStrategy:
 
 ### 2. ObjectAffinitySchedulingStrategy
 If the user has a request, you can consider adding the attributes of labels to objects. Then the strategy of ObjectAffinity can be launched。
+
+### 3. TaskAffinitySchedulingStrategy
+Because the resource synchronization mechanism of Label has been implemented above. Therefore, it is easy to create a TaskAffinity strategy for Task.
