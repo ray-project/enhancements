@@ -48,7 +48,8 @@ The short term solution is to treat split() as a special case, preserving backwa
 ### Interfaces
 
 We introduce a new interface between the operator and execution layers of Datasets, which enables flexible selection of the execution strategy (bulk vs pipelined). The operator layer defines "what" to execute (e.g., Arrow table operations), and the executor defines "how" it is executed (e.g., bulk vs pipelined). Previously, operator definition and execution were intertwined in the code.
-![graphs](https://user-images.githubusercontent.com/14922/207695244-b5a90d67-bdc9-4519-9bf1-fa01ecb877a4.png)
+
+<img src="https://user-images.githubusercontent.com/14922/207695244-b5a90d67-bdc9-4519-9bf1-fa01ecb877a4.png" alt="drawing" width="600px"/>
 
 For example, suppose you are running the following "Two-stage inference example":
 
@@ -171,10 +172,12 @@ class PhysicalOperator:
 ```
 
 This is how the "Two-stage inference example" breaks down into a DAG of operators:
-![graphs](https://user-images.githubusercontent.com/14922/207695905-8054e644-0600-4a55-a266-2fc0a9396223.png)
+
+<img src="https://user-images.githubusercontent.com/14922/207695905-8054e644-0600-4a55-a266-2fc0a9396223.png" alt="drawing" width="600px"/>
 
 As another example, suppose we replaced the `Map(infer, GPU)` stage with `Sort()` operator. This would generate a pipeline with a blocking operator (orange) that acts as a barrier prior to the actual sort:
-![graphs](https://user-images.githubusercontent.com/14922/207696019-b37fab59-b49a-4819-98c0-d0d7646b68ba.png)
+
+<img src="https://user-images.githubusercontent.com/14922/207696019-b37fab59-b49a-4819-98c0-d0d7646b68ba.png" alt="drawing" width="600px"/>
 
 In this way, we can support both pipelineable and non-pipelineable operations.
 
@@ -200,10 +203,12 @@ When the output of PipelinedExecutor is an iterator (i.e., for data ingest), the
 We prototyped a PipelinedExecutor implementation here: https://github.com/ray-project/ray/pull/30222 ("Datastream Prototype") and evaluated its performance against Datasets/DatasetPipeline on two workloads.
 
 On a distributed data ingest workload (cluster of 8x 16-core machines), Datastream was more than 2x faster than a well-tuned DatasetPipeline implementation. This is likely because the "sliding window" execution improves CPU efficiency, reduces the impact of stragglers, and also reduces memory usage. Non-pipelined Datasets execution ground to a halt here due to excessive disk spilling.
-![graphs](https://user-images.githubusercontent.com/14922/207696528-0c58c757-e704-44bb-961d-ff23864c344f.png)
+
+<img src="https://user-images.githubusercontent.com/14922/207696528-0c58c757-e704-44bb-961d-ff23864c344f.png" alt="drawing" width="600px"/>
 
 On a two-stage batch inference workload (same cluster of 8x 16-core machines), Datastream was 20% faster than a well-tuned DatasetPipeline implementation. More importantly, it was also more robust. Adjusting the parallelism budget of Datastream between 20-100 changed its performance by <10%. In contrast, adjusting the DatasetPipeline window size by 2x impacted performance by >30%. Non-pipelined Dataset execution was much slower due to disk spilling.
-![graphs](https://user-images.githubusercontent.com/14922/207696590-608be661-b8fd-4a1a-a0ab-34bc9c6644d3.png)
+
+<img src="https://user-images.githubusercontent.com/14922/207696590-608be661-b8fd-4a1a-a0ab-34bc9c6644d3.png" alt="drawing" width="600px"/>
 
 In summary, we validate the performance benefits of the proposed approach compared to both existing Dataset and DatasetPipeline abstractions. The source code of the benchmarks can be found here:
 - https://gist.github.com/ericl/6de562785571c56dceb5bceafc7fcb71
