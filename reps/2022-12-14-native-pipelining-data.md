@@ -1,4 +1,4 @@
-
+# Native pipelining support in Ray Datasets
 ## Summary - Native pipelining support in Ray Datasets
 ### General Motivation
 Two key ML workloads for Ray Datasets are (1) **data ingest**, where trainer processes (e.g., PyTorch workers), read, preprocess, and ingest data, and (2) **batch inference**, where we want to apply a pretrained model across a large dataset to generate predictions.
