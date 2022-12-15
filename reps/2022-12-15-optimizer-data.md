@@ -307,34 +307,3 @@ Since the changes are mostly internal, we should be able to migrate to the new b
 ## (Optional) Follow-on Work
 
 This REP impacts ongoing REP "Native pipelining support in Ray Datasets". We may need to refine the `Optimizer` and `PhysicalOperator` API proposal to align needs, though we do not anticipate major changes are necessary.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
