@@ -284,7 +284,6 @@ The first evaluation is to run the same `map_batches()` calls with different `ba
 
 The second evaluation is to run the same `map_batches()` calls multiple times with the same `batch_size`. As below, we can see the latency for all runs is increased as the number of calls is increased. This is expected as more function calls incur more overhead. The "default" runs and "lazy" runs are taking much longer time than the "prototype" runs, with the same reason above.
 
-
 <img width="779" alt="second-evaluation" src="https://user-images.githubusercontent.com/4629931/207815413-7264ef25-7971-4f75-89c7-b6c610fc5194.png">
 
 ## Compatibility, Deprecation, and Migration Plan
