@@ -1,8 +1,9 @@
 ## Summary
 ### General Motivation
 
-Introduce the Labels mechanism. Give Labels to Actors/Tasks/Nodes/Objects. 
-Affinity features such as ActorAffinity/NodeAffinity can be realized through Labels.
+Introduce labels mechanism, which associate an enumerated property to Ray nodes. We can static assign labels to Ray node on start up, or dynamically change node's label through Ray scheduling APIs.
+
+Labels mechanism makes it easy to implement Actor and Node affinity.(Taints and Tolerations style)
 
 
 ### Should this change be within `ray` or outside?
@@ -19,32 +20,95 @@ Yes, this will be a complement to ray core's ability to flexibly schedule actors
 ## Design and Architecture
 
 ### Brief idea
-1. Introduce the concept of Label. Add the Labels attribute to Actor/Task/Node. Labels = Map<String, String>.
-2. After Actor/Task are scheduled to a certain node, the Labels of Actor/Task will be attached to the node resource(Named: LabelsResource). Node's Labels are naturally in the node resource.
-3. Actor/Task scheduling can choose Actor/Task/NodeAffinitySchedulingStratgy. 
-4. The actual principle of Actor/Task/NodeAffinitySchedulingStratgy is. According to the label matching expression in the strategy, traverse and search for LabelsResource of all nodes. Pick out nodes that meet the expression requirements.
+1. Introduce the concept of Label. Add the Labels attribute to Actor/Node. Labels = Map<String, String>.
+2. After Actor are scheduled to a certain node, the Labels of Actor will be attached to the node resource(Named: LabelsResource). Node's Labels are naturally in the node resource.
+3. Actor scheduling can choose Actor/NodeAffinitySchedulingStratgy. 
+4. The actual principle of Actor/NodeAffinitySchedulingStratgy is. According to the label matching expression in the strategy, traverse and search for LabelsResource of all nodes. Pick out nodes that meet the expression requirements.
 
 ![LabelsAffinity](https://user-images.githubusercontent.com/11072802/203686866-385235b5-e08b-4aac-9c31-512621129bd4.png)
 
+Scheduling Policy | Label Owner | Label select operator
+-- | -- | --
+ActorAffinity | Actor | in, not_in, exists, does_not_exist
+NodeAffinity | Node | in, not_in, exists, does_not_exist
+
 ### API Design
-The apis of actors/tasks/nodes add labels.
+
+**The apis of actors/nodes add labels**  
+
+This interface is already very simple, so we will not set up multiple solutions for everyone to discuss.
 ```python
 # Actor add labels.
 actor_1 = Actor.options(labels={
     "location": "dc_1"
 }).remote()
 
-# Task add labels.
-task_1 = Task.options(labels={
-    "location": "dc_1"
-}).remote()
 
 #  Node add static labels. 
 ray start ... --labels={"location": "dc_1"}
 # The api of the dynamic update node labels is similar to the current dynamic set_resource. It can be determined later.
 ```
 
-The apis of the actor-affinity/task-affinity/node-affinity scheduling.
+**The apis of the actor-affinity/node-affinity scheduling.**  
+
+**Option 1: Simplify through syntactic sugar**  
+
+```python
+actor_1 = Actor.options(
+        scheduling_strategy=actor_affinity(label_in("location", ["dc_1"], false))
+    ).remote()
+
+actor_1 = Actor.options(
+        scheduling_strategy=node_affinity(label_exist("location", false))
+    ).remote()
+
+actor_1 = Actor.options(
+        scheduling_strategy=actor_affinity([
+            label_in("location", ["dc_1"], false),
+            label_exists("location", false)
+        ])
+    ).remote()
+
+def actor_affinity(...):
+    ...
+    return ActorAffinitySchedulingStrategy(...)
+
+def node_affinity(...):
+    ...
+    return NodeAffinitySchedulingStrategy(...)
+
+def label_in(key, values, is_soft):
+    ...
+    return LabelMatchExpression(...)
+
+def label_not_in(key, values, is_soft):
+    ...
+    return LabelMatchExpression(...)
+
+def label_exists(key, is_soft):
+    ...
+    return LabelMatchExpression(...)
+
+def label_does_not_exist(key, is_soft):
+    ...
+    return LabelMatchExpression(...)
+```
+
+**Option 2: another syntactic sugar** 
+
+Personally, I think this Option is not as good as the above Option 1.  
+The label_in(key, values, is_soft) form of option 1 is more understandable and better than the form of ("location", LabelMatchOperator.IN, ["dc_1"], false).
+```python
+actor_1 = Actor.options(
+        scheduling_strategy=ActorAffinity([
+            ("location", LabelMatchOperator.IN, ["dc_1"], false),
+            ("location", LabelMatchOperator.Exist)).
+    ).remote()
+```
+
+**Option 3: Java-like form**  
+
+This form is similar to Java's syntax. The downside is that it's a bit complicated.
 ```python
 SchedulingStrategyT = Union[None, str,
                             PlacementGroupSchedulingStrategy,
@@ -75,11 +139,29 @@ class LabelMatchExpression:
         self.values = values
         self.soft = soft
 
-# ActorAffinity use case
 actor_1 = Actor.options(scheduling_strategy=ActorAffinitySchedulingStrategy([
                 LabelMatchExpression(
                     "location", LabelMatchOperator.IN, ["dc_1"], False)
             ])).remote()
+
+actor_1 = Actor.options(scheduling_strategy=ActorAffinitySchedulingStrategy([
+                LabelMatchExpression(
+                    "location", LabelMatchOperator.IN, ["dc_1"], False),
+                LabelMatchExpression(
+                    "location", LabelMatchOperator.EXISTS, None, False)
+            ])).remote()
+```
+
+**Option 4: Like sql**  
+
+This solution is not recommended.  
+This method needs to parse SQL, and the workload will be much larger.  
+And users often write wrong sql when using it.
+```python
+# ActorAffinity use case
+actor_1 = Actor.options(
+        scheduling_strategy=ActorAffinity("location in [dc_1, dc_2]")
+    ).remote()
 ```
 
 ### Example
@@ -88,6 +170,9 @@ actor_1 = Actor.options(scheduling_strategy=ActorAffinitySchedulingStrategy([
   * Co-locate the actors in the same batch of nodes, like nodes in the same zones
 * Anti-affinity
   * Spread the actors of a service across nodes and/or availability zones, e.g. to reduce correlated failures.
+
+I will update the following API when the API plan is determined.  
+Now describe the example with an api like java form.
 
 **1. Spread Demo**
 
@@ -380,3 +465,23 @@ If the user has a request, you can consider adding the attributes of labels to o
 
 ### 3. TaskAffinitySchedulingStrategy
 Because the resource synchronization mechanism of Label has been implemented above. Therefore, it is easy to create a TaskAffinity strategy for Task.
+
+**Task add labels**
+task_1 = Task.options(labels={
+    "location": "dc_1"
+}).remote()
+
+**Add TaskAffinitySchedulingStategy**
+ref = Task.options(
+    scheduling_strategy = task_affinity(label_in("location", ["dc_1"], false)
+).remote()
+
+### 4. Use Affinity scheduling as another dimension scheduling strategy
+The Actor/NodeAffinity strategy can be independent of the SchedulingStrategy as a second-dimensional scheduling strategy.  
+Add a property of Affinity=Actor/NodeAffinity. eg:
+```
+actor_1 = Actor.options(
+        scheduling_strategy="DEFAULT",
+        affinity=actor_affinity(label_in("location", ["dc_1"], false)
+    ).remote()
+```

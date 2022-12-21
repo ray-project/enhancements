@@ -54,6 +54,9 @@ Advantage
 
 ### API Design
 
+The API here is temporarily expressed in this form.
+If the form of the API is determined in 2022-11-23-labels-mechanish-and-affinity-schedule-feature.md later, I will modify the API here.
+
 #### Python API
 Python API Design:  
 Set key-value labels for actors
