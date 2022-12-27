@@ -9,15 +9,18 @@ In this proposal, we'd like to build a connector layer on Ray, to provide the ab
 
 ### Key requirements:
 - Provide the ability for users to easily build their such kind of application on Ray.
-- Setup different Ray clusters for different parties to avoid uncotrollable complex Ray protocols.
+- Setup different Ray clusters for different parties to avoid uncotrollable complex Ray protocols. 
+  - We have tried to setup a single cross-party Ray cluster but failed for security reasons. It is difficult for parties to detect and prevent attacks, e.g. a malicious attacker (it could even be one of the parties) runs destructive code. The complex Ray protocols make it very difficult to enhance the security under single Ray cluster. 
 - Have a unified and global-viewed programming mode for different parties.
-- Data transmition across parties should be in push mode instead of pull mode.
+- Data transmition across parties should be in push mode instead of pull mode. Pull mode makes it hard to prevent malicious attacker stealing data. So push mode is much better since it's the responsibility of the party to decide whether to send data to others.
 - Tasks should be driven in multi-controller mode. That means tasks should be driven by themselves(who are inside this party) instead of others.
 
 ### Should this change be within ray or outside?
-Yes.
-1. A `ray/python/ray/fed` directory should be added to ray repo as the connector layer, like ray collective, ray dag.
-2. `from ray import fed` this kind of code should be supported in Ray core, and then there is no more requirement that needs to change Ray core code yet.
+### Should this change be within ray or outside?
+No
+1. Adding a new repo `RayFed` under `ray-project`: `ray-project/RayFed`
+2. The package name is `rayfed`: pip install rayfed
+3. importing lines should be `import fed`
 
 ## Stewardship
 ### Required Reviewers
@@ -31,7 +34,7 @@ The key words in this design are `multiple controller mode`, `restricted data pe
 ### User Examples
 #### A Simple Example
 ```python
-from ray import fed
+import fed
 
 @fed.remote
 class My:
@@ -70,7 +73,7 @@ import numpy as np
 import tensorflow as tf
 from sklearn.preprocessing import OneHotEncoder
 from tensorflow import keras
-from ray import fed
+import fed
 
 
 @fed.remote
@@ -147,7 +150,7 @@ Compared with running the DAG in one Ray cluster, we have the following signific
 - It's very close to Ray native programming pattern. But the DAG could be ran across Ray clusters.
 - Very restricted and clear data perimeters. we only transmit the data which is needed by others. And all of the data couldn't be fetched in any way if we don't allow.
 - If we run the DAG in one Ray cluster, data transmition is in PULL-BASED mode. For example, if BOB invokes `ray.get(f.options("PARTY_ALICE").remote())`, the return object is pulled by BOB, as a result, ALICE don't have the knowledge for that. In this proposal, it's in PUSH-BASED mode. ALICE has the knowledge for that there is a data object will be sent to BOB. This is a significant advantage of multi-controller mode.
-- All the disadvanteges are addressed in this proposal: code distribution, data privacy, task-attacks, illegal invasion, deserialization vulnerability，and etc.
+- All the disadvantages are addressed in this proposal: **code distribution**, **data privacy**, **task-attacks**, **illegal invasion**, **deserialization vulnerability**, and etc.
 - Brings all Ray advantages to the local Ray cluster, like highly performance RPC, fault tolerance, task scheduling/resource management, and other Ray ecosystem libraries（ Ray datasets, Ray train and Ray serve） for local training.
 
 
@@ -156,7 +159,7 @@ Compared with running the DAG in one Ray cluster, we have the following signific
 None.
 
 ## Test Plan and Acceptance Criteria
-- Test should includes unit tests and integration tests(release tests).
+- Test should include unit tests and integration tests(release tests).
 - Tests should be enabled in CI.
 - Benchmark on across parties data transmition for typical federated learning case.
 - Document page and necessary code comments.
@@ -165,3 +168,5 @@ None.
 - UX improvements for across parties exceptions passing.
 - Provide single-controller mode for quickly building applications and debug inner one party.
 - Performance optimization for other workloads.
+- A unified gateway for ETH communication.
+- Support TEE(Trust Execution Environment) device.
