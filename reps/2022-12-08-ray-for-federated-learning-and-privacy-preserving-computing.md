@@ -160,7 +160,7 @@ None.
 ## Test Plan and Acceptance Criteria
 - Test should include unit tests and integration tests(release tests).
 - Tests should be enabled in CI.
-- Benchmark on across parties data transmition for typical federated learning case.
+- Benchmark on across parties data transmission for typical federated learning case.
 - Document page and necessary code comments.
 
 ## (Optional) Follow-on Work
