@@ -12,7 +12,7 @@ In this proposal, we'd like to build a connector layer on Ray, to provide the ab
 - Setup different Ray clusters for different parties to avoid uncotrollable complex Ray protocols. 
   - We have tried to setup a single cross-party Ray cluster but failed for security reasons. It is difficult for parties to detect and prevent attacks, e.g. a malicious attacker (it could even be one of the parties) runs destructive code. The complex Ray protocols make it very difficult to enhance the security under single Ray cluster. 
 - Have a unified and global-viewed programming mode for different parties.
-- Data transmition across parties should be in push mode instead of pull mode. Pull mode makes it hard to prevent malicious attacker stealing data. So push mode is much better since it's the responsibility of the party to decide whether to send data to others.
+- Data transmission across parties should be in push mode instead of pull mode. It's hard to prevent malicious attacker stealing data in pull mode. Push mode is much better since it's the responsibility of the party to decide whether to send data to others.
 - Tasks should be driven in multi-controller mode. That means tasks should be driven by themselves(who are inside this party) instead of others.
 
 ### Should this change be within ray or outside?
