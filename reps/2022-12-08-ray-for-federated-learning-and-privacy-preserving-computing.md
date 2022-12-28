@@ -16,7 +16,7 @@ In this proposal, we'd like to build a connector layer on Ray, to provide the ab
 - Tasks should be driven in multi-controller mode. That means tasks should be driven by themselves(who are inside this party) instead of others.
 
 ### Should this change be within ray or outside?
-No
+No, there is no need to change ray repo, the steps should be:
 1. Adding a new repo `RayFed` under `ray-project`: `ray-project/RayFed`
 2. The package name is `rayfed`: pip install rayfed
 3. importing lines should be `import fed`
