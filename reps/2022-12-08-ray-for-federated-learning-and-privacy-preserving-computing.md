@@ -148,7 +148,7 @@ Every Ray cluster will create the Ray tasks specified to its party, meanwhile, i
 Compared with running the DAG in one Ray cluster, we have the following significant benefits:
 - It's very close to Ray native programming pattern. But the DAG could be ran across Ray clusters.
 - Very restricted and clear data perimeters. we only transmit the data which is needed by others. And all of the data couldn't be fetched in any way if we don't allow.
-- If we run the DAG in one Ray cluster, data transmition is in PULL-BASED mode. For example, if BOB invokes `ray.get(f.options("PARTY_ALICE").remote())`, the return object is pulled by BOB, as a result, ALICE don't have the knowledge for that. In this proposal, it's in PUSH-BASED mode. ALICE has the knowledge for that there is a data object will be sent to BOB. This is a significant advantage of multi-controller mode.
+- If we run the DAG in one Ray cluster, data transmission is in PULL-BASED mode. For example, if BOB invokes `ray.get(f.options("PARTY_ALICE").remote())`, the return object is pulled by BOB, as a result, ALICE don't have the knowledge for that. In this proposal, it's in PUSH-BASED mode. ALICE has the knowledge for that there is a data object will be sent to BOB. This is a significant advantage of multi-controller mode.
 - All the disadvantages are addressed in this proposal: **code distribution**, **data privacy**, **task-attacks**, **illegal invasion**, **deserialization vulnerability**, and etc.
 - Brings all Ray advantages to the local Ray cluster, like highly performance RPC, fault tolerance, task scheduling/resource management, and other Ray ecosystem libraries（ Ray datasets, Ray train and Ray serve） for local training.
 
