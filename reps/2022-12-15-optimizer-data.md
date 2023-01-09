@@ -2,8 +2,6 @@
 
 ## Summary
 
-Build the breakthrough foundation to tackle a series of fundamental issues around Ray Data. The foundation is (1) **lazy execution**, (2) **optimizer**, and (3) **vectorized execution with data batch**.
-
 ### General Motivation
 Two key ML workloads for Datasets are (1) **data ingest**, where trainer processes (e.g., PyTorch workers), read, preprocess, and ingest data, and (2) **batch inference**, where we want to apply a pretrained model across a large dataset to generate predictions.
 
@@ -26,6 +24,8 @@ To resolve the above issues, we need to change Ray Datasets in multiple perspect
   * Unify `LazyBlockList` and `BlockList`, delete `StatsActor`, eager mode and other legacy behavior.
   * Able to support more Datasets APIs.
 
+To summarize, we propose to build the breakthrough foundation to tackle these fundamental issues around Ray Data. The foundation is (1) **lazy execution**, (2) **optimizer**, and (3) **vectorized execution with data batch**.
+
 ### Should this change be within `ray` or outside?
 
 The proposed change is inside the code of Ray Datasets, which is already part of the Ray project repository (“ray.data”).
@@ -41,11 +41,12 @@ The proposed change is inside the code of Ray Datasets, which is already part of
 
 ## Design and Architecture
 
-Architecture after REP:
+**Architecture after REP**:
 
-<img width="945" alt="new-architecture" src="https://user-images.githubusercontent.com/4629931/207807703-bb65db63-41a0-41d9-8e7b-154e1a0ed565.png">
+<img width="783" alt="new-architecture" src="https://user-images.githubusercontent.com/4629931/211386392-f0ce2e55-e9cf-4ff3-ba6e-20b97af1551c.png">
 
-Architecture before REP:
+
+**Architecture before REP**:
 
 <img width="930" alt="old-architecture" src="https://user-images.githubusercontent.com/4629931/207808050-c07e51ed-ece4-4781-9f97-5a06ac107973.png">
 
@@ -140,18 +141,32 @@ class Rule():
   
   def apply(plan: Plan, statistics) -> Plan:
     # specific optimization logic in each rule
+
+class LimitPushDown(Rule):
+  """An example of logical rule to push down limit operator into read.
+  """
+
+  def apply(plan: LogicalPlan, statistics) -> LogicalPlan:
+    # Suppose the user code is `read_parquet(path).limit(10)`.
+    limit_operator = get_limit_operator_from_plan(plan)
+    read_parquet_operator = get_read_operator_from_plan(plan)
+    # Suppose `ReadParquetOperator` has `limit_num_rows` field to instruct only read those number of rows. Update `ReadParquetOperator` here to push down limit into read.
+    read_parquet_operator.limit_num_rows = limit_operator.limit_num_rows
+    return plan
 ```
 
 ##### 2.2.2. Milestones
 
 * Step1: Introduce `Optimizer` class.
-  * `ExecutionPlan._optimize()` should be refactored as a separate `Optimizer` class. `Optimizer` should be implemented as rule-based, and takes statistics into consideration (both file statistics and run-time execution statistics). So we are set out to build a cost-based optimizer with adaptive query execution.
+  * `ExecutionPlan._optimize()` should be refactored as a separate `Optimizer` class. `Optimizer` should be implemented as rule-based, and takes input statistics into consideration.
   * `Rule` is a single piece of logic to transform a `Plan` into another `Plan` based on heuristics and statistics.
   * `Optimizer` runs all `Rule`s one by one to get the final `Plan`. Each `Rule` takes `Plan` as input, and generates a better `Plan`.
   * `Optimizer` should have two subclasses: `LogicalOptimizer` and `PhysicalOptimizer` for `LogicalOperator` and `PhysicalOperator` separately (more details below).
     * `LogicalOptimizer`, `PhysicalOptimizer`
     * `LogicalPlan`, `PhysicalPlan`
     * `LogicalOperator`, `PhysicalOperator`
+  * Logical `Rule`: a `Rule` applying to `LogicalPlan`. Examples are `BatchSizePushDownRule`, `BatchFormatPushDownRule`, `LimitPushDownRule`, `ProjectionPushDownRule`. More details for these rules below.
+  * Physical `Rule`: a `Rule` applying to `PhysicalPlan`. Example is `Stage/OperatorFusionRule` to fuse multiple `Operator`s into one stage.
 
 * Step 2: Introduce `Operator` class.
   * Currently processing logic is modeled as `Stage` (e.g. read stage, map_batches stage, etc). The naming is confused when stages can be fused together into one stage, as each one no longer represents a stage boundary during execution. We should model `Stage` as an `Operator` class instead.
@@ -160,11 +175,16 @@ class Rule():
     * `PhysicalOperator`: mapping to a `LogicalOperator` (or part of a `LogicalOperator`). The `PhysicalOperator` specifies how to do the operation. For example, `ArrowParquetReadOperator` specifies to read Parquet files with the Arrow reader. One `LogicalOperator` can have more than one `PhysicalOperator` for it.
   * `Operator` depends on its children operators as its input. A single operator can depend on more than one operator. So the `Plan` consists of a DAG of `Operator`s (so-called query plan tree or execution graph in other systems).
 
-* Step 3: Refactor `ExecutionPlan` to work with `Optimizer` and `Operator`.
-  * `ExecutionPlan` takes a DAG of `Operator`s instead of a chaining of `Stage`s.
+* Step 3: Introduce `Plan` class.
   * `Plan` should have two subclasses: `LogicalPlan` and `PhysicalPlan`.
+    * `LogicalPlan`: it has a DAG of `LogicalOperator`s and other auxiliary information (such as input statistics).
+    * `PhysicalPlan`: it has a DAG of `PhysicalOperator`s and statistics for finished `PhysicalOperator`.
+    * There would be a class/utility to convert `LogicalPlan` into `PhysicalPlan`. Given the current logic would be fairly straightforward, so leave this as implementation detail for now.
 
-* Step 4: Introduce new `Optimizer` rules for configurations auto-tuning
+
+* Step 4: Refactor `ExecutionPlan` into `PhysicalPlan` to work with `Optimizer` and `Operator`.
+
+* Step 5: Introduce new `Optimizer` rules for configurations auto-tuning
   * `AutoParallelismAndBatchSizeRule`: automatically decide batch size and read tasks parallelism, based on cluster resource, input data size, and previous execution statistics.
   * `Operator`s push down rules:
     * `BatchSizePushDownRule`: push down batching as early as possible in plan.
@@ -207,20 +227,15 @@ The new proposal would eliminate that batch to block copy and pass the batch dir
 
 #### 3.2.1. Interfaces
 
-NOTE: `OneToOneOperator` used here is the same as `OneToOneOperator` in "Native pipelining support in Ray Datasets" REP.
+NOTE: `PhysicalOperator` used here is the same as `PhysicalOperator` in "Native pipelining support in Ray Datasets" REP.
 
 ```python
-class BatchedOperator(OneToOneOperator):
-  """Abstract class for batched OneToOneOperator.
+class BatchedOperator(PhysicalOperator):
+  """Abstract class for batched PhysicalOperator.
 
   BatchedOperator should implement vectorized execution on input data blocks, in batched manner.
   """
 
-  def execute_one(blocks: Iterator[Block], metadata: Dict[str, Any]) -> Iterator[Block]
-    input_batches = convert_block_to_batch(blocks)
-    output_batches = process_batches(input_batches)
-    return convert_batch_to_block(output_batches)
-  
   def process_batches(input: Iterator[Batch]) -> Iterator[Batch]:
     # Process each Batch from input
 
