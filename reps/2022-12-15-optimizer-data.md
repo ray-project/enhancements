@@ -41,14 +41,13 @@ The proposed change is inside the code of Ray Datasets, which is already part of
 
 ## Design and Architecture
 
-**Architecture after REP**:
-
-<img width="783" alt="new-architecture" src="https://user-images.githubusercontent.com/4629931/211386392-f0ce2e55-e9cf-4ff3-ba6e-20b97af1551c.png">
-
-
 **Architecture before REP**:
 
-<img width="930" alt="old-architecture" src="https://user-images.githubusercontent.com/4629931/207808050-c07e51ed-ece4-4781-9f97-5a06ac107973.png">
+<img width="400px" alt="old-architecture" src="https://user-images.githubusercontent.com/4629931/207808050-c07e51ed-ece4-4781-9f97-5a06ac107973.png">
+
+**Architecture after REP**:
+
+<img width="550px" alt="new-architecture" src="https://user-images.githubusercontent.com/4629931/211386392-f0ce2e55-e9cf-4ff3-ba6e-20b97af1551c.png">
 
 ### 1. Enable lazy execution mode by default
 
