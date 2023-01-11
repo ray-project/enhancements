@@ -7,7 +7,11 @@ Today, AWS autoscaler requires developers to choose their EC2 instance types upf
 #### Key requirements
 
 -   Autoscaler must offer existing functionalities and hence changes must be backward compatible.
--   Developers must be able to make use of most of the critical features AWS EC2 Fleet offers.
+-   Developers must be able to make use of the features including but not limited to following:
+    -   save costs by combining on-demand capacity with spot capacity
+    -   make use of different spot and on-demand allocation strategies like `price-capacity-optimized`, `diversified`, `lowest-price` etc. to scale up
+    -   specify maximum spot prices for each instance to optimize their costs
+    -   choose optimal instance pools based on availability depending on vCPU and memory requirements instead of having to choose instance type upfront
 -   [Ray autoscaling monitor](https://github.com/ray-project/ray/blob/a03a141c296da065f333ea81445a1b9ad49c3d00/python/ray/autoscaler/_private/monitor.py), [CLI](https://github.com/ray-project/ray/blob/7b4b88b4082297d3790b9e542090228970708270/python/ray/autoscaler/_private/commands.py#L692), [standard autoscaler](https://github.com/ray-project/ray/blob/a03a141c296da065f333ea81445a1b9ad49c3d00/python/ray/autoscaler/_private/autoscaler.py), and placement groups must be able to provision nodes via EC2 fleet.
 -   EC2 Fleet must not interfere with the autoscaler activities.
 -   EC2 Fleet must be supported for both head and worker node types.
@@ -30,7 +34,7 @@ Yes. Specifically within AWS autoscaler.
 
 ### Proposed Architecture
 
-![Flex Fleet REP](https://user-images.githubusercontent.com/8843998/211219167-eb18a917-c17b-46df-94ad-83aedd8c878b.png)
+![Fleet REP](https://user-images.githubusercontent.com/8843998/211219167-eb18a917-c17b-46df-94ad-83aedd8c878b.png)
 
 As described above, we will be adapting **node provider** to support instance creation via [create_fleet](https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/ec2.html#EC2.Client.create_fleet) API of EC2. The existing components that invoke **node provider** are only shown for clarity.
 
