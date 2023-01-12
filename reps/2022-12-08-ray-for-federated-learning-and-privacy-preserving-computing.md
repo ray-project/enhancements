@@ -25,7 +25,7 @@ No, there is no need to change ray repo, the steps should be:
 ### Required Reviewers
 @jovany-wang
 ### Shepherd of the Proposal (should be a senior committer)
-
+@jovany-wang 
 
 ## Design and Architecture
 The key words in this design are `multiple controller mode`, `restricted data perimeters`.
