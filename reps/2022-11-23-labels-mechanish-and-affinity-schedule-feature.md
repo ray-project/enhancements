@@ -54,6 +54,16 @@ ray start ... --labels={"location": "dc_1"}
 **Option 1: Simplify through syntactic sugar**  
 
 ```python
+
+actor_0 = Actor.remote()
+actor_1 = Actor.options(
+        scheduling_strategy=actor_affinity(affinity(actor_0, false))
+    ).remote()
+
+actor_2 = Actor.options(
+        scheduling_strategy=actor_affinity(anti_affinity(actor_0, false))
+    ).remote()
+
 actor_1 = Actor.options(
         scheduling_strategy=actor_affinity(label_in("location", ["dc_1"], false))
     ).remote()
@@ -90,6 +100,14 @@ def label_exists(key, is_soft):
     return LabelMatchExpression(...)
 
 def label_does_not_exist(key, is_soft):
+    ...
+    return LabelMatchExpression(...)
+
+def affinity(actor_handles, is_soft):
+    ...
+    return LabelMatchExpression(...)
+
+def anti_affinity(actor_handles, is_soft):
     ...
     return LabelMatchExpression(...)
 ```
