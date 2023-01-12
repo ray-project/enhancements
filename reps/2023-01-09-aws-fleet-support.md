@@ -108,6 +108,7 @@ ray.worker.default:
 -   Update the [node_provider.py](https://github.com/ray-project/ray/blame/00d43d39f58f2de7bb7cd963450f7a763b928d10/python/ray/autoscaler/_private/aws/node_provider.py#L250) to create instances using EC2 fleet API like [this](https://github.com/ray-project/ray/commit/81942b4f8c8e9d9c6a037d068e559769e8a27a70).
 -   EC2 does not delete a fleet when all of its instances are terminated. Hence, implement [post_process](https://github.com/ray-project/ray/blob/c51b0c9a5664e5c6df3d92f9093b56e61b48f514/python/ray/autoscaler/node_provider.py#L258) method for aws node provider to clean up any active fleets which has only terminated instances.
 -   Add an example [autoscaler config](https://github.com/ray-project/ray/tree/master/python/ray/autoscaler/aws) documentation to help developers in utilizing the EC2 fleet functionality.
+-   Validate the [launch config check logic](https://github.com/ray-project/ray/blob/a03a141c296da065f333ea81445a1b9ad49c3d00/python/ray/autoscaler/_private/autoscaler.py#L541) given the `node_config` will be different for EC2 fleet.
 -   Update ray test suite to cover integration and unit tests.
 
 ## Compatibility, Deprecation, and Migration Plan
