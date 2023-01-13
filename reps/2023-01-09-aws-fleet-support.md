@@ -24,7 +24,8 @@ Yes. Specifically within AWS autoscaler.
 
 ### Required Reviewers
 
--   TBD
+-   @ericl
+-   @scv119
 
 ### Shepherd of the Proposal (should be a senior committer)
 
