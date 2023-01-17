@@ -26,10 +26,12 @@ Yes. Specifically within AWS autoscaler.
 
 -   @ericl
 -   @scv119
+-   @architkulkarni
+-   @DmitriGekhtman
 
 ### Shepherd of the Proposal (should be a senior committer)
 
--   TBD
+-   @wuisawesome
 
 ## Design and Architecture
 
