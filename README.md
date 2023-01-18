@@ -14,9 +14,17 @@ What use cases is this proposal supposed to enhance. If possible, please include
 ### Should this change be within `ray` or outside?
 From a software layering perspective, should this change be part of the main `ray` project, part of an ecosystem project under `ray-project`, or a new ecosystem project?
 
+When reviewing the REP, the reviewers and the shepherd should apply the following judgements:
+- If an author proposes a change to be within the `ray` repo, the reviewers and the shepherd should assess whether the change can be layered on top of `ray` instead. 
+If so we should try to make the change in a separate repo. 
+- For a change proposed as an ecosystem project under `ray-project`: the reviewers and the shepherd should make sure that the technical quality
+meets the bar of (at least) a good "experimental" or "alpha" feature -- we should be comfortable welcoming Ray users with similar use cases to try this project.
+- For a change proposed as a new ecosystem project (outside of `ray-project`): then this REP is just serving as a "request for comments". 
+We don't need to go through the voting process, since it's not Ray committers' decision to approve the change. 
+
 ## Stewardship
 ### Required Reviewers
-The proposal will be open to the public, but please suggest a few experience Ray contributors in this technical domain whose comments will help this proposal. Ideally, the list should include Ray committers. 
+The proposal will be open to the public, but please suggest a few experienced Ray contributors in this technical domain whose comments will help this proposal. Ideally, the list should include Ray committers. 
 ### Shepherd of the Proposal (should be a senior committer)
 To make the review process more productive, the owner of each proposal should identify a **shepherd** (should be a senior Ray committer). The shepherd is responsible for working with the owner and making sure the proposal is in good shape (with necessary information) before marking it as ready for broader review.
 
