@@ -18,7 +18,7 @@ When reviewing the REP, the reviewers and the shepherd should apply the followin
 - If an author proposes a change to be within the `ray` repo, the reviewers and the shepherd should assess whether the change can be layered on top of `ray` instead. 
 If so we should try to make the change in a separate repo. 
 - For a change proposed as an ecosystem project under `ray-project`: the reviewers and the shepherd should make sure that the technical quality
-meets the bar of (at least) a good "experimental" or "alpha" feature -- we should be comfortabl welcoming Ray users with similar use cases to try this project.
+meets the bar of (at least) a good "experimental" or "alpha" feature -- we should be comfortable welcoming Ray users with similar use cases to try this project.
 - For a change proposed as a new ecosystem project (outside of `ray-project`): then this REP is just serving as a "request for comments". 
 We don't need to go through the voting process, since it's not Ray committers' decision to approve the change. 
 
