@@ -140,11 +140,12 @@ Futhermore, the new Component Model standard is supposed to be ready very soon. 
 Compared with directly supporting other languages, WASM support in Ray has the following pros and cons.
 
 ### Pros:
-1. It is easy to support new languages. For example, if we want to support a new language, we only need to compile the language to WASM and then use the WASM support in Ray to run the WASM binary.
-2. WASM is lightweight and fast to load. It is possible to load the WASM binary in a few milliseconds. Compared to Python, it is much faster to load the WASM binary.
-3. It is easy to support different versions of the same language. For example, if we want to support different versions of JavaScript, we only need to compile different versions of JavaScript to WASM and then use the WASM support in Ray to run the WASM binary.
-4. WASM provides an abstract layer on top of the hardware. It is possible to support different hardware architectures in the same WASM binary. For example, we can compile the same WASM binary to run on x86 and ARM. This is useful for Ray because Ray can run on different hardware architectures.
-5. Ray support in WASM can be transparent to the user. For example, the user can write a code in Rust and then compile to WASM. With some further features, it is possible to automatically run the WASM binary distributedly in Ray without the user knowing his/her code is running in Ray.
+1. Offer the ability to run Ray-As-A-Service. With WASM enabled in Ray, it is possible for users to use untrusted third-party WASM binaries in Ray. As WASM supports a sandboxed environment, the activities of the untrusted third-party WASM binaries can do is limited.
+2. Lightweight Workers. WASM is only 10% the size of Python for comparable tasks. This means that the WASM worker is much smaller than the Python worker. WASM is lightweight and fast to load. It is possible to load the WASM binary in a few milliseconds. Compared to Python, it is much faster to load the WASM binary.
+3. Architecture Agnostic. WASM provides an abstract layer on top of the hardware. It is possible to support different hardware architectures in the same WASM binary.
+4. Easy to support different versions of the same language. For example, if we want to support different versions of JavaScript, we only need to compile different versions of JavaScript to WASM and then use the WASM support in Ray to run the WASM binary.
+5. It is easy to support new languages. For example, if we want to support a new language, we only need to compile the language to WASM and then use the WASM support in Ray to run the WASM binary.
+6. Ray support in WASM can be transparent to the user. For example, the user can write a code in Rust and then compile to WASM. With some further features, it is possible to automatically run the WASM binary distributedly in Ray without the user knowing his/her code is running in Ray.
 
 ### Cons:
 1. It is not easy to support all Ray APIs in WASM. For example, there is a concept of `Actor` in Ray. `Actor` is a special type of task that can maintain state. However, WASM is a collection of functions, a stack, and a heap. It is not a simple task to map the concept of `Actor` to WASM. Therefore, we will not support `Actor` in WASM in the first version of WASM support in Ray.
