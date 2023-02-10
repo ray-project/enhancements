@@ -8,6 +8,14 @@ To make it easier to support new languages, we can use WebAssembly (WASM) to sup
 
 Furthermore, it is also possible that we enable transparent Ray support in WASM. As a result, many legacy applications can be easily migrated to Ray and run in a distributed manner and Ray layer can be transparent to the application. This will be a huge benefit for Ray adoption in the generic serverless computing environment.
 
+In our internal FaaS environment, we have WASM function support. These functions are compiled from different programming languages such as Javascript, Rust, Go, C/C++, etc. Compared with normal container based FaaS solutions such as Knative, WASM based functions can be loaded with a shorter period of time while still providing the same or even better secure running environments. So far, WASM functions are still far from perfect. There are few pain points for WASM functions.
+
+1. If different functions want to communicate with each other, they need use either RPC, message queue or KV store. However, these solutions are not convenient for the developers. The FaaS function developers need a simpler communication mechanism between different functions and run tasks in parallel.
+2. WASM function is executed in a single thread. Although multi-threading support is on the way, it is still not mature enough. To run tasks in a single FaaS function in parallel, running WASM with Ray API support is a good solution. Besides, running a WASM function distributedly in Ray has the FT support out of the box.
+3. Our FaaS environment has a large number of edge servers. The resources on each of the servers are limited. It is not possible to provide more resources for a single function than the resources on the server. In Ray, all the resources in the Ray cluster is treated as a single resource pool. If we can support Ray in our FaaS environment, we can run WASM functions with larger resource requirements.
+
+As a result, Having Ray support in our FaaS WASM environment will be a huge benefit for us and it is a very important feature for us.
+
 One use case of WASM on Ray is the ML inference tasks. In our enterprise environment, we need to support running ML inference tasks in Ray and make these ML inference tasks share the Ray cluster resources. Compared to the current Ray Serve ML inference solution, which needs to keep the ML inference tasks running in the Ray cluster memory, the WASM ML inference solution can reduce the resource consumption of the Ray cluster. Currently, WASM runtime such as WasmEdge already support running ML inference tasks through WASI-NN support.
 
 In this REP, we will discuss the design of WASM support in Ray. We will first discuss the general architecture of WASM support in Ray. Then we will discuss how to support Ray APIs in WASM. Finally, we will discuss an example of how to use Ray APIs in WASM.
@@ -140,18 +148,21 @@ Futhermore, the new Component Model standard is supposed to be ready very soon. 
 Compared with directly supporting other languages, WASM support in Ray has the following pros and cons.
 
 ### Pros:
-1. Offer the ability to run Ray-As-A-Service. With WASM enabled in Ray, it is possible for users to use untrusted third-party WASM binaries in Ray. As WASM supports a sandboxed environment, the activities of the untrusted third-party WASM binaries can do is limited.
-2. Lightweight Workers. WASM is only 10% the size of Python for comparable tasks. This means that the WASM worker is much smaller than the Python worker. WASM is lightweight and fast to load. It is possible to load the WASM binary in a few milliseconds. Compared to Python, it is much faster to load the WASM binary.
-3. Architecture Agnostic. WASM provides an abstract layer on top of the hardware. It is possible to support different hardware architectures in the same WASM binary.
-4. Easy to support different versions of the same language. For example, if we want to support different versions of JavaScript, we only need to compile different versions of JavaScript to WASM and then use the WASM support in Ray to run the WASM binary.
-5. It is easy to support new languages. For example, if we want to support a new language, we only need to compile the language to WASM and then use the WASM support in Ray to run the WASM binary.
-6. Ray support in WASM can be transparent to the user. For example, the user can write a code in Rust and then compile to WASM. With some further features, it is possible to automatically run the WASM binary distributedly in Ray without the user knowing his/her code is running in Ray.
+1. It is easy to support new languages. For example, if we want to support a new language, we only need to compile the language to WASM and then use the WASM support in Ray to run the WASM binary.
+2. Offer the ability to run Ray-As-A-Service. With WASM enabled in Ray, it is possible for users to use untrusted third-party WASM binaries in Ray. As WASM supports a sandboxed environment, the activities of the untrusted third-party WASM binaries can do is limited.
+3. Lightweight Workers. WASM is only 10% the size of Python for comparable tasks. This means that the WASM worker is much smaller than the Python worker. WASM is lightweight and fast to load. It is possible to load the WASM binary in a few milliseconds. Compared to Python, it is much faster to load the WASM binary.
+4. Architecture Agnostic. WASM provides an abstract layer on top of the hardware. It is possible to support different hardware architectures in the same WASM binary.
+5. Easy to support different versions of the same language. For example, if we want to support different versions of JavaScript, we only need to compile different versions of JavaScript to WASM and then use the WASM support in Ray to run the WASM binary.
 
 ### Cons:
 1. It is not easy to support all Ray APIs in WASM. For example, there is a concept of `Actor` in Ray. `Actor` is a special type of task that can maintain state. However, WASM is a collection of functions, a stack, and a heap. It is not a simple task to map the concept of `Actor` to WASM. Therefore, we will not support `Actor` in WASM in the first version of WASM support in Ray.
 2. WASM is a new technology. It is not mature enough. For example, the WASI standard is still under development.
 3. WASM is not as fast as native code. However, it is possible to optimize WASM code to make it as fast as native code. For example, LLVM provides a tool called `wasm-opt` to optimize WASM code. We can use `wasm-opt` to optimize the WASM code generated by the `clang` compiler.
 4. Lack of support for some libraries. For example, to do ML in WASM, we need to support some ML libraries such as Apache Arrow, TensorFlow, etc. However, there are not many ML libraries that support WASM. We need to find a way to support these libraries in WASM.
+
+
+Futhermore, Ray support in WASM can be transparent to the user. For example, the user can write a code in Rust and then compile to WASM. With some advanced features implemented, it is possible to automatically run the WASM binary distributedly in Ray without the user knowing his/her code is running in Ray.
+
 
 ## Proposed Ray APIs in WASM
 
