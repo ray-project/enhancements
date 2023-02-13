@@ -234,6 +234,17 @@ __attribute__((import_module("ray"), import_name("cancel"))) int rcancel(ObjectR
 
 ```
 
+## MVP Feature List
+
+The MVP feature list is as follows:
+* Support Command Line Interface (CLI) to load WASM binary and start Ray WASM driver task.
+* Support Ray task calls in WASM.
+  * Support Basic WASM supported types as arguments and return values.
+* Support Ray cancel task in WASM.
+* Support Ray object set/get in WASM.
+* Support Ray wait for objects in WASM.
+
+
 ## Compatibility, Deprecation, and Migration Plan
 
 ## Test Plan and Acceptance Criteria
@@ -251,3 +262,9 @@ With the above tests, we can make sure the Ray WASM support works correctly.
 
 
 ## (Optional) Follow-on Work
+
+With MVP feature list implemented, we can continue to add more Ray APIs to support more use cases. For example:
+* Add support for `Actor`. 
+* Add support for more data types. 
+* Advanced JavaScript support.
+* More Ray core APIs support.
