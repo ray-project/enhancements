@@ -22,7 +22,13 @@ In this REP, we will discuss the design of WASM support in Ray. We will first di
 
 ### Should this change be within `ray` or outside?
 
-This change should be within `ray` repo. The WASM support in Ray is a core feature of Ray. It is not possible to implement it in a separate repo.
+The changes will be within `ray` but not on master branch for the first stage.
+
+* In the first stage, it'll be a temporary branch in ray repo (feature/wasm-worker).
+  * It'll benefit the Engs to have CI and wheels built
+  * It won't increase the maintenance cost for master branch developers
+  * The branch needs to be protected and require PR to merge code.
+* Once positive signals collected for this work, in the second stage, it'll be merged into `ray` master.
 
 ## Stewardship
 
@@ -259,6 +265,22 @@ We will also need to test FT by randomly killing Ray WASM workers and make sure 
 
 Acceptance Criteria:
 With the above tests, we can make sure the Ray WASM support works correctly.
+
+
+## High-level execution plan
+* A feature branch for this will be created in the ray repo. Engineers will work on this branch to develop this feature.
+  * The branch needs to be protected and merging code to this branch will require a PR
+  * Engineers need to merge the branch to master periodically.
+* General feature change might go to ray master directly.
+* It’ll has its own release, probably aligned with ray’s release schedule (ray-wasm ?)
+  * This is important for the adoption because the users can pip install this directly.
+* Telemetry and pip downloads will be used as the metric.
+* When the WASM task feature is ready and the adoption metrics are good, we’ll have another discussion about whether to merge it to master.
+  * WASM Task is enough for Serveless computation for now.
+* Refactor won’t be executed first, because the reason listed in previous emails, plus:
+  * Although ray supports three languages, no one knows how to do this and what it will look like, especially the author of the REP who will execute the project. Only the minimal small amount of people know how ray cpp and ray java works. And people need motivation to get understand them.
+  * Once the feature has a good trajectory of adoption and the author of the REP got enough experience in this field, and more fundings, that will be a good time to start work on refactoring.
+  * This should happen after merging to master. (This milestone means it’s a successful project)
 
 
 ## (Optional) Follow-on Work
