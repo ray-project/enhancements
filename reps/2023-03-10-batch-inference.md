@@ -51,7 +51,7 @@ def map_preprocessor(preprocessor: Preprocessor, batch_size: Optional[int], pref
 2. Introduce a `map_predictor` API directly to Ray Datasets.
 
 ```python
-def map_predictor(predictor: Callable[[], Predictor]], 
+def map_predictor(create_predictor: Callable[[], Predictor]], 
                   batch_size: Optional[int], 
                   feature_columns: Optional[List[str]] = None, 
                   keep_columns: Optional[List[str]] = None, 
