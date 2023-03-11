@@ -88,9 +88,7 @@ def map_predictor(predictor: Union[Predictor, Callable[[], Predictor]],
         ``predict()`` method.
   """
 ```
-
-3. Deprecate `Chain` Preprocessor, as chains can be represented via multiple `map_preprocessor` calls.
-4. Deprecate `BatchMapper`, as the same functionality can be achieved via `map_batches`.
+3. Deprecate `BatchMapper`, as the same functionality can be achieved via `map_batches`.
       
 ## Example: Multi-stage Inference Pipeline from pre-trained model
 
