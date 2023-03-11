@@ -124,7 +124,7 @@ predictor = TorchPredictor(model)
 predictions = ds.read_parquet("s3://data")
     .map_batches(lambda x: x+1)
     .map_preprocessor(TorchVisionPreprocessor(torchvision.transforms.Crop(224, 224)))
-    .map_predict(predictor)
+    .map_predictor(predictor)
 ```
 
 ## Compatibility, Deprecation, and Migration Plan
