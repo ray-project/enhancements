@@ -86,6 +86,7 @@ def map_predictor(predictor: Union[Predictor, Callable[[], Predictor]],
     ray_remote_args: Additional resource requirements to request from ray.
     predict_kwargs: Keyword arguments passed to the predictor's
         ``predict()`` method.
+  """
 ```
 
 3. Deprecate `Chain` Preprocessor, as chains can be represented via multiple `map_preprocessor` calls.
