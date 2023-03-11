@@ -87,7 +87,6 @@ def map_predictor(predictor: Callable[[], Predictor]],
         ``predict()`` method.
   """
 ```
-3. Deprecate `BatchMapper`, as the same functionality can be achieved via `map_batches`.
       
 ## Example: Multi-stage Inference Pipeline from pre-trained model
 
@@ -119,6 +118,110 @@ predictions = ds.read_parquet("s3://data")
     .map_preprocessor(TorchVisionPreprocessor(torchvision.transforms.Crop(224, 224)))
     .map_predictor(predictor)
 ```
+
+## Example: Implementing a custom Predictor.
+Using Checkpoints are no longer necessary.
+
+### Before
+```python
+class CustomPredictor(Predictor):
+    def __init__(
+      self,
+      net: gluon.Block,
+      preprocessor: Optional[Preprocessor] = None,
+    ):
+        self.net = net
+        super().__init__(preprocessor)
+
+    @classmethod
+    def from_checkpoint(
+        cls,
+        checkpoint: Checkpoint,
+        net: gluon.Block,
+    ) -> Predictor:
+        with checkpoint.as_directory() as directory:
+            path = os.path.join(directory, "net.params")
+            net.load_parameters(path)
+        return cls(net, preprocessor=checkpoint.get_preprocessor())
+
+    def _predict_numpy(
+        self,
+        data: Union[np.ndarray, Dict[str, np.ndarray]],
+        dtype: Optional[np.dtype] = None,
+    ) -> Dict[str, np.ndarray]:
+        # If `data` looks like `{"features": array([...])}`, unwrap the `dict` and pass
+        # the array directly to the model.
+        if isinstance(data, dict) and len(data) == 1:
+            data = next(iter(data.values()))
+
+        inputs = mx.nd.array(data, dtype=dtype)
+        outputs = self.net(inputs).asnumpy()
+
+        return {"predictions": outputs}
+
+dataset = ray.data.read_images(
+    "s3://anonymous@air-example-data-2/imagenet-sample-images", size=(224, 224)
+)
+
+
+def preprocess(batch: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+    # (B, H, W, C) -> (B, C, H, W)
+    batch["image"] = batch["image"].transpose(0, 3, 1, 2)
+    return batch
+
+
+# Create the preprocessor and set it in the checkpoint.
+# This preprocessor will be used to transform the data prior to prediction.
+preprocessor = BatchMapper(preprocess, batch_format="numpy")
+checkpoint.set_preprocessor(preprocessor=preprocessor)
+
+
+net = gluon.model_zoo.vision.resnet50_v1(pretrained=True)
+predictor = BatchPredictor.from_checkpoint(
+    checkpoint, MXNetPredictor, net=net
+)
+predictor.predict(dataset)
+```
+
+### After
+```python
+class MXNetPredictor(Predictor):
+    def __init__(
+      self,
+      net: gluon.Block,
+    ):
+        self.net = net
+        super().__init__()
+
+    def _predict_numpy(
+        self,
+        data: Union[np.ndarray, Dict[str, np.ndarray]],
+        dtype: Optional[np.dtype] = None,
+    ) -> Dict[str, np.ndarray]:
+        # If `data` looks like `{"features": array([...])}`, unwrap the `dict` and pass
+        # the array directly to the model.
+        if isinstance(data, dict) and len(data) == 1:
+            data = next(iter(data.values()))
+
+        inputs = mx.nd.array(data, dtype=dtype)
+        outputs = self.net(inputs).asnumpy()
+
+        return {"predictions": outputs}
+
+dataset = ray.data.read_images(
+    "s3://anonymous@air-example-data-2/imagenet-sample-images", size=(224, 224)
+)
+
+def preprocess(batch: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+    # (B, H, W, C) -> (B, C, H, W)
+    batch["image"] = batch["image"].transpose(0, 3, 1, 2)
+    return batch
+
+predictor_creator = lambda: MXNetPredictor(gluon.model_zoo.vision.resnet50_v1(pretrained=True))
+dataset.map_batches(preprocess, batch_format="numpy").map_predictor(predictor_creator)
+```
+
+
 
 ## Compatibility, Deprecation, and Migration Plan
 An important part of the proposal is to explicitly point out any compability implications of the proposed change. If there is any, we should thouroughly discuss a plan to deprecate existing APIs and migration to the new one(s).
