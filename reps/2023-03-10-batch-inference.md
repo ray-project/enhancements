@@ -51,7 +51,7 @@ def map_preprocessor(preprocessor: Preprocessor, batch_size: Optional[int], pref
 2. Introduce a `map_predictor` API directly to Ray Datasets.
 
 ```python
-def map_predictor(predictor: Union[Predictor, Callable[[], Predictor]], 
+def map_predictor(predictor: Callable[[], Predictor]], 
                   batch_size: Optional[int], 
                   feature_columns: Optional[List[str]] = None, 
                   keep_columns: Optional[List[str]] = None, 
@@ -64,8 +64,7 @@ def map_predictor(predictor: Union[Predictor, Callable[[], Predictor]],
   """Predict on batches of data.
 
   Args:
-    predictor: An instance of a Predictor to use for prediction. For Predictors that are not serializable, or are loading large models
-      or that are created from AIR Checkpoints, a function that creates a Predictor can be passed in instead. 
+    predictor: A function that returns a Predictor to use for inference.
     batch_size: Batch size to use for prediction.
     feature_columns: List of columns in the preprocessed dataset to use for
       prediction. Columns not specified will be dropped
@@ -110,11 +109,7 @@ predictions = batch_predictor.predict(ds)
 
 ### After
 ```python
-model = pretrained_resnet()
-predictor = TorchPredictor(model)
-
-# Alternatively, delayed model creation
-# predictor = lambda: TorchPredictor(pretrained_resnet())
+predictor = lambda: TorchPredictor(pretrained_resnet())
 
 # Alternatively, create from AIR Checkpoint.
 # predictor = lambda: TorchPredictor.from_checkpoint(air_checkpoint)
