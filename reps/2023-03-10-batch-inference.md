@@ -8,13 +8,11 @@ Reduce the friction for batch inference of pre-trained by updating the APIs to d
 ### General Motivation
 There are changes to Ray Datasets in 2.3/2.4:
 1. Ray Datasets became lazy by default in Ray 2.3. Execution is no longer triggered until consumption is explicitly called.
-2. In Ray 2.4, Ray Datasets will move to streaming execution by default, resulting in there no longer being a separation between `Dataset` and `DatasetPipeline`. 
-3. In Ray 2.4, Ray Datasets will support a `"zero_copy"` batch format, allowing the core Ray Data to decide the most optimal batch format to use.
+2. In Ray 2.4, Ray Datasets will move to streaming execution by default, resulting in there no longer being a separation between `Dataset` and `DatasetPipeline`.
 
 With these changes, certain API choices that were made for the AIR batch prediction API are no longer the most optimal for simplicity and usability.
 1. Previously, AIR would manually fuse preprocessing and prediction stages, requiring `BatchPredictor` to be aware of the preprocessors passed in via a `Checkpoint`. This is not needed anymore with Datasets lazy by default, as the fusion logic can be pushed down to the Datasets layer.
 2. Previously, the separation of `Dataset` and `DatasetPipeline` resulted in `BatchPredictor` needing 2 analgous APIs: `predict` and `predict_pipelined`. This is not needed anymore with streaming as default execution.
-3. Previously, the logic for determining batch format was decided in the AIR layer in `Preprocessor` and `BatchPredictor`. This is not needed anymore with zero-copy batch format, as this decision making can be pushed down to the Datasets layer.
 
 ### Should this change be within `ray` or outside?
 main `ray` project. Changes are made to Ray Data and Ray AIR level.
@@ -51,7 +49,7 @@ def map_preprocessor(preprocessor: Preprocessor, batch_size: Optional[int], pref
 2. Introduce a `map_predictor` API directly to Ray Datasets.
 
 ```python
-def map_predictor(create_predictor: Callable[[], Predictor]], 
+def map_predictor(create_predictor: Union[Predictor, Callable[[], Predictor]], 
                   batch_size: Optional[int], 
                   feature_columns: Optional[List[str]] = None, 
                   keep_columns: Optional[List[str]] = None, 
@@ -64,7 +62,10 @@ def map_predictor(create_predictor: Callable[[], Predictor]],
   """Predict on batches of data.
 
   Args:
-    predictor: A function that returns a Predictor to use for inference.
+    predictor: An instance of a Predictor to use for prediction.
+        For Predictors that are not serializable, or are loading large models
+        or that are created from AIR Checkpoints, 
+        a function that creates a Predictor can be passed in instead. 
     batch_size: Batch size to use for prediction.
     feature_columns: List of columns in the preprocessed dataset to use for
       prediction. Columns not specified will be dropped
@@ -85,6 +86,10 @@ def map_predictor(create_predictor: Callable[[], Predictor]],
     ray_remote_args: Additional resource requirements to request from ray.
     predict_kwargs: Keyword arguments passed to the predictor's
         ``predict()`` method.
+
+    Raises:
+        ValueError if serializing the provided Predictor is over 1 GB. 
+        A creator function should be used instead.
   """
 ```
       
@@ -108,7 +113,12 @@ predictions = batch_predictor.predict(ds)
 
 ### After
 ```python
-predictor = lambda: TorchPredictor(pretrained_resnet())
+model = pretrained_resnet()
+predictor = TorchPredictor(model)
+
+
+# Alternatively, delayed model creation
+# predictor = lambda: TorchPredictor(pretrained_resnet())
 
 # Alternatively, create from AIR Checkpoint.
 # predictor = lambda: TorchPredictor.from_checkpoint(air_checkpoint)
