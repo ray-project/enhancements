@@ -9,7 +9,7 @@ Current way:
 Future way:
 - We have a unified setting `RunConfig.storage_path` that can be set either to a local dir or a remote path.
 - Setting the storage path to a cloud or NFS URI (e.g., `s3://`, or `file://` that points to a NFS mount). In these cases, data will be first written to a local cache dir on the worker, and then synced to a subdirectory in the storage path designated by `<experiment_name>/<trial_name>/`.
-- Setting the storage path to a purely local URI (e.g., `/home/foo/ray_results`). In this mode, there is no persistence once nodes die, nor is there any syncing. The user will have to figure out which node their result is stored on in order to retrieve their result manually. We would only recommend this mode for single node cluster operation generally.
+- Setting the storage path to a purely local URI (e.g., `/home/foo/ray_results`). In this mode, trial data is synced to the head node via the object store. We would generally recommend using a remote storage path or shared directory instead.
 
 
 ```python
@@ -49,7 +49,7 @@ and therefore has to be within Ray.
 
 ### Required Reviewers
 
-@richardliaw, @ericl
+@richardliaw, @ericl, @gjoliver
 
 ### Shepherd of the Proposal (should be a senior committer)
 
@@ -86,6 +86,19 @@ from ray import air, tune
 
 results = tune.Tuner(train_fn).fit()
 assert results.best_checkpoint().path.startswith("s3://foo/bar")
+```
+
+
+### Usage with local directories
+
+```python
+import ray
+from ray import air, tune
+
+results = tune.Tuner(train_fn, run_config=air.RunConfig(storage_path="/local/dir")).fit()
+
+# even if train_fn ran on a different node, its logs + artifacts will be in /local/dir
+assert results.best_checkpoint().path.startswith("/local/dir")
 ```
 
 ### Accessing storage paths
@@ -126,15 +139,6 @@ For public APIs (`tune.Tuner()`, `tune.run()`):
 
 For developer APIs (`Trial`, `TrialRunner`, `Experiment`) we can speed up hard deprecation
 by one release.
-
-#### Syncer class
-
-Currently, when a `local_dir` but no `upload_dir` is specified, we synchronize trial data (e.g. checkpoints)
-via the object store. This REP states that this path will be deprecated eventually and data will
-not be synced instead.
-
-This is subject to discussion. For now, we can keep this functionality as it is functionally orthogonal to
-the rest of the proposal.
 
 ### Migration plan
 
