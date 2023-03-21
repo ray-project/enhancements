@@ -11,6 +11,15 @@ Future way:
 - Setting the storage path to a cloud or NFS URI (e.g., `s3://`, or `file://` that points to a NFS mount). In these cases, data will be first written to a local cache dir on the worker, and then synced to a subdirectory in the storage path designated by `<experiment_name>/<trial_name>/`.
 - Setting the storage path to a purely local URI (e.g., `/home/foo/ray_results`). In this mode, there is no persistence once nodes die, nor is there any syncing. The user will have to figure out which node their result is stored on in order to retrieve their result manually. We would only recommend this mode for single node cluster operation generally.
 
+
+```python
+import ray
+from ray import air, tune
+
+results = tune.Tuner(train_fn, run_config=air.RunConfig(storage_path="s3://foo/bar")).fit()
+assert results.best_checkpoint().path.startswith("s3://foo/bar")
+```
+
 ### General Motivation
 
 Users care about where their data is ultimately stored. They usually don't care about
