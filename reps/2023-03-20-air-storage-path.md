@@ -97,6 +97,7 @@ and therefore has to be within Ray.
 ## Design and Architecture
 
 - We introduce a new `storage_path` argument to `air.RunConfig` and `tune.run` as the main configuration entrypoints
+- The `storage_path` argument defaults to the configured `RAY_STORAGE` environment variable
 - If the `storage_path` is set to a remote URI, the `local_path` is read from an environment variable `RAY_AIR_CACHE_DIR`
 - Backwards compatibility: If a `local_dir` is passed, we set this environment variable
 - In downstream components (`TrialRunner`, `Experiment`, `Trial`), we introduce respective arguments: `storage_path` and `experiment_path`
