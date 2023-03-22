@@ -7,7 +7,8 @@ Current way:
 - Users can specify `SyncConfig.upload_dir` for storage on remote nodes
 
 Future way:
-- We have a unified setting `RunConfig.storage_path` that can be set either to a local dir or a remote path.
+- All remote storage is standardized on the built in RAY_STORAGE mechanism.
+- We have a unified setting `RunConfig.storage_path` that can be used to override the default RAY_STORAGE path configured for the cluster.
 - Setting the storage path to a cloud or NFS URI (e.g., `s3://`, or `file://` that points to a NFS mount). In these cases, data will be first written to a local cache dir on the worker, and then synced to a subdirectory in the storage path designated by `<experiment_name>/<trial_name>/`.
 - Setting the storage path to a purely local URI (e.g., `/home/foo/ray_results`). In this mode, trial data is synced to the head node via the object store. We would generally recommend using a remote storage path or shared directory instead.
 
