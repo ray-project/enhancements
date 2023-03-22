@@ -39,7 +39,7 @@ Running a Ray Tune run creates a number of artifacts:
 
 This data is stored as follows:
 
-- Assume we have a `storage_path=/path/to/storage`
+- Assume we have a `storage_path=/path/to/storage` (can be local, shared, remote)
 - Then, the experiment-level data will be stored in `/path/to/storage/experiment_name`
 - The trial-based data will be stored in `/path/to/storage/experiment_name/trial_id`
 - This is true for both the driver-based trial data and the trainable-based trial data
@@ -57,7 +57,7 @@ In this case, we need to synchronize the data to a common location, so that we h
 data in one place.
 
 Specifying this common persistent storage location and discussing the implementation of
-the synchronization is subject of this REP.
+the synchronization is the subject of this REP.
 
 ### General Motivation
 
@@ -116,11 +116,12 @@ When cloud storage is enabled:
 
 - The driver saves experiment data to `/local/path/experiment_name`
 - The driver saves driver-based trial data to `/local/path/experiment_name/trial_id`
-- The driver uses a `Syncer` to periodically sync this state to the remote storage (e.g. S3)
-- Notably, this _excludes checkpoints_ that the trainable may have put there (if it runs on the same node).
+- The driver uses a `Syncer` to periodically sync this state to the remote storage (e.g. S3), e.g. `s3://bucket/location/experiment_name`
+- This _includes_ driver-based trial data, such as the config and results log
+- This _excludes_ trainable-based trial data, such as checkpoints.
   Uploading checkpoints is the trainable's responsibility.
 - The trainable saves trial-based data such as checkpoints to their local `/local/path/experiment_name/trial_id`
-- The trainable uses a `Syncer` to upload these checkpoints _synchronously_ to the remote storage after saving
+- The trainable uses a `Syncer` to upload these checkpoints _synchronously_ to the remote storage after saving, e.g. `s3://bucket/location/experiment_name/trial_id/checkpoint_001`
 
 When cloud storage is disabled:
 
