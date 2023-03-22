@@ -133,6 +133,9 @@ When cloud storage is disabled:
   This uses the Ray object store.
 - This also happens _synchronously_ every time a trial reports a checkpoint has been saved
 
+Currently, the object store-based transfer serializes all the data at the same time. Thus, the heap
+memory must be large enough to hold all the data to be transferred between nodes.
+
 ### Future implementation
 
 In the first step (when we just change the API), this flow can remain the same, as it fulfills
@@ -151,6 +154,8 @@ Thus, when a local storage path is defined (cloud storage is disabled):
 - The driver saves driver-based trial data to `/local/path/experiment_name/trial_id`
 - The trainable saves trial-based data such as checkpoints to their local `/local/path/experiment_name/trial_id`
 - **The trainable uses the Ray object store to transfer these checkpoints _synchronously_ to the head node.**
+- Technically, the trainable will schedule an actor on the head node to receive the data.
+  (this may be a detached named actor to avoid scheduling too many processes at the head node).
 
 The trainable can detect if the trial shares the storage path with the head node
 (e.g. if RAY_STORAGE is set, or if it's running on the same node). This then 
