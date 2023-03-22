@@ -21,6 +21,44 @@ results = tune.Tuner(train_fn, run_config=air.RunConfig(storage_path="s3://foo/b
 assert results.best_checkpoint().path.startswith("s3://foo/bar")
 ```
 
+### Background: Persistent storage in Ray Tune
+
+Running a Ray Tune run creates a number of artifacts:
+
+1. Experiment-level data, such as the search configuration
+2. Trial-level, driver-based data, such as 
+   - The configuration the trial used
+   - The metrics (results) the trial reported (as CSV, JSON, TensorBoard)
+   - Any errors the trial logged
+3. Trial-level, trainable-based data, such as
+   - Checkpoints
+   - Local logfiles (e.g. stdout/stderr log of the trainable)
+   - Other user-created artifacts
+
+1 and 2 are handled by the driver. 3 is handled by the trainable (i.e. a remote actor).
+
+This data is stored as follows:
+
+- Assume we have a `storage_path=/path/to/storage`
+- Then, the experiment-level data will be stored in `/path/to/storage/experiment_name`
+- The trial-based data will be stored in `/path/to/storage/experiment_name/trial_id`
+- This is true for both the driver-based trial data and the trainable-based trial data
+
+If the respective trial is running on the head node, this means that both the
+driver-based and the trainable-based trial data will be saved in the same directory.
+
+The same is true if a shared filesystem (e.g. NFS) is configured.
+
+If the trial is running on a worker node, the trial directories will have only partial contents
+on different nodes: The head node will have the driver-based data, and the worker node
+will have the trainable-based data.
+
+In this case, we need to synchronize the data to a common location, so that we have the full
+data in one place.
+
+Specifying this common persistent storage location and discussing the implementation of
+the synchronization is subject of this REP.
+
 ### General Motivation
 
 Users care about where their data is ultimately stored. They usually don't care about
@@ -64,6 +102,57 @@ and therefore has to be within Ray.
 - In downstream components (`TrialRunner`, `Experiment`, `Trial`), we introduce respective arguments: `storage_path` and `experiment_path`
 
 We retain full backwards compatibility with the current API.
+
+## Synchronization
+
+The synchronization to a common location already works today. However, we can improve this
+for better efficiency and to better define the responsibilities of different components.
+
+### Current implementation
+
+The current flow multiplexes between two scenarios: With cloud storage enabled or without it.
+
+When cloud storage is enabled:
+
+- The driver saves experiment data to `/local/path/experiment_name`
+- The driver saves driver-based trial data to `/local/path/experiment_name/trial_id`
+- The driver uses a `Syncer` to periodically sync this state to the remote storage (e.g. S3)
+- Notably, this _excludes checkpoints_ that the trainable may have put there (if it runs on the same node).
+  Uploading checkpoints is the trainable's responsibility.
+- The trainable saves trial-based data such as checkpoints to their local `/local/path/experiment_name/trial_id`
+- The trainable uses a `Syncer` to upload these checkpoints _synchronously_ to the remote storage after saving
+
+When cloud storage is disabled:
+
+- The driver saves experiment data to `/local/path/experiment_name`
+- The driver saves driver-based trial data to `/local/path/experiment_name/trial_id`
+- The trainable saves trial-based data such as checkpoints to their local `/local/path/experiment_name/trial_id`
+- The driver uses a `SyncerCallback` to synchronize contents form the trial directories (i.e. the missing trial-based data).
+  This uses the Ray object store.
+- This also happens _synchronously_ every time a trial reports a checkpoint has been saved
+
+### Future implementation
+
+In the first step (when we just change the API), this flow can remain the same, as it fulfills
+all requirements.
+
+The implementation for the case when a remote storage location is defined will remain as is.
+
+However, the implementation for the local storage path is currently inefficient because 
+the driver synchronously blocks until trial-based data is synchronized using the `SyncerCallback`.
+
+Instead, we should move this synchronization into the trial - analogous to the remote storage case.
+
+Thus, when a local storage path is defined (cloud storage is disabled):
+
+- The driver saves experiment data to `/local/path/experiment_name`
+- The driver saves driver-based trial data to `/local/path/experiment_name/trial_id`
+- The trainable saves trial-based data such as checkpoints to their local `/local/path/experiment_name/trial_id`
+- **The trainable uses the Ray object store to transfer these checkpoints _synchronously_ to the head node.**
+
+The trainable can detect if the trial is running on the driver node, which will then 
+remove the need for any syncing to happen. This will also cover the case when
+shared storage (e.g. NFS) is defined.
 
 ## Usage Example
 
