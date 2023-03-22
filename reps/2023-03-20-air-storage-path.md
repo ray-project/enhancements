@@ -152,8 +152,9 @@ Thus, when a local storage path is defined (cloud storage is disabled):
 - The trainable saves trial-based data such as checkpoints to their local `/local/path/experiment_name/trial_id`
 - **The trainable uses the Ray object store to transfer these checkpoints _synchronously_ to the head node.**
 
-The trainable can detect if the trial is running on the driver node, which will then 
-remove the need for any syncing to happen. This will also cover the case when
+The trainable can detect if the trial shares the storage path with the head node
+(e.g. if RAY_STORAGE is set, or if it's running on the same node). This then 
+removes the need for any syncing to happen. This will also cover the case when
 shared storage (e.g. NFS) is defined.
 
 ## Usage Example
