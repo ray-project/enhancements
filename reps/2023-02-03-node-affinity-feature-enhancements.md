@@ -46,6 +46,8 @@ This interface is already very simple, so we will not set up multiple solutions 
 #  Node add static labels. 
 ray start ... --labels={"location": "dc_1"}
 
+# It can also be set by the environment variable RAY_NODE_LABELS={}.
+
 # Dynamically updating node labels is not implemented now, and will be considered in the second stage.
 ```
 
@@ -369,13 +371,138 @@ If you put labels into custom_resources, you need to do the following adaptation
 3. If custom_resource happens to be the same as the spliced string of labels. Then it will affect the correctness of scheduling.
 
 ### AutoScaler adaptation
-Now AutoScaler is just restarting, so the main consideration is to adapt to the new version of AutoScaler.
+Here, the Node Affinity scheduling will be adapted based on the current autoScaler implementation.
 
-AutoScaler is divided into two parts.
-1. Interaction API between AutoScaler and gcs.
-I think I will adapt it according to the original method at that time, Mainly adding new fields.
+1. The autoscaler adds a labels field to the node in the initialized available node types.
 
-2. AutoScaler policy with node affinity (which decide what node needs to add to the cluster)  
+``` 
+# e.g., {"resources": ..., "max_workers": ...}.
+NodeTypeConfigDict = Dict[str, Any]
+node_types: Dict[NodeType, NodeTypeConfigDict],
+available_node_types = self.config["available_node_types"]
+->
+{ 
+    "4c8g" : {
+        "resources": ...,
+        "max_workers": ...,
+        "labels":{"type":"4c8g", "zone": "usa-1"}
+    }
+}
+```
+
+2. AutoScaler's Monitor requests Gcs to add schedule_stategy to the reply data structure of ResourceDemand
+
+message ResourceDemand {  
+  ...  
+  **SchedulingStrategy scheduling_strategy = 5;**  
+}  
+
+Note: There is a very critical point here.  
+After adding the scheduling policy, if the NodeAffinity policy in the scheduling policy is different. then a new request requirement will be added. eg:  
+
+```
+ResourceDemands: [
+    {
+        {"CPU":1},
+        "num_ready_requests_queued" : 1;
+        ....
+        "scheduling_strategy": node_affinity(label_exist("has_gpu"))
+    },
+    {
+        {"CPU":1},
+        "num_ready_requests_queued" : 2;
+        ....
+        "scheduling_strategy": node_affinity(label_in("has_gpu", "false"))
+    }
+]
+
+```
+
+```
+monitor.py
+    -> update_load_metrics
+            -> self.gcs_node_resources_stub.GetAllResourceUsage
+            -> waiting_bundles, infeasible_bundles = parse_resource_demands(
+                    resources_batch_data.resource_load_by_shape)
+            -> self.load_metrics.update(waiting_bundles, infeasible_bundles)
+
+
+GCS:
+
+GcsResourceManager::HandleGetAllResourceUsage(rpc::GetAllResourceUsageReply)
+    -> GcsResourceManager::FillAggregateLoad
+
+
+message GetAllResourceUsageReply {
+  GcsStatus status = 1;
+  ResourceUsageBatchData resource_usage_data = 2;
+  ....
+}
+
+message ResourceUsageBatchData {
+  // The total resource demand on all nodes included in the batch, sorted by
+  // resource shape.
+  ResourceLoad resource_load_by_shape = 2;
+  ...
+}
+
+message ResourceLoad {
+  // A list of all resource demands. The resource shape in each demand is
+  // unique.
+  repeated ResourceDemand resource_demands = 1;
+}
+
+// Represents the demand for a particular resource shape.
+message ResourceDemand {
+  // The resource shape requested. This is a map from the resource string
+  // (e.g., "CPU") to the amount requested.
+  map<string, double> shape = 1;
+  // The number of requests that are ready to run (i.e., dependencies have been
+  // fulfilled), but that are waiting for resources.
+  uint64 num_ready_requests_queued = 2;
+  // The number of requests for which there is no node that is a superset of
+  // the requested resource shape.
+  uint64 num_infeasible_requests_queued = 3;
+  // The number of requests of this shape still queued in CoreWorkers that this
+  // raylet knows about.
+  int64 backlog_size = 4;
+
+  SchedulingStrategy scheduling_strategy = 5;
+}
+```
+
+3. Divide the received RequestDemands into normal Request and NodeAffinity Request
+```
+normal_resource, node_affinity_resource = self.load_metrics.get_resource_demand_vector()
+
+node_affinity_resource: List[AffintyResouces]
+AffintyResouces: {"resources": ResourceDict , "affinity_expressions": AffinityExpressions}
+```
+
+4. According to the request demand with NodeAffinity information and the static labels of the nodes to be added. Calculate which nodes need to be added.
+
+```
+Monitor
+    -> StandardAutoscaler.update()
+            normal_resource, node_affinity_resource = self.load_metrics.get_resource_demand_vector()
+            to_launch = self.resource_demand_scheduler.get_nodes_to_launch(
+                normal_resource,
+                node_affinity_resource
+            )
+
+self.resource_demand_scheduler.get_nodes_to_launch:
+    -> get_node_affinity_request_need_node(node_affinity_resource)
+    -> _add_min_workers_nodes()
+
+The implementation logic in get_node_affinity_request_need_node will be more complicated. The main idea is to traverse whether the static labels to be added meet the NodeAffinity policy of requestDemand. If it is satisfied, the master will be selected to join according to the scoring situation.
+
+Although it will be more complicated here, they are all independent modules and will not have a great impact on the current implementation structure of autoScaler.
+```
+
+5. AutoScaler policy with node affinity (which decide what node needs to add to the cluster)  
+
+Here is just a general expression of the solution, and the specific strategy needs to be designed in detail.
+
 This piece is indeed more complicated, and can be realized as follows:
 >The types of nodes that AutoScaler can add to the cluster are generally predicted or configured. For example:
 Node Type 1: 4C8G labels={"instance":"4C8G"} ,
