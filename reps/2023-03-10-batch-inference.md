@@ -30,74 +30,88 @@ To make the review process more productive, the owner of each proposal should id
 
 ## Design and Architecture
 
-## API Changes
+## User facing API Changes
 
-1. Introduce `map_preprocessor` API directly to Ray Datasets.
+1. Preprocessors can be directly passed to `Dataset.map_batches`.
 
 ```python
-def map_preprocessor(preprocessor: Preprocessor, batch_size: Optional[int], prefetch_batches: Optional[int]):
-  """Apply the transform of the provided preprocessor to batches of data.
-
-  Args:
-    preprocessor: A :class:`~ray.data.preprocessor.Preprocessor` used to transform batches of data. The provided preprocessor is
-      expected to already be fitted if it is fittable.
-    batch_size: Same as `map_batches`
-    prefetch_batches: Same as `map_batches`
-  """
+ds = ray.data.read_images(...)
+preprocessor1 = BatchMapper(lambda x: x+1)
+preprocessor2 = TorchVisionPreprocessor(torchvision.transforms.Crop(224, 224))
+ds.map_batches(preprocessor1).map_batches(preprocessor2)
 ```
 
-2. Introduce a `map_predictor` API directly to Ray Datasets.
+2. Predictors can be directly passed to `Dataset.map_batches`
 
 ```python
-def map_predictor(create_predictor: Union[Predictor, Callable[[], Predictor]], 
-                  batch_size: Optional[int], 
-                  feature_columns: Optional[List[str]] = None, 
-                  keep_columns: Optional[List[str]] = None, 
-                  prefetch_batches: Optional[int] = 0, 
-                  min_scoring_workers: int = 1,
-                  max_scoring_workers: Optional[int] = None,
-                  num_cpus_per_worker: Optional[int] = None,
-                  num_gpus_per_worker: Optional[int] = None, 
-                  **predict_kwargs):
-  """Predict on batches of data.
+ds = ray.data.read_images(...)
+model = resnet50()
+predictor = TorchPredictor(model=model)
 
-  Args:
-    predictor: An instance of a Predictor to use for prediction.
-        For Predictors that are not serializable, or are loading large models
-        or that are created from AIR Checkpoints, 
-        a function that creates a Predictor can be passed in instead. 
-    batch_size: Batch size to use for prediction.
-    feature_columns: List of columns in the preprocessed dataset to use for
-      prediction. Columns not specified will be dropped
-      from `data` before being passed to the predictor.
-      If None, use all columns in the preprocessed dataset.
-    keep_columns: List of columns in the preprocessed dataset to include
-        in the prediction result. This is useful for calculating final
-        accuracies/metrics on the result dataset. If None,
-        the columns in the output dataset will contain
-        just the prediction results.
-    min_scoring_workers: Minimum number of scoring actors.
-    max_scoring_workers: If set, specify the maximum number of scoring actors.
-    num_cpus_per_worker: Number of CPUs to allocate per scoring worker.
-      Set to 1 by default.
-    num_gpus_per_worker: Number of GPUs to allocate per scoring worker.
-      Set to 0 by default. If you want to use GPUs for inference, please
-      specify this parameter.
-    ray_remote_args: Additional resource requirements to request from ray.
-    predict_kwargs: Keyword arguments passed to the predictor's
-        ``predict()`` method.
+# Alternatively, create from AIR Checkpoint.
+# predictor = TorchPredictor.from_checkpoint(air_checkpoint)
 
-    Raises:
-        ValueError if serializing the provided Predictor is over 1 GB. 
-        A creator function should be used instead.
-  """
+predictions = ds.map_batches(predictor, compute=ray.data.ActorPoolStrategy(size=8))
+```
+
+Exception is raised if ActorPoolStrategy is not specified.
+
+```python
+ds = ray.data.read_images(...)
+model = resnet50()
+predictor = TorchPredictor(model=model)
+predictions = ds.map_batches(predictor) # Fails with ValueError.
+```
+
+3. `feature_columns` and `keep_columns` are added to the base `Predictor.predict` interface.
+
+```python
+def predict(self, 
+    data: DataBatchType, 
+    feature_columns: Optional[List[str]] = None,
+    keep_columns: Optional[List[str]] = None,
+    **kwargs) -> DataBatchType:
+    """Perform inference on a batch of data.
+
+    Args:
+        data: A batch of input data of type ``DataBatchType``.
+        feature_columns: List of columns in the preprocessed dataset to use for
+                prediction. Columns not specified will be dropped
+                from `data` before being passed to the predictor.
+                If None, use all columns in the preprocessed dataset.
+        keep_columns: List of columns in the preprocessed dataset to include
+            in the prediction result. This is useful for calculating final
+            accuracies/metrics on the result dataset. If None,
+            the columns in the output dataset will contain
+            just the prediction results.
+        kwargs: Arguments specific to predictor implementations. These are passed
+            directly to ``_predict_numpy`` or ``_predict_pandas``.
+
+    Returns:
+        Prediction result. The return type will be the same as the input type.
+    """
+```
+
+Users can specify these through `fn_args` and `fn_kwargs` in `map_batches`
+
+```python
+ds = ray.data.read_images(s3://images_with_labels)
+model = resnet50()
+predictor = TorchPredictor(model=model)
+predictions_with_labels = ds.map_batches(
+    predictor, 
+    compute=ray.data.ActorPoolStrategy(size=8),
+    fn_kwargs={"feature_columns": ["images"], "keep_columns": ["label"]}
+)
+assert "predictions" in predictions_with_labels.schema().names
+assert "label" in predictions_with_labels.schema().names
 ```
       
-## Example: Multi-stage Inference Pipeline from pre-trained model
+### Example: Multi-stage Inference Pipeline from pre-trained model
 
 Note that Checkpoints are not on the critical path, but can still be used.
 
-### Before
+#### Before
 ```python
 preprocessor1 = BatchMapper(lambda x: x+1)
 preprocessor2 = TorchVisionPreprocessor(torchvision.transforms.Crop(224, 224))
@@ -111,28 +125,24 @@ ds = ds.read_parquet("s3://data")
 predictions = batch_predictor.predict(ds)
 ```
 
-### After
+#### After
 ```python
 model = pretrained_resnet()
 predictor = TorchPredictor(model)
 
-
-# Alternatively, delayed model creation
-# predictor = lambda: TorchPredictor(pretrained_resnet())
-
 # Alternatively, create from AIR Checkpoint.
-# predictor = lambda: TorchPredictor.from_checkpoint(air_checkpoint)
+# predictor = TorchPredictor.from_checkpoint(air_checkpoint)
 
 predictions = ds.read_parquet("s3://data")
     .map_batches(lambda x: x+1)
-    .map_preprocessor(TorchVisionPreprocessor(torchvision.transforms.Crop(224, 224)))
-    .map_predictor(predictor)
+    .map_batches(TorchVisionPreprocessor(torchvision.transforms.Crop(224, 224)))
+    .map_batches(predictor, compute=ray.data.ActorPoolStrategy(size=8))
 ```
 
-## Example: Implementing a custom Predictor.
+### Example: Implementing a custom Predictor.
 Using Checkpoints are no longer necessary.
 
-### Before
+#### Before
 ```python
 class CustomPredictor(Predictor):
     def __init__(
@@ -193,7 +203,7 @@ predictor = BatchPredictor.from_checkpoint(
 predictor.predict(dataset)
 ```
 
-### After
+#### After
 ```python
 class MXNetPredictor(Predictor):
     def __init__(
@@ -227,27 +237,173 @@ def preprocess(batch: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
     batch["image"] = batch["image"].transpose(0, 3, 1, 2)
     return batch
 
-predictor_creator = lambda: MXNetPredictor(gluon.model_zoo.vision.resnet50_v1(pretrained=True))
-dataset.map_batches(preprocess, batch_format="numpy").map_predictor(predictor_creator)
+predictor = MXNetPredictor(gluon.model_zoo.vision.resnet50_v1(pretrained=True))
+dataset.map_batches(preprocess, batch_format="numpy").map_batches(predictor_creator, compute=ray.data.ActorPoolStrategy(size=8))
 ```
 
+## Internal interfaces & implementation details
+1. Introduce a DeveloperAPI `BatchMappable` interface that `Preprocessor` and `Predictor` subclass. This interface will define the following:
+- Logic for the actual computation (either prediction or preprocessing)
+- Validating the user provided batch_format
+- Validating the user provided compute strategy
 
+```python
+@DeveloperAPI
+class BatchMappable(Callable[[T], U]):
+   """Subclass this if you want your class to be passable to Dataset.map_batches."""
+   
+    def __call__(self, batch: T) -> U:
+        """Transform the provided batch.
+
+        Args:
+            batch: The batch to transform.
+        """
+        
+        raise NotImplementedError
+
+    def setup(self):
+        """Additional setup logic to run.
+
+        If a callable class is being used, this function will be run in the `__init__`
+        of the Callable class.
+        """
+        pass
+       
+    def validate_batch_format(self, batch_format: Optional[str]) -> Optional[str]:
+        """Validate that the provided `batch_format` is compatible with this `BatchMappable`.
+
+        Raises an error if the provided `batch_format` is not supported with this `BatchMappable` 
+        (for example Pyarrow format for Predictors.)
+
+        If `batch_format` is "default", returns the preferred `batch_format` for this `BatchMappable`.
+
+        Args:
+            batch_format: The `batch_format` that is provided to `map_batches`.
+
+        Returns:
+            The batch format to use.
+        """
+       return None
+
+    def validate_compute_strategy(self, strategy):
+        """Validate that the provided `strategy` is compatible with this `BatchMappable`.
+
+        For example, enforce that `ActorPoolStrategy` is provided for Predictors.
+        """
+        pass
+
+    def use_callable_class(self) -> bool:
+        """Indicates whether this `BatchMappable` should use a callable class."""
+```
+
+`map_batches` will support instances of `BatchMappable` as a supported UDF
+
+2. Add a private `to_checkpoint` serializer for `Predictor`, analagous to the current `from_checkpoint` deserializer. Also, move the 
+
+```python
+class Predictor:
+    def _to_checkpoint(self) -> Checkpoint:
+        """Create a serializable Checkpoint from this Predictor.
+
+        Returns:
+            Checkpoint containing the state for this Predictor.
+        """
+    
+    def __getstate__(self):
+        return self._to_checkpoint()
+
+    def __setstate__(self, checkpoint):
+        # Same logic as `from_checkpoint`.
+
+    def use_callable_class(self) -> bool:
+        return True
+```
+
+3. When using Predictors with AIR Checkpoints, move the construction logic to `setup` so that it can be called within the actor.
+
+```python
+class Predictor:
+    def _to_checkpoint(self) -> Checkpoint:
+        """Create a serializable Checkpoint from this Predictor.
+
+        Returns:
+            Checkpoint containing the state for this Predictor.
+        """
+        ...
+    
+    def setup(self):
+        if self._checkpoint:
+            # Initialize the state from the Checkpoint.
+    
+    @classmethod
+    def from_checkpoint(cls, checkpoint):
+        return Predictor(_checkpoint=checkpoint)
+
+    def use_callable_class(self) -> bool:
+        return True
+```
+
+Putting this all together, the implementation for `map_batches` will look like the following
+
+```python
+def map_batches(
+        self,
+        fn: BatchUDF,
+        *,
+        batch_size: Optional[Union[int, Literal["default"]]] = "default",
+        compute: Optional[Union[str, ComputeStrategy]] = None,
+        batch_format: Optional[str] = "default",
+        zero_copy_batch: bool = False,
+        fn_args: Optional[Iterable[Any]] = None,
+        fn_kwargs: Optional[Dict[str, Any]] = None,
+        fn_constructor_args: Optional[Iterable[Any]] = None,
+        fn_constructor_kwargs: Optional[Dict[str, Any]] = None,
+        **ray_remote_args,
+    ) -> "Dataset[Any]":
+
+    if isinstance(fn, BatchMappable):
+        fn.validate_compute_strategy(compute)
+        batch_format = fn.validate_batch_format(batch_format)
+
+        if fn.use_callable_class:
+            # Put the BatchMappable in the object store once.
+            batch_mappable_ref = ray.put(fn)
+
+            class _Wrapper:
+                def __init__(self, batch_mappable_ref: ObjectRef[BatchMappable]):
+                    self.batch_mappable = ray.get(batch_mappable_ref)
+                
+                def __call__(self, *args, **kwargs):
+                    return self.batch_mappable(*args, **kwargs)
+            
+            fn = _Wrapper
+        
+        # Rest of the implementation stays the same
+        ...
+```
+
+## FAQ
+1. If I pass in a `Predictor` directly, won't initiliazation happen for every batch?
+No. `Predictors` will require the use of a Callable Class, and so that we wrap the Predictor in a Callable class internally, like in the example above.
+
+2. If I have an AIR Checkpoint, won't this require initialization on the driver?
+No. If a Predictor is created from an AIR Checkpoint, we delay the initialization to a `setup` call that happens only in the 
+actor.
 
 ## Compatibility, Deprecation, and Migration Plan
 An important part of the proposal is to explicitly point out any compability implications of the proposed change. If there is any, we should thouroughly discuss a plan to deprecate existing APIs and migration to the new one(s).
 
-Ray 2.4: Onboard new users onto new APIs
-- Introduce `map_preprocessor` and `map_predictor` as Alpha APIs.
-- Rewrite all batch inference examples to use these APIs, and use `map_batches` directly instead of `BatchMapper` and `Chain`.
+Ray 2.5: Onboard new users onto new APIs
+- Support Preprocessors and Predictors in `map_batches`.
+- Rewrite all batch inference examples to use this API, and use `map_batches` directly instead of `BatchMapper` and `Chain`.
 - `BatchPredictor` will still be fully supported.
 
-Ray 2.5: Start migrating existing users to new APIs
+Ray 2.6: Start migrating existing users to new APIs
 - Soft Deprecate `BatchPredictor`. Warn if this API is used, and remove from Documentation.
 - Add migration guide in documentation for guidance on how to migrate to the new APIs.
 
-Ray 2.6: Deprecate old APIs
+Ray 2.7: Deprecate old APIs
 - Hard deprecate `BatchPredictor`.
-
 
 ## Test Plan and Acceptance Criteria
 The proposal should discuss how the change will be tested **before** it can be merged or enabled. It should also include other acceptance criteria including documentation and examples. 
