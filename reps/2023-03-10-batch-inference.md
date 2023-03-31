@@ -384,9 +384,11 @@ def map_batches(
 
 ## FAQ
 1. If I pass in a `Predictor` directly, won't initiliazation happen for every batch?
+
 No. `Predictors` will require the use of a Callable Class, and so that we wrap the Predictor in a Callable class internally, like in the example above.
 
 2. If I have an AIR Checkpoint, won't this require initialization on the driver?
+
 No. If a Predictor is created from an AIR Checkpoint, we delay the initialization to a `setup` call that happens only in the 
 actor.
 
