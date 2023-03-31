@@ -1,7 +1,7 @@
 # Revamping APIs for Offline Batch Inference
 
 ## Summary
-Reduce the friction for batch inference of pre-trained by updating the APIs to do the following:
+Reduce the friction for batch inference of pre-trained models by updating the APIs to do the following:
 1. Remove AIR Checkpoints from the critical path for batch prediction.
 2. Simpler interface for chaining multiple preprocessing and prediction stages.
 
