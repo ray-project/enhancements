@@ -298,7 +298,7 @@ class BatchMappable(Callable[[T], U]):
 
 `map_batches` will support instances of `BatchMappable` as a supported UDF
 
-2. Add a private `to_checkpoint` serializer for `Predictor`, analagous to the current `from_checkpoint` deserializer. Also, move the 
+2. Add a private `to_checkpoint` serializer for `Predictor`, analagous to the current `from_checkpoint` deserializer. 
 
 ```python
 class Predictor:
