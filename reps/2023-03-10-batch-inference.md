@@ -269,7 +269,7 @@ class BatchMappable(Callable[[T], U]):
         """
         pass
        
-    def validate_batch_format(self, batch_format: Optional[str]) -> Optional[str]:
+    def get_batch_format(self, batch_format: Optional[str]) -> Optional[str]:
         """Validate that the provided `batch_format` is compatible with this `BatchMappable`.
 
         Raises an error if the provided `batch_format` is not supported with this `BatchMappable` 
