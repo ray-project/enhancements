@@ -294,6 +294,7 @@ class BatchMappable(Callable[[T], U]):
 
     def use_callable_class(self) -> bool:
         """Indicates whether this `BatchMappable` should use a callable class."""
+        return False
 ```
 
 `map_batches` will support instances of `BatchMappable` as a supported UDF
@@ -319,25 +320,36 @@ class Predictor:
         return True
 ```
 
-3. When using Predictors with AIR Checkpoints, move the construction logic to `setup` so that it can be called within the actor.
+3. When using Predictors with AIR Checkpoints, add an option for lazy instantiation. This allows us to load from the Checkpoint when inside the actor instead of on the driver.
 
 ```python
 class Predictor:
-    def _to_checkpoint(self) -> Checkpoint:
-        """Create a serializable Checkpoint from this Predictor.
-
-        Returns:
-            Checkpoint containing the state for this Predictor.
-        """
+    def __init__(self, ...):
+        self._initialized = False
         ...
-    
+
     def setup(self):
-        if self._checkpoint:
-            # Initialize the state from the Checkpoint.
+        if not self._initialized 
+            if self._checkpoint:
+                # Initialize the state from the Checkpoint.
+                self.__setstate__(self._checkpoint)
+            self._initialized = True
     
     @classmethod
-    def from_checkpoint(cls, checkpoint):
-        return Predictor(_checkpoint=checkpoint)
+    def from_checkpoint(cls, checkpoint: Checkpoint, lazy: bool = False):
+        if not lazy:
+            # Current logic for creating Predictor from checkpoint.
+            predictor = Predictor(...)
+            predictor._initialized = True
+            return predictor
+        else:
+            return Predictor(_checkpoint=checkpoint)
+
+    def predict(self, batch):
+        if not self._initialized:
+            # Initialize the Predictor if not already done so.
+            self.setup()
+        ...
 
     def use_callable_class(self) -> bool:
         return True
@@ -372,6 +384,8 @@ def map_batches(
             class _Wrapper:
                 def __init__(self, batch_mappable_ref: ObjectRef[BatchMappable]):
                     self.batch_mappable = ray.get(batch_mappable_ref)
+                    # Setup the BatchMappable.
+                    self.batch_mappable.setup()
                 
                 def __call__(self, *args, **kwargs):
                     return self.batch_mappable(*args, **kwargs)
