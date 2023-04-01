@@ -106,7 +106,16 @@ predictions_with_labels = ds.map_batches(
 assert "predictions" in predictions_with_labels.schema().names
 assert "label" in predictions_with_labels.schema().names
 ```
-      
+
+4. Predictor instantiation from AIR Checkpoints will be lazy by default. For standalone prediction, instantiation does not occur until the first `Predict` call.
+
+```python
+# Model will not be extracted from the Checkpoint yet.
+predictor = TorchPredictor.from_checkpoint(my_checkpoint)
+
+# Model will be initialized on the first Predict call.
+predictor.predict(np.array([1]))
+```
 ### Example: Multi-stage Inference Pipeline from pre-trained model
 
 Note that Checkpoints are not on the critical path, but can still be used.
@@ -139,8 +148,80 @@ predictions = ds.read_parquet("s3://data")
     .map_batches(predictor, compute=ray.data.ActorPoolStrategy(size=8))
 ```
 
+## Developer API Changes
+1. Introduce a DeveloperAPI `BatchMappable` interface that `Preprocessor` and `Predictor` subclass. This interface will define the following:
+- Logic for the actual computation (either prediction or preprocessing)
+- Validating the user provided batch_format
+- Validating the user provided compute strategy
+- Setup logic for initialization that needs to be delayed (for example called within an Actor.)
+
+```python
+@DeveloperAPI
+class BatchMappable(Callable[[T], U]):
+   """Subclass this if you want your class to be passable to Dataset.map_batches."""
+   
+    def __call__(self, batch: T) -> U:
+        """Transform the provided batch.
+
+        Args:
+            batch: The batch to transform.
+        """
+        
+        raise NotImplementedError
+
+    def setup(self):
+        """Additional setup logic to run.
+
+        If a callable class is being used, this function will be run in the `__init__`
+        of the Callable class.
+
+        Having this as a separate method instead of doing any setup during the first time that
+        `__call__` is called allows any actors to do the initialization during `__init__`.
+        """
+        pass
+       
+    def get_batch_format(self, batch_format: Optional[str]) -> Optional[str]:
+        """Validate that the provided `batch_format` is compatible with this `BatchMappable`.
+
+        Raises an error if the provided `batch_format` is not supported with this `BatchMappable` 
+        (for example Pyarrow format for Predictors.)
+
+        If `batch_format` is "default", returns the preferred `batch_format` for this `BatchMappable`.
+
+        Args:
+            batch_format: The `batch_format` that is provided to `map_batches`.
+
+        Returns:
+            The batch format to use.
+        """
+       return None
+
+    def validate_compute_strategy(self, strategy):
+        """Validate that the provided `strategy` is compatible with this `BatchMappable`.
+
+        For example, enforce that `ActorPoolStrategy` is provided for Predictors.
+        """
+        pass
+
+    def use_callable_class(self) -> bool:
+        """Indicates whether this `BatchMappable` should use a callable class."""
+        return False
+```
+
+`map_batches` will support instances of `BatchMappable` as a supported UDF
+
+2. Add a `init_from_checkpoint` method to be implemented when creating custom Predictors. `from_checkpoint` no longer needs to be overridden by developers. This allows `from_checkpoint` to implement lazy loading without developers needing to worry about this when implementing their own Predictors.
+
+```python
+class Predictor:
+    @DeveloperAPI
+    def init_from_checkpoint(self, checkpoint: Checkpoint):
+        """Initialize this Predictor from the provided Checkpoint."""
+        raise NotImplementedError
+```
+
 ### Example: Implementing a custom Predictor.
-Using Checkpoints are no longer necessary.
+Using AIR Checkpoints are no longer necessary, but are still possible to use.
 
 #### Before
 ```python
@@ -228,6 +309,14 @@ class MXNetPredictor(Predictor):
 
         return {"predictions": outputs}
 
+    # Optionally, support AIR Checkpoints
+    # def init_from_checkpoint(self, checkpoint):
+    #     with checkpoint.as_directory() as directory:
+    #         path = os.path.join(directory, "net.params")
+    #         net.load_parameters(path)
+    #     self.net = net
+    #     self.preprocessor = checkpoint.get_preprocessor()
+
 dataset = ray.data.read_images(
     "s3://anonymous@air-example-data-2/imagenet-sample-images", size=(224, 224)
 )
@@ -242,64 +331,8 @@ dataset.map_batches(preprocess, batch_format="numpy").map_batches(predictor_crea
 ```
 
 ## Internal interfaces & implementation details
-1. Introduce a DeveloperAPI `BatchMappable` interface that `Preprocessor` and `Predictor` subclass. This interface will define the following:
-- Logic for the actual computation (either prediction or preprocessing)
-- Validating the user provided batch_format
-- Validating the user provided compute strategy
 
-```python
-@DeveloperAPI
-class BatchMappable(Callable[[T], U]):
-   """Subclass this if you want your class to be passable to Dataset.map_batches."""
-   
-    def __call__(self, batch: T) -> U:
-        """Transform the provided batch.
-
-        Args:
-            batch: The batch to transform.
-        """
-        
-        raise NotImplementedError
-
-    def setup(self):
-        """Additional setup logic to run.
-
-        If a callable class is being used, this function will be run in the `__init__`
-        of the Callable class.
-        """
-        pass
-       
-    def get_batch_format(self, batch_format: Optional[str]) -> Optional[str]:
-        """Validate that the provided `batch_format` is compatible with this `BatchMappable`.
-
-        Raises an error if the provided `batch_format` is not supported with this `BatchMappable` 
-        (for example Pyarrow format for Predictors.)
-
-        If `batch_format` is "default", returns the preferred `batch_format` for this `BatchMappable`.
-
-        Args:
-            batch_format: The `batch_format` that is provided to `map_batches`.
-
-        Returns:
-            The batch format to use.
-        """
-       return None
-
-    def validate_compute_strategy(self, strategy):
-        """Validate that the provided `strategy` is compatible with this `BatchMappable`.
-
-        For example, enforce that `ActorPoolStrategy` is provided for Predictors.
-        """
-        pass
-
-    def use_callable_class(self) -> bool:
-        """Indicates whether this `BatchMappable` should use a callable class."""
-        return False
-```
-
-`map_batches` will support instances of `BatchMappable` as a supported UDF
-
-2. Add a private `to_checkpoint` serializer for `Predictor`, analagous to the current `from_checkpoint` deserializer. 
+1. Add a private `to_checkpoint` serializer for `Predictor`, analagous to the current `from_checkpoint` deserializer. 
 
 ```python
 class Predictor:
@@ -310,40 +343,37 @@ class Predictor:
             Checkpoint containing the state for this Predictor.
         """
     
+    def init_from_checkpoint(self, checkpoint):
+        ...
     def __getstate__(self):
         return self._to_checkpoint()
 
     def __setstate__(self, checkpoint):
-        # Same logic as `from_checkpoint`.
+        self.init_from_checkpoint(checkpoint)
 
     def use_callable_class(self) -> bool:
         return True
 ```
 
-3. When using Predictors with AIR Checkpoints, add an option for lazy instantiation. This allows us to load from the Checkpoint when inside the actor instead of on the driver.
+2. Modify `from_checkpoint` to do lazy loading.
 
 ```python
 class Predictor:
     def __init__(self, ...):
         self._initialized = False
         ...
-
-    def setup(self):
-        if not self._initialized 
-            if self._checkpoint:
-                # Initialize the state from the Checkpoint.
-                self.__setstate__(self._checkpoint)
-            self._initialized = True
     
     @classmethod
-    def from_checkpoint(cls, checkpoint: Checkpoint, lazy: bool = False):
-        if not lazy:
-            # Current logic for creating Predictor from checkpoint.
-            predictor = Predictor(...)
-            predictor._initialized = True
-            return predictor
-        else:
-            return Predictor(_checkpoint=checkpoint)
+    def from_checkpoint(cls, checkpoint: Checkpoint):
+        class LazyPredictor(cls):
+            def __init__(self, checkpoint):
+                self.checkpoint = checkpoint
+            
+            def setup(self):
+                self.init_from_checkpoint(self.checkpoint)
+                self._initialized = True
+            
+        return LazyPredictor(checkpoint=checkpoint)
 
     def predict(self, batch):
         if not self._initialized:
@@ -355,7 +385,7 @@ class Predictor:
         return True
 ```
 
-Putting this all together, the implementation for `map_batches` will look like the following
+3. Putting this all together, the implementation for `map_batches` will look like the following
 
 ```python
 def map_batches(
