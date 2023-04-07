@@ -326,7 +326,7 @@ If the matching expression cannot be satisfied, The actor/task will be add to th
 
 3. labels affinity can be satisfied, but resources are not enough? -> Hang & report schedule failed event and detail unstaisfed reason to exposed to users
 
-4. both labelsaffinity and resources are not satisfied? -> Hang & report schedule failed event and detail unstaisfed reason to exposed to users
+4. both labels affinity and resources are not satisfied? -> Hang & report schedule failed event and detail unstaisfed reason to exposed to users
 
 
 ### how other system achieve the same goal?
