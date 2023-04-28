@@ -20,8 +20,8 @@ For reference, this is the main PR originally introducing strict mode: https://g
 - schema() returns a unified Schema class instead of Union[pyarrow.lib.Schema, type].
 
 **Datasource behavior changes**
-- `range_tensor`: create "data" col instead of "__value__"
-- `from_numpy`/`from_numpy_refs` : create "data" col instead of using "__value__"
+- `range_tensor`: create "data" col instead of `__value__`
+- `from_numpy`/`from_numpy_refs` : create "data" col instead of using `__value__`
 - `from_items`: create "item" col instead of using Python objects
 - `range`: create "id" column instead of using Python objects
 
