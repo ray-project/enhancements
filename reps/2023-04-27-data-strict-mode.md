@@ -1,4 +1,4 @@
-# Rollout out "strict mode" for Ray Data
+# Roll out "strict mode" for Ray Data
 
 ## Summary
 
@@ -49,15 +49,11 @@ The main method of notification will be the ``StrictModeError`` exception raised
 
 We will also add a warning banner (for a couple releases) on the first import of Ray Data that notifies users of this change.
 
-### Testing
-
-The master branch will have strict mode on by default. There will be a suite that tests basic functionality with strict mode off, to avoid regressions.
-
 ### Timeline
 
-Ray 2.5: Enable strict mode by default, with the above notification plan.
-Ray 2.6: No changes.
-Ray 2.7 or after: Enforce strict mode always, and remove code for supporting the legacy code paths.
+- Ray 2.5: Enable strict mode by default, with the above notification plan.
+- Ray 2.6: No changes.
+- Ray 2.7 or after: Enforce strict mode always, and remove code for supporting the legacy code paths.
 
 ## Examples:
 
