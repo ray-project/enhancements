@@ -2,7 +2,7 @@
 
 ## Summary
 
-Make a breaking API change to always require data schemas in Ray Data.
+Make a (breaking) API change to always require data schemas in Ray Data, dropping support for standalone Python objects. In addition to unification and simplicity benefits, this aligns the Ray Data API closer to industry-standard distributed data APIs like Apache Spark and also emerging standards for machine learning datasets like HuggingFace.
 
 ### General Motivation
 
