@@ -17,9 +17,7 @@ For reference, this is the main PR originally introducing strict mode: https://g
 - Standalone Numpy arrays are prohibited from being returned from map / map batches.
 - There is no more special interpretation of single-column schema containing just `__value__` as a column.
 - The default batch format is "numpy" instead of "default" (pandas).
-- Datastream.schema() returns a unified Schema class instead of Union[pyarrow.lib.Schema, PandasSchema, type].
-- The row format is always a Python dictionary, instead of an internal row type.
-- It is no longer allowed to query the internal block format.
+- schema() returns a unified Schema class instead of Union[pyarrow.lib.Schema, type].
 
 **Datasource behavior changes**
 - `range_tensor`: create "data" col instead of "__value__"
