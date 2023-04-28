@@ -21,6 +21,12 @@ For reference, this is the main PR originally introducing strict mode: https://g
 - The row format is always a Python dictionary, instead of an internal row type.
 - It is no longer allowed to query the internal block format.
 
+**Datasource behavior changes**
+- `range_tensor`: create "data" col instead of "__value__"
+- `from_numpy`/`from_numpy_refs` : create "data" col instead of using "__value__"
+- `from_items`: create "item" col instead of using Python objects
+- `range`: create "id" column instead of using Python objects
+
 The change itself has been well received in user testing, so the remainder of this REP will focus on the rollout strategy.
 
 ### Should this change be within `ray` or outside?
