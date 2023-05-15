@@ -1,15 +1,14 @@
 ## Summary
 
-We'd like to create the `RLlib-contrib` repository for community contributed algorithms and algorithms with low usage in RLlib. We'd like to start by migrating approximately ~25 of the 30 algorithms from RLlib into `RLlib-contrib`. We are considering doing this because 
+We'd like to create the `rllib_contrib` directory inside of rayproject/ray for community contributed algorithms and algorithms with low usage in RLlib. We'd like to start by migrating approximately ~25 of the 30 algorithms from RLlib into `rllib_contrib`. We are considering doing this because 
 
 1. Doing so will greatly increase the ability / lower the barrier of entry of community members to contribute new algorithms to RLlib.
-2. It would reduce the maintenance burden of RLlib.
-3. Many of these algorithms [to be migrated to this repo] have successors that are more performant and/or easier to hyperparameter tune.
+2. It would reduce the maintenance burden of RLlib. **By moving any algorithms from rllib into rllib_contrib, we are breaking the api surface between these algorithms and rllib. This means that we do not need to update them with any new features or provide any bug fixes to them.**
+3. Many of these algorithms [to be migrated to this directory] have successors that are more performant and/or easier to hyperparameter tune.
 4. The proposed algorithms have low usage by the community according to our ray cluster telemetry readings.
 
-However, as we do recognize the value that these algorithms have to the community, we are establishing the
-`rayproject/rllib-contrib` repo to house these algorithms. Each deprecated algorithm will have its own directory
-In this repo containing the following:
+
+Each deprecated algorithm will have its own subdirectory in this repo containing the following:
 
 1. The implementation of the algorithm.
 2. Any tests that are associated with ensuring the correctness of the algorithm.
@@ -62,8 +61,8 @@ The proposed algorithms to migrate from RLlib are outlined in the table below, a
 | Algorithm | Soft Deprecation Release # | Hard Deprecation Release # |
 | --- | --- | --- |
 | A3C | 2.5 | 2.8 |
-| A2C | 2.5 | 2.8 |
-| R2D2 | 2.5 | 2.8 |
+| A2C | 2.6 | 2.9 |
+| R2D2 | 2.6 | 2.9 |
 | MAML | 2.5 | 2.8 |
 | AphaStar | 2.6 | 2.9 |
 | AlphaZero | 2.6 | 2.9 |
@@ -91,15 +90,12 @@ The proposed algorithms to migrate from RLlib are outlined in the table below, a
 
 ## Design and Architecture
 
-- We introduce the new repo for deprecated RLlib algorithms and community contributed algorithms.
+- We introduce the new directory for deprecated RLlib algorithms and community contributed algorithms.
 
-### `rayproject/rllib-contrib` File Structure
+### `rllib-contrib` File Structure
 
 ```
 README.md
-.github/
-    workflow/
-        algorithm_foo.yml <---------- This will launch the unit test for algorithm foo with gh actions
 algorithm_foo/
     src/
         algorithm_foo/
@@ -112,7 +108,7 @@ algorithm_foo/
         results.csv
         results.pkl
         results.tensorboard
-        results.md  <---------- This will contain some pictures of the performance as a sanity check
+    results.rst
     requirements.txt
     pyproject.toml  <---------- Used for installation
     
@@ -126,7 +122,7 @@ Either install from pypi:
 
 or install from source:
 
-1. Use git to clone `rayproject/rllib-contrib`.
+1. Use git to clone `rayproject/ray`.
 2. Navigate to the directory of the previously deprecated algorithm
    for ex. `cd rllib-contrib/maml`.
 3. Run `pip install -e .` to install the algorithm python module as a pip package.
@@ -146,7 +142,7 @@ The RLlib team commits to the following level of support for the algorithms in t
 
 **This means that any issues that are filed will be solved best-effort by the community and there is no expectation of maintenance by the RLlib team.**
 
-We will generally accept contributions to this repo that meet any of the following criteria:
+We will generally accept contributions to this directory that meet any of the following criteria:
 1. Updating dependencies.
 2. Submitting community contributed algorithms that have been tested and are ready for use.
 3. Enabling algorithms to be run in different environments (ex. adding support for a new type of gym environment).
@@ -157,7 +153,7 @@ We will not accept contributions that generally add significant new maintenance 
 
 ### Contributing new algorithms
 
-If you would like to contribute a new algorithm to this repo, please follow the following steps:
+If you would like to contribute a new algorithm to this directory, please follow the following steps:
 1. Create a new directory with the same structure as the other algorithms.
 2. Add a `README.md` file that describes the algorithm and its usecases.
 3. Create unit tests/shorter learning tests and long learning tests for the algorithm.
@@ -178,9 +174,7 @@ It isn't crucial to add this telemetry system in for the initial release of this
 
 ### Testing
 
-Testing will be done with github actions. Each algorithm will have its own github action workflow that will run the unit tests under the algorithm's `tests/` directory. A separate workflow will be created for every algorithm that allows for a long running test to be launched on the Anyscale platform using Anyscale jobs. This test is mainly for performance checking and can only be triggered by a code owner. Testing is only triggered on pull requests. This is because we don't expect the dependencies of the library to change / not be hard-pinned and to reduce the maintenance of the CI. Finally unit tests for
-an algorithm will only be launched if that algorithm has been modified or added. This is to reduce the
-amount of time that the CI takes to run.
+Testing will leverage the existing buildkite infrastructure that we have in the oss repository today. Because we are leveraging the existing oss testing infrastructure, maintenance will be shared between the RL and dev prod teams. We will set up separate buildkite jobs for each algorithm to be run anytime there is a change to that specific algorithm. Doing this will ensure that we don’t waste compute resources. These jobs will run short running unit tests and short learning tests for the algorithm. Additionally we’ll have separate buildkite jobs for long running learning tests that use many resources. These tests will be manually triggered only if we enable them by adding special phrases to commit messages.
 
 
 ## Compatibility, Deprecation, and Migration Plan
