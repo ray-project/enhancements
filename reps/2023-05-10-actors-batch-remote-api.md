@@ -8,7 +8,7 @@ In distributed computing scenarios, such as big data computing、AI training and
 For example, in a typical star-topology architecture with one master Actor and 400 worker Actors, the same computational request needs to be sent to 400 worker Actors. 
 However, the computing tasks of each Worker Actor are very short. In such a scenario, the performance requirements for executing batch actor task remote of a large number of Actor are very high.  
 Therefore, for the scenario of batch calling Actor tasks, I want to add a new optimization API, batch_remote(), to improve the performance of batch submission of Actor Task calls.   
-After my own performance testing and comparison, this API can achieve a performance improvement of 40% ~ 98%.
+After my own performance testing and comparison, this API interface can improve performance by 2 ~ 100+ times.
 
 Current situation of batch calling actor tasks:
 ```
@@ -24,7 +24,8 @@ Using the new Batch Remote API:
 actors = [WorkerActor.remote() for _ in range(400)]
 
 # Calling it only once can greatly improve performance.
-ray.experimental.batch_remote(actors).compute.remote(args)
+batch_remote_handle = ray.experimental.batch_remote(actors)
+batch_remote_handle.compute.remote(args)
 ```
 
 The current performance bottleneck of batch invoking ActorTask mainly lies in the duplicate serialization of parameters, repeated puts parameters into object store, and frequent context switching between Python and C++.  
@@ -47,9 +48,17 @@ The initial consideration is to add it to the ray.experimental module.
 
 ## Design and Architecture
 ### API
-Use case
+Use case  
+Plan 1
 ```
-ray.experimental.batch_remote(actors).compute.remote(args)
+batch_remote_handle = ray.experimental.batch_remote(actors)
+batch_remote_handle.compute.remote(args)
+```
+
+Plan 2
+```
+batch_remote_handle = ray.experimental.BatchRemoteHandle(actors)
+batch_remote_handle.compute.remote(args)
 ```
 
 ### Implementation
@@ -87,7 +96,7 @@ The following are the performance comparison results.
 **Table 1: Comparison of remote call time with varying parameter sizes and 400 Actors**
 
 
-Parameter Size (byte) | Time taken for foreach_remote(ms) | Time taken for batch_remote(ms) | The improvement rate
+Parameter Size (byte) | Time taken for foreach_remote(ms) | Time taken for batch_remote(ms) | The ratio of time reduction
 -- | -- | -- | --
 10 | 40.532 | 9.226 | 77.2%
 409846 | 584.345 | 24.106 | 95.9%
@@ -119,7 +128,7 @@ Parameter Size (byte) | Time taken for foreach_remote(ms) | Time taken for batch
 
 **Table 2: Comparison of remote call time with varying numbers of Actors and a fixed parameter size (1MB)**
 
-actor counts | Time taken for foreach_remote(ms) | Time taken for batch_remote(ms) | The improvement rate
+actor counts | Time taken for foreach_remote(ms) | Time taken for batch_remote(ms) | The ratio of time reduction
 -- | -- | -- | --
 50 | 95.889 | 4.657 | 95.1%
 100 | 196.184 | 8.447 | 95.7%
@@ -151,7 +160,7 @@ The more actors, the greater the performance gain.
 
 This test is to confirm the degree of performance optimization after reducing the frequency of switching between the Python and C++ execution layers. 
 
-actor counts | Time taken for foreach_remote(ms) | Time taken for batch_remote(ms) | The improvement rate
+actor counts | Time taken for foreach_remote(ms) | Time taken for batch_remote(ms) | The ratio of time reduction
 -- | -- | -- | --
 50 | 2.083 | 1.257 | 39.7%
 100 | 4.005 | 2.314 | 42.2%
@@ -177,7 +186,36 @@ actor counts | Time taken for foreach_remote(ms) | Time taken for batch_remote(m
 
 
 **Conclusion:**  
-After comparison, in the scenario of 400 actors and remote calls without parameters, the performance is optimized by 40%~50%.
+After comparison, in the scenario of remote calls without parameters, the performance is optimized by 2+ times.
+
+**Table 4: Comparison of remote call time with varying numbers of Actors and object ref parameters in remote calls**
+
+actor counts | The time taken for foreach_remote(ms) | The time taken for batch_remote(ms) | The ratio of time reduction
+-- | -- | -- | --
+50 | 3.878 | 1.488 | 61.6%
+100 | 8.383 | 2.405 | 71.3%
+150 | 12.16 | 3.255 | 73.2%
+200 | 16.835 | 4.913 | 70.8%
+250 | 21.09 | 6.424 | 69.5%
+300 | 24.674 | 8.272 | 66.5%
+350 | 28.639 | 8.862 | 69.1%
+400 | 33.42 | 10.352 | 69.0%
+450 | 37.39 | 12.02 | 67.9%
+500 | 39.944 | 13.288 | 66.7%
+550 | 45.019 | 15.005 | 66.7%
+600 | 48.237 | 15.349 | 68.2%
+650 | 53.304 | 17.149 | 67.8%
+700 | 56.961 | 18.124 | 68.2%
+750 | 61.672 | 19.079 | 69.1%
+800 | 66.185 | 20.485 | 69.0%
+850 | 69.524 | 21.584 | 69.0%
+900 | 74.754 | 22.304 | 70.2%
+950 | 79.493 | 25.932 | 67.4%
+
+![Comparison of remote call time with varying numbers of Actors and object ref parameters in remote calls](https://github.com/ray-project/ray/assets/11072802/89a5a0c4-3dfe-4fae-b046-0e1c72790fe1)
+
+**Conclusion:**  
+After comparison, in the scenario of remote calls with object ref paramter, the performance is optimized by 3~4 times.
 
 **Summary:**  
 The newly added Batch Remote API can improve performance in the case of batch calling Actor task. It can reduce performance costs such as parameter serialization, object store consumption, and Python and C++ execution layer switching, thereby improving the performance of the entire distributed computing system.  
@@ -185,6 +223,18 @@ Especially in the following scenario:
 1. large parameters 
 2. a large number of Actors
 
+
+### Failure & Exception Scenario.
+
+**1. Exceptions occurred during parameter validation or preprocessing before batch submission of ActorTasks.**
+Since these exceptions occur before the process of submitting ActorTasks, they can be handled by directly throwing specific error exceptions as current situation.
+
+**2. Some actors throw exceptions during the process of batch submitting ActorTasks.**
+When traversing and submitting ActorTasks in a loop, if one of the Actors throws an exception during submission, the subsequent ActorTasks will be terminated immediately, and the exception will be throwed to user.
+
+Reason:  
+1. Submitting ActorTask is normally done without any exceptions being thrown. If an error does occur, it is likely due to issues with the code and will require modifications.
+2. The exception behavior of this plan is the same as the current foreach remote.
 
 ## Compatibility, Deprecation, and Migration Plan
 N/A
@@ -203,3 +253,12 @@ The collection communication of Ray's CPU computing scenario is currently implem
 Therefore, we want to develop a native collection communication library for Ray with the aim of making it more convenient for users and supporting large-scale scenarios.  
 This native library will undoubtedly rely on the current batch remote API to improve performance. After the API is completed, we will consider implementing the native collection communication library for Ray.
 
+
+### 2. ActorPool adds the capability of batch submitting ActorTask.
+ActorPool is a utility class to operate on a fixed pool of actors. 
+This feature can be added to this utility class.
+```
+a1, a2 = Actor.remote(), Actor.remote()
+pool = ActorPool([a1, a2])
+refs = pool.batch_remote().task.remote()
+```
