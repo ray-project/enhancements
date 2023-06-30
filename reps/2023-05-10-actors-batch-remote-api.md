@@ -3,8 +3,7 @@
 **Core Motivation**:
 1. Improve the performance of batch calling ActorTask. The current performance bottleneck of batch invoking ActorTask mainly lies in the duplicate serialization of parameters, repeated puts parameters into object store, and frequent context switching between Python and C++. The Batch remote API will optimize performance for these three aspects.
 
-
-In distributed computing scenarios, such as big data computing、AI training and inference, there is a need to send a large number of RPC requests(ActorTask) to multiple Actors in batches.  
+In distributed computing scenarios, such as big data computing、AI training and inference、large-scale distributed solvers, there is a need to send a large number of RPC requests(ActorTask) to multiple Actors in batches.  
 For example, in a typical star-topology architecture with one master Actor and 400 worker Actors, the same computational request needs to be sent to 400 worker Actors. 
 However, the computing tasks of each Worker Actor are very short. In such a scenario, the performance requirements for executing batch actor task remote of a large number of Actor are very high.  
 Therefore, for the scenario of batch calling Actor tasks, I want to add a new optimization API, batch_remote(), to improve the performance of batch submission of Actor Task calls.   
@@ -28,7 +27,15 @@ batch_remote_handle = ray.experimental.batch_remote(actors)
 batch_remote_handle.compute.remote(args)
 ```
 
-The current performance bottleneck of batch invoking ActorTask mainly lies in the duplicate serialization of parameters, repeated puts parameters into object store, and frequent context switching between Python and C++.  
+**API usage scenarios:**  
+**1. Large-scale distributed solvers**  
+Within Ant Group internal, after using the BatchRemote API for large-scale distributed solvers, the performance of a single remote() call has increased more than 10 times, and overall performance has increased by more than 3 times. This performance improvement is very significant.
+
+**2. Implement Ray's native collective communication library through this interface.**  
+**3. ActorPool adds the capability of batch submitting ActorTask.**
+
+
+The current performance bottleneck of batch invoking ActorTask mainly lies in the duplicate serialization of parameters, repeated puts parameters into object store, and frequent context switching between Python and C++ and repeated parameter validation and processing.  
 The Batch Remote API can reduce the following performance costs(The N is the number of Actors):  
 1. Reduce (N-1) times of parameter serialization performance costs.
 2. Reduce (N-1) times of putting parameter into object store performance costs for scenarios with large parameters.
