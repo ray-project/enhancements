@@ -2,7 +2,7 @@
 
 ## Summary
 
-Standardize on the `storage_path` API as the sole implementation of distributed sync in Ray Train(/Tune). Deprecate the legacy head node syncer code, and add a `storage_filesystem` API for users to customize the underlying pyarrow filesystem used for `storage_path` sync.
+Standardize on the `storage_path` option as the sole implementation of distributed sync in Ray Train(/Tune). Deprecate the legacy head node syncer code, and add a `storage_filesystem` option for users to customize the underlying pyarrow filesystem used for `storage_path` sync.
 
 Relatedly, simplify the Train `Checkpoint` API to also standardize on `pyarrow.fs` as its backing implementation.
 
@@ -12,9 +12,9 @@ The motivation for this change is two-fold.
 
 First, it cuts down on the number of alternative options and implementations users have for persistent storage in Ray Train and Tune. This materially reduces the docs and examples (i.e., going from multiple pages of persistence-related docs to one page).
 
-Second, it reduces the implementation and API surface that the ML team has to maintain. Many of these storage abstractions have been introduced in the initial years when Ray was created. At the time, industry-standard filesystem abstractions for Python were less prevalent. Today, `pyarrow.fs` (and fsspec) are reliable standards for accessing remote storage, and Ray already depends on them heavily in Ray Data.
+Second, it reduces the implementation and API surface that the ML team has to maintain. Many of these storage abstractions were introduced in the initial years when Ray was created. At the time, filesystem abstractions for Python were less prevalent. Today, `pyarrow.fs` (in conjunction with fsspec) are industry standards for accessing remote storage, and Ray already has a hard dependency on pyarrow in Ray Data.
 
-Both of these have been significant pain points over the past year, based both on user and internal feedback. This shouldn't be too surprising, as the persistent storage APIs have never been significantly revised before, beyond introduction of the new `storage_path` method, and similarly the Checkpoint API is in beta.
+Both of these have been significant pain points over the past year, based both on user and internal feedback. This shouldn't be too surprising, as the persistent storage APIs have never been significantly revised before, beyond introduction of the new `storage_path` option, and similarly the Checkpoint API is in beta.
 
 ### Should this change be within `ray` or outside?
 
@@ -25,7 +25,7 @@ main `ray` project. Changes are made to Ray Train and Tune.
 ### Required Reviewers
 The proposal will be open to the public, but please suggest a few experienced Ray contributors in this technical domain whose comments will help this proposal. Ideally, the list should include Ray committers.
 
-@mattdeng, @krfricke
+@matthewdeng, @krfricke
 
 ### Shepherd of the Proposal (should be a senior committer)
 To make the review process more productive, the owner of each proposal should identify a **shepherd** (should be a senior Ray committer). The shepherd is responsible for working with the owner and making sure the proposal is in good shape (with necessary information) before marking it as ready for broader review.
@@ -34,7 +34,7 @@ To make the review process more productive, the owner of each proposal should id
 
 ## User Story
 
-At a high level, the new user story for persistence will center around the recently introduced `storage_path` API.
+Persistence will center around the recently introduced `storage_path` option.
 
 ### Persistent trial directory
 
@@ -57,7 +57,7 @@ For example, this is how you could record a Torch checkpoint:
 
 Train will make a copy of the specified checkpoint data in the trial dir for persistence. The checkpoint data is managed by Train (e.g., Train may restore only the latest checkpoint or delete previous checkpoints to save space according to checkpoint policy).
 
-The files of the recorded checkpoint can be accessed via `result.checkpoint`. The `Checkpoint` object itself is a logical tuple of `(path, pyarrow.fs.FileSystem)`, which provides utility methods for easily reading the data and getting / setting arbitrary user metadata.
+The files of the recorded checkpoint can be accessed via `result.checkpoint`. The `Checkpoint` object itself is a logical tuple of `(path, pyarrow.fs.FileSystem)`. Users can also get and set arbitrary metadata to these checkpoints (e.g., preprocessor configs, model settings, etc), which will be recorded in a `metadata.json` file.
 
 Checkpoints can be recorded from multiple ranks. By default, only checkpoint data from rank zero is preserved. Checkpoints from all ranks can be retained via a `keep_all_ranks` option.
 
