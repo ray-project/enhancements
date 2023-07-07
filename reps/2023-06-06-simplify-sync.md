@@ -59,7 +59,7 @@ Train will make a copy of the specified checkpoint data in the trial dir for per
 
 The files of the recorded checkpoint can be accessed via `result.checkpoint`. The `Checkpoint` object itself is a logical tuple of `(path, pyarrow.fs.FileSystem)`. Users can also get and set arbitrary metadata to these checkpoints (e.g., preprocessor configs, model settings, etc), which will be recorded in a `metadata.json` file.
 
-Checkpoints can be recorded from multiple ranks. By default, only checkpoint data from rank zero is preserved. Checkpoints from all ranks can be retained via a `keep_all_ranks` option.
+Checkpoints can be recorded from multiple ranks. By default, only checkpoint data from rank zero is preserved. Data from all ranks can be retained via a `keep_all_ranks` option.
 
 ### FAQ
 
@@ -79,13 +79,13 @@ Checkpoints can be recorded from multiple ranks. By default, only checkpoint dat
 
 - What if I do not have NFS or cloud storage?
 
-	With the ubiquity of NFS+Cloud storage in 2023, Train no longer supports persistence for distributed experiments unless you specify a storage_path. You can provide a custom Arrow filesystem to support custom storage solutions.
+	Train no longer supports persistence for distributed experiments unless you specify a `storage_path`. You can provide a custom Arrow filesystem to support custom storage solutions.
 
 ## Open Questions
 
-For multi-rank checkpointing, should we consolidate outputs from multiple ranks into a single directory, retain the outputs in separate directories (e.g., `rank_{i}`), or provide options to support both?
+- For multi-rank checkpointing, should we consolidate outputs from multiple ranks into a single directory, retain the outputs in separate directories (e.g., `rank_{i}`), or provide options to support both?
 
-For backwards compatibility, should we provide a (slower, limited) head-node remote filesystem implementation?
+- For backwards compatibility, should we provide a (slower, limited) head-node remote filesystem implementation?
 
 ## Rollout Plan
 
@@ -93,7 +93,7 @@ For backwards compatibility, should we provide a (slower, limited) head-node rem
 
 This is a breaking change for users that do not already use NFS or cloud storage. For other users, the changes are for the most part limited to beta APIs (i.e., Checkpoint).
 
-We are evaluating the impact of deprecating head node storage by rolling the breaking change out early in Ray 2.6. This is to inform whether we should provide extended backwards compatibility.
+We are evaluating the impact of deprecating head node storage, by rolling the breaking change out early in Ray 2.6. This is to inform whether we should provide extended backwards compatibility.
 
 ### Timeline
 
@@ -102,7 +102,7 @@ We are evaluating the impact of deprecating head node storage by rolling the bre
 
 ## Examples:
 
-Please refer to the [prototype PR](https://github.com/ray-project/ray/pull/36969 for extended examples).
+Please refer to the prototype PR: https://github.com/ray-project/ray/pull/36969
 
 ## Test Plan and Acceptance Criteria
 
