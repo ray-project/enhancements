@@ -54,7 +54,7 @@ The proposal will be open to the public, but please suggest a few experienced Ra
 ### Shepherd of the Proposal (should be a senior committer)
 To make the review process more productive, the owner of each proposal should identify a **shepherd** (should be a senior Ray committer). The shepherd is responsible for working with the owner and making sure the proposal is in good shape (with necessary information) before marking it as ready for broader review.
 
-@pcmoritz
+@ericl
 
 ## Details of the API changes
 
