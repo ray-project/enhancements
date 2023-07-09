@@ -81,6 +81,18 @@ Checkpoints can be recorded from multiple ranks. By default, only checkpoint dat
 
 	Train no longer supports persistence for distributed experiments unless you specify a `storage_path`. You can provide a custom Arrow filesystem to support custom storage solutions.
 
+## Implementation
+
+You can find the prototype PR here: https://github.com/ray-project/ray/pull/36969
+
+While this REP is not covering how exactly we implement the new persistence path, I make a few recommendations based on the prototype:
+
+- We should logically consolidate the logic for syncing into a `StorageContext` class that is propagated everywhere. The idea should be the `StorageContext` is created on the driver, and passed to experiments, trials, and workers. We can fill out additional information as it is passed further (e.g., trial log dir, current checkpoint number). Centralizing our storage logic into one class makes it easier to unit test, and easier to make global changes without needing to update dozens of different files / various args scattered around the codebase, as we have today.
+
+- We shouldn't try to "detect" whether a path is NFS. Rather, we can verify the sync succeeded, e.g., by performing a test write to a `_valid` file on the driver, and raising an error on workers if this file is not seen. This is more robust and also handles edge cases around single node and autoscaling use cases.
+
+- It was easier to route around the legacy code and implement the new storage logic around `StorageContext`, rather than try to refactor the legacy code. I recommend we follow this pattern, guarding old vs new sync paths via a feature flag, trying as much as possible to not touch legacy code paths until we are ready to fully remove it.
+
 ## Open Questions
 
 - For multi-rank checkpointing, should we consolidate outputs from multiple ranks into a single directory, retain the outputs in separate directories (e.g., `rank_{i}`), or provide options to support both?
