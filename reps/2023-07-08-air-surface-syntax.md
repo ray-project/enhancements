@@ -11,6 +11,7 @@ libraries
 - Ray Data for batch inference and last mile data processing and ingestion,
 - Ray Train for machine learning training and
 - Ray Serve for model and application serving
+
 together.
 
 One piece of feedback we have frequently received from users is that they are confused how Ray AIR
@@ -18,6 +19,7 @@ relates to the individual libraries. In particular:
 - When should I use AIR's abstractions (e.g. should I use `BatchPredictor` or use Ray Data's map functionality,
 should I use `PredictorDeployment` or deploy my model with Ray Serve directly?) and
 - How does the `ray.air` namespace relate to `ray.data`, `ray.train` and `ray.serve`?
+
 The `ray.air` namespace both containing low level common utilities as well as highler level
 abstraction adds to this confusion. We have also learned that the higher level abstractions we
 originally introduced for Ray AIR become unneccessary and the same functionality can nicely be achieved
@@ -91,6 +93,8 @@ air.session.get_world_rank       -> train.get_context().get_world_rank
 air.session.get_local_rank       -> train.get_context().get_local_rank
 air.session.get_local_world_size -> train.get_context().get_local_world_size
 air.session.get_node_rank        -> train.get_context().get_node_rank
+
+del air
 ```
 
 These changes are ready to try out with https://github.com/ray-project/ray/pull/36706 and we encourage user feedback on the changes.
