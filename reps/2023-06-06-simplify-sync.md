@@ -8,13 +8,15 @@ Relatedly, simplify the Train `Checkpoint` API to also standardize on `pyarrow.f
 
 ### General Motivation
 
-The motivation for this change is two-fold.
+The motivation for this change is three-fold.
 
 First, it cuts down on the number of alternative options and implementations users have for persistent storage in Ray Train and Tune. This materially reduces the docs and examples (i.e., going from multiple pages of persistence-related docs to one page).
 
 Second, it reduces the implementation and API surface that the ML team has to maintain. Many of these storage abstractions were introduced in the initial years when Ray was created. At the time, filesystem abstractions for Python were less prevalent. Today, `pyarrow.fs` (in conjunction with fsspec) are industry standards for accessing remote storage, and Ray already has a hard dependency on pyarrow in Ray Data.
 
-Both of these have been significant pain points over the past year, based both on user and internal feedback. This shouldn't be too surprising, as the persistent storage APIs have never been significantly revised before, beyond introduction of the new `storage_path` option, and similarly the Checkpoint API is in beta.
+Third, with the growth of LLMs and other large models, we are seeing larger and larger checkpoints being used. This motivates spending more effort in cleaning up and hardening this critical path, and it may cause more pain for LLM users than for users for smaller models. Simplifying the design here also enables us to extend support for more advanced features such as multi-rank checkpointing withour incurring excessive technical debt.
+
+These three pain points have grown significantly over the past year, based both on user and internal feedback. This shouldn't be too surprising, as the persistent storage APIs have never been significantly revised before, beyond introduction of the new `storage_path` option, and similarly the Checkpoint API is in beta.
 
 ### Should this change be within `ray` or outside?
 
