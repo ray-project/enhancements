@@ -70,6 +70,7 @@ from ray import air, train
 
 air.session.report               -> train.report
 air.session.get_dataset_shard    -> train.get_dataset_shard
+air.session.get_checkpoint       -> train.get_checkpoint
 air.Checkpoint                   -> train.Checkpoint
 air.Result                       -> train.Result
 
@@ -82,7 +83,6 @@ air.config.ScalingConfig         -> train.ScalingConfig
 
 # Ray TrainContext methods:
 
-air.session.get_checkpoint       -> train.get_context().get_checkpoint
 air.session.get_experiment_name  -> train.get_context().get_experiment_name
 air.session.get_trial_name       -> train.get_context().get_trial_name
 air.session.get_trial_id         -> train.get_context().get_trial_id
