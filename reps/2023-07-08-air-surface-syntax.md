@@ -104,6 +104,46 @@ These changes are ready to try out with https://github.com/ray-project/ray/pull/
 We are likely going to remove `PredictorWrapper` and `PredictorDeployment` and migrate the examples to use Ray Serve deployments
 direcly, and we are also likely going to move `air.integrations` to `train.integrations`.
 
+For the `PredictorDeployment` removal, the user code will change from
+```python
+from ray import serve
+from ray.serve import PredictorDeployment
+from ray.train.xgboost import XGBoostPredictor
+
+# checkpoint = ...
+
+serve.run(
+    PredictorDeployment.options(name="XGBoostService").bind(
+        XGBoostPredictor, checkpoint, http_adapter=pandas_read_json
+    )
+)
+```
+to
+```python
+import pandas as pd
+from starlette.requests import Request
+from ray import serve
+from ray.train.xgboost import XGBoostPredictor
+
+# checkpoint = ...
+
+@serve.deployment
+class XGBoostService:
+    def __init__(self, checkpoint):
+        self.predictor = XGBoostPredictor.from_checkpoint(checkpoint)
+
+    async def __call__(self, http_request: Request) -> str:
+        input = await http_request.body()
+        data = pd.read_json(input.decode("utf-8"), **http_request.query_params)
+        return self.predictor.predict(data)
+
+serve.run(XGBoostService.bind(checkpoint))
+```
+
+This is almost as simple but a lot more explicit and can be easily adapted to
+different settings, and is more unified with the Ray Serve documentation
+and the way Ray Serve is typically used.
+
 ## Migration Plan
 
 We acknowledge that these kinds of API changes are very taxing on our users and we paid special attention that the migration can be done
