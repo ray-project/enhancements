@@ -102,7 +102,7 @@ These changes are ready to try out with https://github.com/ray-project/ray/pull/
 ## Open Questions
 
 We are likely going to remove `PredictorWrapper` and `PredictorDeployment` and migrate the examples to use Ray Serve deployments
-direcly, and we are also likely going to move `air.integrations` to `train.integrations` and tentatively the predictors to `ray.train`.
+direcly, and we are also likely going to move `air.integrations` to `train.integrations`.
 
 ## Migration Plan
 
