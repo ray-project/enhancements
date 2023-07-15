@@ -142,8 +142,8 @@ serve.run(XGBoostService.bind(checkpoint))
 ```
 
 This is almost as simple but a lot more explicit, removes the magic, and can
-be easily adapted to different settings, and is more unified with the Ray Serve
-documentation and the way Ray Serve is typically used.
+be easily adapted to different settings. Furthermore it is more unified with
+the Ray Serve documentation and the way Ray Serve is typically used.
 
 ## Migration Plan
 
