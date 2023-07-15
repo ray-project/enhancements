@@ -108,6 +108,7 @@ For the `PredictorDeployment` removal, the user code will change from
 ```python
 from ray import serve
 from ray.serve import PredictorDeployment
+from ray.serve.http_adapters import pandas_read_json
 from ray.train.xgboost import XGBoostPredictor
 
 # checkpoint = ...
@@ -140,9 +141,9 @@ class XGBoostService:
 serve.run(XGBoostService.bind(checkpoint))
 ```
 
-This is almost as simple but a lot more explicit and can be easily adapted to
-different settings, and is more unified with the Ray Serve documentation
-and the way Ray Serve is typically used.
+This is almost as simple but a lot more explicit, removes the magic, and can
+be easily adapted to different settings, and is more unified with the Ray Serve
+documentation and the way Ray Serve is typically used.
 
 ## Migration Plan
 
