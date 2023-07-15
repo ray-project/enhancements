@@ -133,7 +133,7 @@ class XGBoostService:
     def __init__(self, checkpoint):
         self.predictor = XGBoostPredictor.from_checkpoint(checkpoint)
 
-    async def __call__(self, http_request: Request) -> str:
+    async def __call__(self, http_request: Request):
         input = await http_request.body()
         data = pd.read_json(input.decode(), **http_request.query_params)
         return self.predictor.predict(data)
