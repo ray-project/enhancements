@@ -115,8 +115,7 @@ We are evaluating the impact of deprecating head node storage, by rolling the br
 ### Timeline
 
 - Ray 2.6: Head node sync is disabled and will raise an exception. It is possible to re-enable by setting a flag.
-- Ray 2.7: New checkpoint path is rolled out; legacy path still possible to fallback to via flag.
-- Ray 2.8: Gather user feedback and decide on removal of legacy code path.
+- Ray 2.7: New checkpoint path is rolled out; legacy code path removed (tentative).
 
 ## Examples:
 
