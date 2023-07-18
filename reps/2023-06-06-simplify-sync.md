@@ -60,7 +60,7 @@ For example, this is how you could record a Torch checkpoint:
 
 Train will take ownership of the specified checkpoint data, deleting the directory after the checkpoint upload finishes. The checkpoint data will then be managed by Train (e.g., Train may restore only the latest checkpoint or delete previous checkpoints to save space according to checkpoint policy).
 
-The files of the recorded checkpoint can be accessed via `result.checkpoint`. The `Checkpoint` object itself is a logical tuple of `(path, pyarrow.fs.FileSystem)`, and this tuple is immutable. Users can also get and set arbitrary metadata to these checkpoints (e.g., preprocessor configs, model settings, etc), which will be recorded in a `metadata.json` file.
+The files of the recorded checkpoint can be accessed via `result.checkpoint`. The `Checkpoint` object itself is a logical tuple of `(path, pyarrow.fs.FileSystem)`, and this tuple is immutable. Users can also get and set arbitrary metadata to these checkpoints (e.g., preprocessor configs, model settings, etc), which will be recorded in a `metadata.json` file. We enforce JSON format instead of pickle to ensure metadata is accessible across Python versions, etc, though users can manually pickle and store arbitrary data as values.
 
 The high level API of the Checkpoint class is as follows:
 
