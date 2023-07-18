@@ -62,6 +62,72 @@ Train will take ownership of the specified checkpoint data, deleting the directo
 
 The files of the recorded checkpoint can be accessed via `result.checkpoint`. The `Checkpoint` object itself is a logical tuple of `(path, pyarrow.fs.FileSystem)`, and this tuple is immutable. Users can also get and set arbitrary metadata to these checkpoints (e.g., preprocessor configs, model settings, etc), which will be recorded in a `metadata.json` file.
 
+The high level API of the Checkpoint class is as follows:
+
+```python
+class Checkpoint:
+    def __init__(self, path: str, filesystem: Optional[pyarrow.fs.FileSystem]):
+
+        # Public attributes.
+        self.path = path
+        self.filesystem = filesystem
+
+        # For de-dup optimization.
+        self.uuid = uuid.uuid4()
+
+        # Auto-resolve.
+        if not filesystem:
+            self.filesystem, self.path = pyarrow.fs.FileSystem.from_uri(path)
+
+    def get_metadata(self) -> Dict[str, Any]:
+        """Return the metadata dict stored with the checkpoint.
+
+        If no metadata is stored, an empty dict is returned."""
+        pass
+
+    def set_metadata(self, metadata: Dict[str, Any]) -> None:
+        """Overwrite the metadata stored with this checkpoint.
+
+        This will overwrite any existing metadata stored with this checkpoint.
+        """
+        pass
+
+    @staticmethod
+    def from_directory(path: Union[str, os.PathLike]) -> "Checkpoint":
+        """Create checkpoint object from a local directory.
+
+        This is a shorthand for constructing a checkpoint manually via
+        `Checkpoint(path, pyarrow.fs.LocalFileSystem())`.
+
+        Args:
+            path: Directory containing checkpoint data. The caller promises to
+                not delete the directory (gifts ownership of the directory to this
+                Checkpoint).
+
+        Returns:
+            Checkpoint: checkpoint object.
+        """
+        pass
+
+    def to_directory(self, path: Optional[str] = None) -> str:
+        """Write checkpoint data to directory.
+
+        Note: When this method is called concurrently by multiple processes on
+        the same original Checkpoint object, we deduplicate the data fetches by
+        the checkpoint uuid.
+
+        Args:
+            path: Target directory to restore data in. If not specified,
+                will create a temporary directory.
+
+        Returns:
+            str: Directory containing checkpoint data.
+        """
+        pass
+```
+
+We may introduce additional convenience APIs such as `as_directory()` or `update_metadata()`, which just wrap these high level APIs.
+
 ### Multi-rank checkpoints
 
 Checkpoints can be recorded from multiple ranks. By default, only checkpoint data from rank zero is preserved. Data from all ranks can be retained via a `keep_all_ranks` option. Train will merge checkpoint data from all ranks into a single directory for the checkpoint number. The reason is this: users can always namespace their files/dirs by rank by the `train.context.world_rank` manually, so there isn't any reason why Train should do it for them. In fact, certain frameworks such as Lightning assume merged directories and could break if we enforced per-rank subdirectories.
