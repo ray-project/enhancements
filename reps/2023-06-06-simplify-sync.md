@@ -85,11 +85,15 @@ class Checkpoint:
         If no metadata is stored, an empty dict is returned."""
         pass
 
-    def set_metadata(self, metadata: Dict[str, Any]) -> None:
-        """Overwrite the metadata stored with this checkpoint.
+    def update_metadata(self, metadata: Dict[str, Any]) -> None:
+        """Update the metadata stored with this checkpoint.
 
-        This will overwrite any existing metadata stored with this checkpoint.
+        The values of keys that already exist will be overwritten.
         """
+        pass
+
+    def reset_metadata(self, metadata: Dict[str, Any]) -> None:
+        """Overwrite the entire metadata with this dict."""
         pass
 
     @staticmethod
@@ -126,7 +130,7 @@ class Checkpoint:
         pass
 ```
 
-We may introduce additional convenience APIs such as `as_directory()` or `update_metadata()`, which just wrap these high level APIs.
+We may introduce additional convenience APIs such as `as_directory()`, which just wrap these high level APIs.
 
 Note that the Checkpoint object is pretty simple and is a thin wrapper around a `(path, filesystem)` tuple. We explicitly do not want any framework-specific features in Checkpoint (e.g., framework-specific accessors or framework-specific subclasses). This should make it lightweight to understand and maintain.
 
