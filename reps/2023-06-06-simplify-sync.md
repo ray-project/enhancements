@@ -128,6 +128,8 @@ class Checkpoint:
 
 We may introduce additional convenience APIs such as `as_directory()` or `update_metadata()`, which just wrap these high level APIs.
 
+Note that the Checkpoint object is pretty simple and is a thin wrapper around a `(path, filesystem)` tuple. We explicitly do not want any framework-specific features in Checkpoint (e.g., framework-specific accessors or framework-specific subclasses). This should make it lightweight to understand and maintain.
+
 ### Multi-rank checkpoints
 
 Checkpoints can be recorded from multiple ranks. By default, only checkpoint data from rank zero is preserved. Data from all ranks can be retained via a `keep_all_ranks` option. Train will merge checkpoint data from all ranks into a single directory for the checkpoint number. The reason is this: users can always namespace their files/dirs by rank by the `train.context.world_rank` manually, so there isn't any reason why Train should do it for them. In fact, certain frameworks such as Lightning assume merged directories and could break if we enforced per-rank subdirectories.
