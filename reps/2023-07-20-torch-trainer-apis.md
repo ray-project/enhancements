@@ -117,29 +117,21 @@ With this, the user can directly interact with the Lightning interface, and is a
 
 ```python
 import lightning
+import ray.train.lightning
 from ray.train.torch import TorchTrainer
-from ray.train.lightning import (
-    get_devices, 
-    prepare_trainer,
-    RayDDPStrategy, 
-    RayEnvironment, 
-    RayModelCheckpoint
-)
 
 def train_func(config):
 
     ...
 
-    devices = get_devices()
-    strategy = RayDDPStrategy()
-    environment = RayEnvironment()
-    checkpoint_callback = RayModelCheckpoint()
+    devices = ray.train.lightning.get_devices()
+    strategy = ray.train.lightning.RayDDPStrategy()
+    environment = ray.train.lightning.RayEnvironment()
 
     lightning_trainer = lightning.Trainer(
         devices=devices,
         strategy=strategy,
         plugins=[environment],
-        callbacks=[checkpoint_callback],
         **trainer_kwargs
     )
     ray.train.lightning.prepare_trainer(lightning_trainer)
@@ -193,13 +185,13 @@ With this, the user is able define their training logic to use additional functi
 
 ```python
 import transformers
+import ray.train.huggingface.transformers
 from ray.train.torch import TorchTrainer
-from ray.train.huggingface.transformers import prepare_trainer
 
 def train_func(config):
     ...
     transformers_trainer = transformers.Trainer(**trainer_kwargs)
-    prepare_trainer(transformers_trainer)
+    ray.train.huggingface.transformers.prepare_trainer(transformers_trainer)
     trainer.train()
 
 trainer = TorchTrainer(
