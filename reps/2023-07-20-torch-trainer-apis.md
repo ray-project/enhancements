@@ -58,14 +58,54 @@ trainer = TorchTrainer(train_func, ...)
 trainer.fit()
 ```
 
+**Reporting & Checkpointing:**
+
+A critical part of this API change is ensuring that the user can report metrics as well as save and load checkpoints with their desired framework. In [[REP] Consolidated persistence API for Ray Train/Tune #35](https://github.com/ray-project/enhancements/pull/35), we introduce a simpler API for Checkpoints in which Ray Train will treat the contents of the Checkpoint as an opaque directory. As part of this current REP, we will show how we can utilize this new API along with the frameworks' native checkpointing APIs to fully support checkpointing, and remove the need for the existing `<Framework>Checkpoint` APIs:
+
+- [TorchCheckpoint](https://docs.ray.io/en/releases-2.6.0/train/api/doc/ray.train.torch.TorchCheckpoint.html)
+- [LightningCheckpoint](https://docs.ray.io/en/releases-2.6.0/train/api/doc/ray.train.lightning.LightningCheckpoint.html)
+- [TransformersCheckpoint](https://docs.ray.io/en/releases-2.6.0/train/api/doc/ray.train.huggingface.transformers.TransformersCheckpoint.html)
+
+To do this we rely on a few key utilty APIs.
+```python
+def train_func():
+    # Restore checkpoint.
+    checkpoint = ray.train.get_context().get_checkpoint()
+    ...
+    # Create checkpoint.
+    checkpoint = ray.train.Checkpoint.from_directory(...)
+    ray.train.report(metrics, checkpoint)
+```
+
+As an example, we can modify a Torch training script that is run with the `TorchTrainer` as follows:
+```python
+CHECKPOINT_FILE_NAME = "model.pt"
+
+def train_func():
+    # Restore checkpoint.
+    checkpoint = ray.train.get_context().get_checkpoint()
+    if checkpoint:
+        checkpoint_dir = checkpoint.to_directory()
+        checkpoint_path = Path(checkpoint_dir) / CHECKPOINT_FILE_NAME
+        checkpoint_data = torch.load(checkpoint_path)
+    ...
+    # Create checkpoint.
+    temp_dir = tempfile.TemporaryDirectory()
+    checkpoint_path = Path(temp_dir) / CHECKPOINT_FILE_NAME
+    torch.save(checkpoint_data, checkpoint_path)
+    checkpoint = ray.train.Checkpoint.from_directory(temp_dir)
+    ray.train.report(metrics, checkpoint)
+```
+
 In the following sections, we show how this change will be reflected each of the individual frameworks by comparing:
 1. A (minimal) training script for the framework.
 2. The training script rewritten using the current Ray Train APIs.
 3. The training script rewritten using the proposed Ray Train APIs.
+   1. Additionally, we show how to report metrics and handle checkpoints with Ray Train.
 
 ### Lightning
 
-**Lightning:**
+#### Lightning
 ```python 
 import lightning
 
@@ -76,7 +116,7 @@ trainer = lightning.Trainer(**trainer_kwargs)
 trainer.fit(MyLightningModule(**module_kwargs), **fit_kwargs)
 ```
 
-**`LightningTrainer` (Current):**
+#### `LightningTrainer` (Current)
 
 In the existing `LightningTrainer`, we expose a `LightningConfigBuilder` that allows the user to configure the `lightning.Trainer` in a way that is compatible with Ray Train. While similar to the native Lightning interface, this requires a non-trivial amount of rewriting of the user's training code and does not provide a strict 1-1 mapping.
 
@@ -103,7 +143,7 @@ trainer = LightningTrainer(
 trainer.fit()
 ```
 
-**`TorchTrainer` (Proposed):**
+#### `TorchTrainer` (Proposed):
 
 In this proposal, we provide a few common utilties that the user can use directly in their training code to configure the `Trainer` object.
 
@@ -111,7 +151,6 @@ In this proposal, we provide a few common utilties that the user can use directl
 - `prepare_trainer` - Validates that the `Trainer` object is configured correctly to be compatible with Ray Train.
 - `RayDDPStrategy`, `RayFSDPStrategy`, `RayDeepSpeedStrategy` - `LightningStrategy`s for different training strategies that are compatible with Ray Train.
 - `RayEnvironment` - A `LightningEnvironment` that is compatible with Ray Train.
-- `RayModelCheckpoint` - A `LightningCallback` that configures the `Trainer` to report metrics and checkpoints to Ray Train.
 
 With this, the user can directly interact with the Lightning interface, and is able define their training logic to use additional functionality such as `lightning.Trainer.test()`.
 
@@ -145,9 +184,35 @@ trainer = TorchTrainer(
 trainer.fit()
 ```
 
+**Reporting & Checkpointing:**
+
+For Lightning, we introduce a `RayTrainReportCallback`(`Callback`) that will report metrics and checkpoints to Ray Train.
+
+```python
+from lightning.callbacks.pytorch import Checkpoint
+
+CHECKPOINT_FILE_NAME = "checkpoint.ckpt"
+
+class RayTrainReportCallback(Checkpoint):
+    # Define logic for calling `ray.train.report` as a Callback.
+    ...
+
+def train_func():
+    # Create checkpoint.
+    report_checkpoint_callback = RayTrainReportCallback()
+    trainer = Trainer(..., callbacks=[report_checkpoint_callback])
+    # Restore checkpoint.
+    checkpoint_path = None
+    checkpoint = ray.train.get_context().get_checkpoint()
+    if checkpoint:
+        checkpoint_dir = checkpoint.to_directory()
+        checkpoint_path = Path(checkpoint_dir) / CHECKPOINT_FILE_NAME
+    trainer.fit(model, ckpt_path=checkpoint_path, ...)
+```
+
 ### HuggingFace Transformers
 
-**Transformers:**
+#### Transformers
 ```python 
 import transformers
 
@@ -177,7 +242,7 @@ trainer = TransformersTrainer(
 trainer.fit()
 ```
 
-**`TorchTrainer` (Proposed):**
+#### `TorchTrainer` (Proposed)
 
 In this proposal, we provide a `prepare_trainer` utility that the user can use directly in their training loop code to validate that the `Trainer` object is configured correctly to be compatible with Ray Train.
 
@@ -201,6 +266,32 @@ trainer = TorchTrainer(
 trainer.fit()
 ```
 
+**Reporting & Checkpointing:**
+
+For Transformers, we introduce a `RayTrainReportCallback`(`TrainerCallback`) that will report metrics and checkpoints to Ray Train.
+
+```python
+from transformers.trainer_callback import TrainerCallback
+
+class RayTrainReportCallback(TrainerCallback):
+    # Define logic for calling `ray.train.report` as a Callback.
+    ...
+
+def train_func():
+    ...
+    trainer = Trainer(...)
+    # Create checkpoint.
+    report_checkpoint_callback = RayTrainReportCallback()
+    trainer.add_callback(report_checkpoint_callback)
+    # Restore checkpoint.
+    checkpoint_path = None
+    checkpoint = ray.train.get_context().get_checkpoint()
+    if checkpoint:
+        checkpoint_dir = checkpoint.to_directory()
+        checkpoint_path = Path(checkpoint_dir) / CHECKPOINT_FILE_NAME
+    trainer.train(resume_from_checkpoint=checkpoint_path)
+```
+
 ### HuggingFace Accelerate
 
 At its core, HuggingFace Accelerate can be used by configuring and instantiating an `Accelerator` object in your training code.
@@ -211,7 +302,7 @@ HuggingFace Accelerate also provides two **optional** CLI commands:
 
 The current `AccelerateTrainer` provides functionality similar to `accelerate launch`, in which it will read the generated configuration file and apply it to the `Accelerator`. However, as Ray Train already provides a distributed launching mechanism with its own configurability, we find diminishing value in parsing the configuration file simply for configuring the `Accelerator`. Additionally, it has been a common misconception that the user _must_ use `AccelerateTrainer` in order to use Accelerate. As such, in this proposal we simplify the story by recommending that users configure the `Accelerator` directly in their `TorchTrainer` training code.
 
-**Accelerate:**
+#### Accelerate
 ```python
 from accelerate import Accelerator
 
@@ -219,7 +310,7 @@ accelerator = Accelerator(**accelerator_kwargs)
 ...
 ```
 
-**`AccelerateTrainer` (Current):**
+#### `AccelerateTrainer` (Current)
 
 ```bash
 ! accelerate config
@@ -241,7 +332,7 @@ trainer = AccelerateTrainer(
 trainer.fit()
 ```
 
-**`TorchTrainer` (Proposed):**
+#### `TorchTrainer` (Proposed)
 
 In this proposal, we recommend configuring the `Accelerator` object directly in the training code, exactly as you would if you were not using Ray Train.
 
@@ -259,6 +350,11 @@ trainer = TorchTrainer(
 )
 trainer.fit()
 ```
+
+
+**Reporting & Checkpointing:**
+
+This is done in the same way as the aforementioned Torch example.
 
 ## Compatibility, Deprecation, and Migration Plan
 
