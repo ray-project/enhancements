@@ -19,13 +19,14 @@ While this pattern makes it very obvious to the user that Ray Train provides an 
 1. There is overhead for the user to learn and use these APIs.
     1. They are all different from each other.
     2. They are different from their corresponding framework.
+    3. The user cannot see the internal training loop, which makes it hard to implement and debug their code.
 2. The `LightningTrainer` and `TransformersTrainer` APIs are opionated and may not allow the user to fully express their desired training logic (e.g. validation and testing).
 
 This proposal explores the idea of centralizing on a single `TorchTrainer` as the single way running training code for PyTorch-based frameworks in a distributed fashion.
 
 This change is motivated by the following goals:
 1. **Transparency:** Enables users to convert existing code to use Ray Train with minimal changes.
-2. **Flexibility:** Allows users to easily leverage the full suite of functionality of their framework (e.g. `lightning.Trainer.test()`) or even convert their code between frameworks (e.g. Transformers → Accelerate).
+2. **Flexibility:** Allows users to easily leverage the full suite of functionality of their framework (e.g. `lightning.Trainer.test()`, `transformers.Trainer.predict()`) or even convert their code between frameworks (e.g. Transformers → Accelerate).
 3. **Simplicity:** Reduces the surface area of the Ray Train interface, lowering overhead for both users and developers.
 
 ### Should this change be within `ray` or outside?
@@ -242,6 +243,7 @@ def train_func(config):
 
 trainer = AccelerateTrainer(
     train_loop_per_worker=train_func,
+    accelerate_config=accelerate_config,
     ...
 )
 trainer.fit()
