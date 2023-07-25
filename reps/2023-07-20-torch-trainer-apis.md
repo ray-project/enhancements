@@ -163,14 +163,10 @@ def train_func(config):
 
     ...
 
-    devices = ray.train.lightning.get_devices()
-    strategy = ray.train.lightning.RayDDPStrategy()
-    environment = ray.train.lightning.RayEnvironment()
-
     lightning_trainer = lightning.Trainer(
-        devices=devices,
-        strategy=strategy,
-        plugins=[environment],
+        devices=ray.train.lightning.get_devices(),
+        strategy=ray.train.lightning.RayDDPStrategy(),
+        plugins=[ray.train.lightning.RayEnvironment()],
         **trainer_kwargs
     )
     lightning_trainer = ray.train.lightning.prepare_trainer(lightning_trainer)
