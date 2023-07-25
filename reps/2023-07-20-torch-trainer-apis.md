@@ -148,7 +148,7 @@ trainer.fit()
 In this proposal, we provide a few common utilties that the user can use directly in their training code to configure the `Trainer` object.
 
 - `get_devices` - Returns a list of devices to use for training.
-- `prepare_trainer` - Validates that the `Trainer` object is configured correctly to be compatible with Ray Train.
+- `prepare_trainer` - Validates and/or makes modifications so that the `Trainer` object is configured correctly to be compatible with Ray Train.
 - `RayDDPStrategy`, `RayFSDPStrategy`, `RayDeepSpeedStrategy` - `LightningStrategy`s for different training strategies that are compatible with Ray Train.
 - `RayEnvironment` - A `LightningEnvironment` that is compatible with Ray Train.
 
@@ -173,7 +173,7 @@ def train_func(config):
         plugins=[environment],
         **trainer_kwargs
     )
-    ray.train.lightning.prepare_trainer(lightning_trainer)
+    lightning_trainer = ray.train.lightning.prepare_trainer(lightning_trainer)
     lightning_trainer.fit(MyLightningModule(**module_kwargs), **fit_kwargs)
 
 
@@ -244,7 +244,7 @@ trainer.fit()
 
 #### `TorchTrainer` (Proposed)
 
-In this proposal, we provide a `prepare_trainer` utility that the user can use directly in their training loop code to validate that the `Trainer` object is configured correctly to be compatible with Ray Train.
+In this proposal, we provide a `prepare_trainer` utility that the user can use directly in their training loop code to validate and/or make modifications so that the `Trainer` object is configured correctly to be compatible with Ray Train.
 
 With this, the user is able define their training logic to use additional functionality such as `transformers.Trainer.evaluate()`.
 
@@ -256,8 +256,8 @@ from ray.train.torch import TorchTrainer
 def train_func(config):
     ...
     transformers_trainer = transformers.Trainer(**trainer_kwargs)
-    ray.train.huggingface.transformers.prepare_trainer(transformers_trainer)
-    trainer.train()
+    transformers_trainer = ray.train.huggingface.transformers.prepare_trainer(transformers_trainer)
+    transformers_trainer.train()
 
 trainer = TorchTrainer(
     train_loop_per_worker=train_func,
@@ -364,6 +364,9 @@ Ray 2.7:
 - Mark `AccelerateTrainer`, `TransformersTrainer`, and `LightningTrainer` APIs as deprecated.
 
 Ray 2.8:
+- Raise error from `AccelerateTrainer`, `TransformersTrainer`, and `LightningTrainer` APIs.
+
+Ray 2.9:
 - Remove `AccelerateTrainer`, `TransformersTrainer`, and `LightningTrainer` APIs.
 
 ## Test Plan and Acceptance Criteria
