@@ -70,7 +70,7 @@ To do this we rely on a few key utilty APIs.
 ```python
 def train_func():
     # Restore checkpoint.
-    checkpoint = ray.train.get_context().get_checkpoint()
+    checkpoint = ray.train.get_checkpoint()
     ...
     # Create checkpoint.
     checkpoint = ray.train.Checkpoint.from_directory(...)
@@ -83,7 +83,7 @@ CHECKPOINT_FILE_NAME = "model.pt"
 
 def train_func():
     # Restore checkpoint.
-    checkpoint = ray.train.get_context().get_checkpoint()
+    checkpoint = ray.train.get_checkpoint()
     if checkpoint:
         checkpoint_dir = checkpoint.to_directory()
         checkpoint_path = Path(checkpoint_dir) / CHECKPOINT_FILE_NAME
@@ -199,7 +199,7 @@ def train_func():
     trainer = Trainer(..., callbacks=[report_checkpoint_callback])
     # Restore checkpoint.
     checkpoint_path = None
-    checkpoint = ray.train.get_context().get_checkpoint()
+    checkpoint = ray.train.get_checkpoint()
     if checkpoint:
         checkpoint_dir = checkpoint.to_directory()
         checkpoint_path = Path(checkpoint_dir) / CHECKPOINT_FILE_NAME
@@ -281,7 +281,7 @@ def train_func():
     trainer.add_callback(report_checkpoint_callback)
     # Restore checkpoint.
     checkpoint_path = None
-    checkpoint = ray.train.get_context().get_checkpoint()
+    checkpoint = ray.train.get_checkpoint()
     if checkpoint:
         checkpoint_dir = checkpoint.to_directory()
         checkpoint_path = Path(checkpoint_dir) / CHECKPOINT_FILE_NAME
