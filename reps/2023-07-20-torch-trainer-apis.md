@@ -150,7 +150,7 @@ In this proposal, we provide a few common utilties that the user can use directl
 - `get_devices` - Returns a list of devices to use for training.
 - `prepare_trainer` - Validates and/or makes modifications so that the `Trainer` object is configured correctly to be compatible with Ray Train.
 - `RayDDPStrategy`, `RayFSDPStrategy`, `RayDeepSpeedStrategy` - `LightningStrategy`s for different training strategies that are compatible with Ray Train.
-- `RayEnvironment` - A `LightningEnvironment` that is compatible with Ray Train.
+- `RayLightningEnvironment` - A `LightningEnvironment` that is compatible with Ray Train.
 
 With this, the user can directly interact with the Lightning interface, and is able define their training logic to use additional functionality such as `lightning.Trainer.test()`.
 
@@ -166,7 +166,7 @@ def train_func(config):
     lightning_trainer = lightning.Trainer(
         devices=ray.train.lightning.get_devices(),
         strategy=ray.train.lightning.RayDDPStrategy(),
-        plugins=[ray.train.lightning.RayEnvironment()],
+        plugins=[ray.train.lightning.RayLightningEnvironment()],
         **trainer_kwargs
     )
     lightning_trainer = ray.train.lightning.prepare_trainer(lightning_trainer)
