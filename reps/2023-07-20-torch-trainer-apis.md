@@ -97,11 +97,41 @@ def train_func():
     ray.train.report(metrics, checkpoint)
 ```
 
+
+**Data Ingestion:**
+
+Another key aspect of this API change is ensuring that the user can easily ingest data into their training code. Ray Train provides an interface for passing in Ray Data `Dataset`s which can be sharded and accessed from each worker. In the existing APIs, the passing of the `Dataset` to the training framework is handled internally and not exposed to the user. In the proposal, we show how the user can directly access the `Dataset` from their training code and ingest it with their training framework.
+
+This is done with the following utility APIs:
+```python
+def train_func():
+    train_dataset = ray.train.get_dataset_shard("train")
+
+dataset = ray.data.read_parquet(...).map_batches(...)
+trainer = TorchTrainer(..., datasets={"train": dataset})
+```
+
+As an example, we show how to do this with a Torch training script with the `TorchTrainer`:
+```python
+def train_func():
+    train_dataset_shard = ray.train.get_dataset_shard("train")
+
+    for epoch in num_epochs:
+        for batch in train_dataset_shard.iter_torch_batches(...):
+            model(batch)
+
+train_dataset = ray.data.read_parquet(...).map_batches(...)
+trainer = TorchTrainer(train_func, datasets={"train": train_dataset})
+trainer.fit()
+```
+
+
 In the following sections, we show how this change will be reflected each of the individual frameworks by comparing:
 1. A (minimal) training script for the framework.
 2. The training script rewritten using the current Ray Train APIs.
 3. The training script rewritten using the proposed Ray Train APIs.
-   1. Additionally, we show how to report metrics and handle checkpoints with Ray Train.
+   1. How to report metrics and handle checkpoints with Ray Train.
+   2. How to ingest data with Ray Train and Ray Data.
 
 ### Lightning
 
@@ -206,6 +236,35 @@ def train_func():
     trainer.fit(model, ckpt_path=checkpoint_path, ...)
 ```
 
+**Data Ingestion:**
+
+Lightning expects an `Iterable` of tensor batches. We can define a `RayDataIterableDataset` and convert it to a `torch.util.data.DataLoader`.
+
+```python
+from torch.utils.data import IterableDataset, DataLoader
+
+class RayDataIterableDataset(IterableDataset):
+    def __init__(self, dataset):
+        self.dataset = dataset
+
+    def __iter__(self):
+        return self.dataset.iter_rows()
+
+def train_func():
+    ...
+    train_dataset_shard = ray.train.get_dataset_shard("train")
+    train_dataloader = DataLoader(RayDataIterableDataset(train_dataset_shard))
+    val_dataset = ray.train.get_dataset_shard("val")
+    val_dataloader = DataLoader(RayDataIterableDataset(val_dataset))
+    lightning_trainer.fit(..., train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
+
+
+train_dataset = ray.data.read_parquet(...).map_batches(...)
+val_dataset = ray.data.read_parquet(...).map_batches(...)
+trainer = ray.train.torch.TorchTrainer(train_func, datasets={"train": train_dataset, "val": val_dataset})
+trainer.fit()
+```
+
 ### HuggingFace Transformers
 
 #### Transformers
@@ -288,6 +347,33 @@ def train_func():
     trainer.train(resume_from_checkpoint=checkpoint_path)
 ```
 
+**Data Ingestion:**
+
+Transformers expects a `torch.util.data.Dataset` so we can directly create a `RayDataIterableDataset`.
+
+```python
+from torch.utils.data import IterableDataset
+
+class RayDataIterableDataset(IterableDataset):
+    def __init__(self, dataset):
+        self.dataset = dataset
+
+    def __iter__(self):
+        return self.dataset.iter_rows()
+
+def train_func():
+    train_dataset_shard = ray.train.get_dataset_shard("train")
+    train_dataset = RayDataIterableDataset(train_dataset_shard)
+    eval_dataset = ray.train.get_dataset_shard("eval")
+    eval_dataset = RayDataIterableDataset(val_dataset)
+    transformers_trainer = transformers.Trainer(..., train_dataset=train_dataset, eval_dataset=eval_dataset)
+    transformers_trainer.train()
+
+train_dataset = ray.data.read_parquet(...).map_batches(...)
+eval_dataset = ray.data.read_parquet(...).map_batches(...)
+trainer = ray.train.torch.TorchTrainer(train_func, datasets={"train": train_dataset, "eval": eval_dataset})
+```
+
 ### HuggingFace Accelerate
 
 At its core, HuggingFace Accelerate can be used by configuring and instantiating an `Accelerator` object in your training code.
@@ -349,6 +435,10 @@ trainer.fit()
 
 
 **Reporting & Checkpointing:**
+
+This is done in the same way as the aforementioned Torch example.
+
+**Data Ingestion:**
 
 This is done in the same way as the aforementioned Torch example.
 
