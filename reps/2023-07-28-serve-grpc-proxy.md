@@ -42,10 +42,19 @@ the new gRPC port to serve with gRPC.
 @edoakes
 
 ## Design and Architecture
+### High Level Description
+- We will serve gRPC from the same actors that currently serve HTTP
+- Users will call gRPC services using a Serve-provided schema that embeds
+  their own custom messages using the gRPC Any proto type
+- Client will receive a Serve-provided schema that embeds user's own custom 
+  response using the gRPC Any proto type
+- gRPC deployments will have full feature parity with HTTP, including 
+  streaming responses, model multiplexing, and model composition support
+
 
 ### Example code
 #### Ray Serve Protobuf API
-```
+```proto
 message RayServeRequest {
   google.protobuf.Any user_request = 1;
   string application = 2;
@@ -65,7 +74,7 @@ service RayServeService {
 ```
 
 #### Unary gRPC example
-```
+```python
 # test_deployment.py
 
 from ray import serve
@@ -74,7 +83,7 @@ from ray import serve
 from ray.serve.generated.serve_pb2 import UserDefinedMessage, UserDefinedResponse
 
 @serve.deployment
-class GrpcDeployment:
+class gRPCDeployment:
     def __call__(self, user_message: UserDefinedMessage) -> UserDefinedResponse:
         greeting = f"Hello {user_message.name} from {user_message.foo}"
         num_x2 = user_message.num * 2
@@ -85,10 +94,10 @@ class GrpcDeployment:
         return user_response
 
 
-g = GrpcDeployment.options(name="grpc-deployment").bind()
+g = gRPCDeployment.options(name="grpc-deployment").bind()
 ```
 
-```
+```python
 # test_client.py
 
 import grpc
@@ -134,7 +143,7 @@ print("Output num_x2 field:", test_out.num_x2)
 ```
 
 #### Streaming gRPC example
-```
+```python
 # test_deployment.py
 
 import time
@@ -146,7 +155,7 @@ from ray.serve.generated.serve_pb2 import UserDefinedMessage, UserDefinedRespons
 
 
 @serve.deployment
-class GrpcDeploymentStreamingResponse:
+class gRPCDeploymentStreamingResponse:
   def __call__(self, user_request: UserDefinedMessage) -> Generator[UserDefinedResponse, None, None]:
     for i in range(10):
       greeting = f"{i}: Hello {user_request.name} from {user_request.foo}"
@@ -160,12 +169,12 @@ class GrpcDeploymentStreamingResponse:
       time.sleep(0.1)
 
 
-g3 = GrpcDeploymentStreamingResponse.options(
+g2 = gRPCDeploymentStreamingResponse.options(
   name="grpc-deployment-streaming-response"
 ).bind()
 ```
 
-```
+```python
 # test_client.py
 
 import grpc
@@ -227,7 +236,7 @@ HTTP and gRPC proxies
   - Setup request context and handle based on the ASGI `Scope` (headers)
   - Methods to process request and consume and return the responses in ASGI
     `Send` object
-- `GRPCProxy` is a subclass from `GenericProxy` includes specific implementations of
+- `gRPCProxy` is a subclass from `GenericProxy` includes specific implementations of
   - gRPC entrypoints one for unary and another for streaming. gRPC requires a
     predefined schema (input and output) for each method. The only difference between
     these two methods are the return type being a unary object or stream object.
@@ -247,14 +256,14 @@ HTTP and gRPC proxies
 ![serve_data_flow_chart](https://docs.google.com/drawings/d/e/2PACX-1vTtg5xhPRvzghhNuOsFCPCllrWWZwVSqEGVpL3xd3ggTiFSKquW4x0sEmEjT3hsDvijmEo0ZOTiTVJO/pub?w=1527&h=866)
 - HTTP clients continue to send requests through `HTTPProxy` using ASGI protocol.
   `HTTPProxy` will return the response in the ASGI `Send` object
-- gRPC clients send predefined protobuf `RayServeRequest` to the `GRPCProxy`.
-  `GRPCProxy` will return back a predefined protobuf `RayServeResponse` object.
+- gRPC clients send predefined protobuf `RayServeRequest` to the `gRPCProxy`.
+  `gRPCProxy` will return back a predefined protobuf `RayServeResponse` object.
   - `RayServeRequest` contains `user_request` as Any protobuf to pass to the replicas,
     `application` for which application to route to, `request_id` for tracking
     the request, and `multiplexed_model_id` for doing model multiplexing
  - `RayServeResponse` contains `user_response` as Any protobuf to return to the client
    and `request_id` for tracking the request
-- The rest are existing code besides added a new `GRPCRequest` object to be used
+- The rest are existing code besides added a new `gRPCRequest` object to be used
   in place of `StreamingHTTPRequest` object in `RayServeHandle` and `Router`
 
 ### Change Details 
@@ -263,7 +272,7 @@ You can find the prototype PR here: [ray-project/ray#37310](https://github.com/r
 #### Proxy
 - `GenericProxy` is refactored from `HTTPProxy`. It includes only the common variables
   and methods used by both proxies. It served as the parent class for both `HTTPProxy`
-  and `GRPCProxy` to inherit from.
+  and `gRPCProxy` to inherit from.
   - `proxy_request()` method is refactored as an entrypoint for both protocols to use.
     It contains all the existing GA logics we implemented for HTTP proxy previously.
     Input will be a new `ServeRequest` type and output will be a new `ServeResponse`
@@ -282,7 +291,7 @@ You can find the prototype PR here: [ray-project/ray#37310](https://github.com/r
   - `setup_request_context_and_handle()` is based on the ASGI `Scope` wrapped in
     the `ServeRequest` object
   - `send_request_to_replica_streaming()` does not need to change
-- `GRPCProxy` is a subclass from `GenericProxy`.
+- `gRPCProxy` is a subclass from `GenericProxy`.
   - `Predict()` is the entrypoint for unary gRPC requests. It takes a protobuf
     `RayServeRequest` object and returns a protobuf `RayServeResponse` object.
     It wraps the input into a `ServeRequest` object and calls `proxy_request()`
@@ -294,16 +303,16 @@ You can find the prototype PR here: [ray-project/ray#37310](https://github.com/r
     `send_request_to_replica_streaming()` will handle request and return the
     response as protobuf `RayServeResponse` object or yield the result based on
     the stream flag
-- `HTTPProxyActor` will be changed to start both `HTTPProxy` and `GRPCProxy`.
-  We have the choice to always start `GRPCProxy` on the side of `HTTPProxy` or
-  setup with [GRPCConfigs](#GRPCConfigs) follow up
+- `HTTPProxyActor` will be changed to start both `HTTPProxy` and `gRPCProxy`.
+  We have the choice to always start `gRPCProxy` on the side of `HTTPProxy` or
+  setup with [gRPCConfigs](#gRPCConfigs) follow up
 - `LongestPrefixRouter` to add a new method `match_target()` to help gRPC look up for
   the routes from the application name
 
 #### Handle and Router
 New flag `serve_grpc_request` is added to the `HandleOptions` and to the
 `RequestMetadata` to signal to the replicas when it’s a gRPC request. This flag
-is boolean defaulting to false. It's only set when `GRPCProxy` is setting up the
+is boolean defaulting to false. It's only set when `gRPCProxy` is setting up the
 handle.
 
 #### Replica
@@ -313,7 +322,7 @@ handle.
   flag is set true in `handle_request()` and in `handle_request_streaming()`
 
 #### Data Models
-- `GRPCRequest` is added to replace `StreamingHTTPRequest` in `RayServeHandle`
+- `gRPCRequest` is added to replace `StreamingHTTPRequest` in `RayServeHandle`
   and `Router` to be used for gRPC requests. It contains a `grpc_user_request`
   field to store the byte input for the replica and a `grpc_proxy_handle` field
   to store the ray serve handle to be used for gRPC requests.
@@ -335,7 +344,7 @@ handle.
 - `ASGIServeRequest` is a subclass of `ServeRequest` used by `HTTPProxy`.
   It contains the implementations to extract attributes from ASGI input objects for
   sending requests to the replica
-- `GRPCServeRequest` is a subclass of `ServeRequest` used by `GRPCProxy`.
+- `gRPCServeRequest` is a subclass of `ServeRequest` used by `gRPCProxy`.
   It contains the implementations to extract attributes from gRPC input objects
   for sending requests to the replica
 - `ServeResponse` is a new data model served as the output of `proxy_request()`
@@ -351,6 +360,10 @@ change the deployment and client to use gRPC.
 
 #### Docs
 We will add new docs and code examples on how to use gRPC proxy.
+
+#### Dependencies
+We previously implemented the direct ingress with `gRPCIngress`. The new gRPC
+will We will need to include gRPC library to Serve's default libraries
 
 ## Compatibility, Deprecation, and Migration Plan
 Everything should be backward compatible. All existing HTTP code path are all remain
@@ -369,9 +382,9 @@ favor of the new gRPC proxy. No migration plan is needed for this feature.
 - Documentation and example usages
 
 ## (Optional) Follow-on Work
-### GRPCConfigs
+### gRPCConfigs
 We will add a new configuration gRPC port used to flag to start a gRPC proxy
-on a specific port (or if not starting at all). We will add a new class `GRPCOptions`
+on a specific port (or if not starting at all). We will add a new class `gRPCOptions`
 works similar to the existing `HTTPOptions` and used in `serve.start` and any
 related code.
 
