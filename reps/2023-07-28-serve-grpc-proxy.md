@@ -305,7 +305,7 @@ You can find the prototype PR here: [ray-project/ray#37310](https://github.com/r
     the stream flag
 - `HTTPProxyActor` will be changed to start both `HTTPProxy` and `gRPCProxy`.
   We have the choice to always start `gRPCProxy` on the side of `HTTPProxy` or
-  setup with [gRPCConfigs](#gRPCConfigs) follow up
+  setup with [gRPCOptions](#gRPCOptions) follow up
 - `LongestPrefixRouter` to add a new method `match_target()` to help gRPC look up for
   the routes from the application name
 
@@ -383,7 +383,7 @@ favor of the new gRPC proxy. No migration plan is needed for this feature.
 - Documentation and example usages
 
 ## (Optional) Follow-on Work
-### gRPCConfigs
+### gRPCOptions
 We will add a new configuration gRPC port used to flag to start a gRPC proxy
 on a specific port (or if not starting at all). We will add a new class `gRPCOptions`
 works similar to the existing `HTTPOptions` and used in `serve.start` and any
