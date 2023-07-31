@@ -124,19 +124,19 @@ to
 import pandas as pd
 from starlette.requests import Request
 from ray import serve
-from ray.train.xgboost import XGBoostPredictor
+from ray.train.xgboost import XGBoostTrainer
 
 # checkpoint = ...
 
 @serve.deployment
 class XGBoostService:
     def __init__(self, checkpoint):
-        self.predictor = XGBoostPredictor.from_checkpoint(checkpoint)
+        self.model = XGBoostTrainer.get_model(checkpoint)
 
     async def __call__(self, http_request: Request):
         input = await http_request.body()
         data = pd.read_json(input.decode(), **http_request.query_params)
-        return self.predictor.predict(data)
+        return self.model.predict(data)
 
 serve.run(XGBoostService.bind(checkpoint))
 ```
