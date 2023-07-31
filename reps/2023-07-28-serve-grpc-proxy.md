@@ -362,8 +362,9 @@ change the deployment and client to use gRPC.
 We will add new docs and code examples on how to use gRPC proxy.
 
 #### Dependencies
-We previously implemented the direct ingress with `gRPCIngress`. The new gRPC
-will We will need to include gRPC library to Serve's default libraries
+We previously implemented the direct ingress with `gRPCIngress` using Ray's default
+gRPC library. We will need to include gRPC library to Serve's default libraries
+to ensure this new feature continue to work after Ray drop it's gRPC library.
 
 ## Compatibility, Deprecation, and Migration Plan
 Everything should be backward compatible. All existing HTTP code path are all remain
