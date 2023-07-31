@@ -145,6 +145,23 @@ This is almost as simple but a lot more explicit, removes the magic, and can
 be easily adapted to different settings. Furthermore it is more unified with
 the Ray Serve documentation and the way Ray Serve is typically used.
 
+## Internal changes
+
+As part of this effort, we are also making the recommendation to completely
+remove the `air` namespace also for internal use (just to make things clearer
+for developers). This work does not need to be connected to a specific release
+and here is an idea on where things could go:
+
+- `air.examples` -- don't have the examples in the source tree, instead put
+them into the `ray/doc` folder
+- `air.execution` -- due to the layering of Tune depending on Train but not
+the other way around, most likely `train._internal` is the right place for these.
+- `air.util` -- the tensor extension functionality should go into `ray.data`,
+the torch related functions into `ray.train.torch`.
+
+If there are any other common internal utilities that are unaccounted for,
+most likely `train._internal` is a good place to put them.
+
 ## Migration Plan
 
 We acknowledge that these kinds of API changes are very taxing on our users and we paid special attention that the migration can be done
