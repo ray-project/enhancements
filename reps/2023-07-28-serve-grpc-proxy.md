@@ -44,10 +44,10 @@ the new gRPC port to serve with gRPC.
 ## Design and Architecture
 ### High Level Description
 - We will serve gRPC from the same actors that currently serve HTTP
-- Users will call gRPC services using a Serve-provided schema that embeds
-  their own custom messages using the gRPC Any proto type
-- Client will receive a Serve-provided schema that embeds user's own custom 
-  response using the gRPC Any proto type
+- Users will call gRPC services using Any protobufs. Routes, Request id, multiplexing
+  model id...etc will be passed by the client through the metadata as well
+- Client will receive gRPC `Any` protobuf as response. Serve will also 
+  return request id back to the client with trailing metadata 
 - gRPC deployments will have full feature parity with HTTP, including 
   streaming responses, model multiplexing, and model composition support
 
@@ -55,23 +55,19 @@ the new gRPC port to serve with gRPC.
 ### Example code
 #### Ray Serve Protobuf API
 ```proto
-message RayServeRequest {
-  google.protobuf.Any user_request = 1;
-  string application = 2;
-  string request_id = 3;  // optional, feature parity w/ http proxy
-  string multiplexed_model_id = 4;  // optional, feature parity w/ http proxy
-}
-
-message RayServeResponse {
-  google.protobuf.Any user_response = 1;
-  string request_id = 2;  // feature parity w/ http proxy
-}
-
 service RayServeService {
-  rpc Predict(RayServeRequest) returns (RayServeResponse);
-  rpc PredictStreaming(RayServeRequest) returns (stream RayServeResponse);
+  rpc Predict(google.protobuf.Any) returns (google.protobuf.Any);
+  rpc PredictStreaming(google.protobuf.Any) returns (stream google.protobuf.Any);
 }
 ```
+#### Accepted Metadata
+- `route_path`: The route path to the application
+- `application`: The name of the application to route to. If `route_path` is
+  provided, this will be ignored
+- `request_id`: The request id to track the request
+- `multiplexed_model_id`: The model id to do model multiplexing
+- `method_name`: The method name to call on the application. Default to `__call__`
+  if not provided
 
 #### Unary gRPC example
 ```python
@@ -84,7 +80,7 @@ from ray.serve.generated.serve_pb2 import UserDefinedMessage, UserDefinedRespons
 
 @serve.deployment
 class gRPCDeployment:
-    def __call__(self, user_message: UserDefinedMessage) -> UserDefinedResponse:
+    def unary(self, user_message: UserDefinedMessage) -> UserDefinedResponse:
         greeting = f"Hello {user_message.name} from {user_message.foo}"
         num_x2 = user_message.num * 2
         user_response = UserDefinedResponse(
@@ -105,11 +101,7 @@ from google.protobuf.any_pb2 import Any
 
 from ray.serve.generated.serve_pb2_grpc import RayServeServiceStub
 
-# Users need to include & build the Ray Serve protobuf so they can send requests
-# via the request wrapper proto.
-from ray.serve.generated.serve_pb2 import RayServeRequest
-
-# Users also need to include their custom message type which will be embedded in
+# Users need to include their custom message type which will be embedded in
 # the request.
 from ray.serve.generated.serve_pb2 import UserDefinedMessage, UserDefinedResponse
 
@@ -118,26 +110,26 @@ channel = grpc.insecure_channel("localhost:9000")
 stub = RayServeServiceStub(channel)
 
 test_in = UserDefinedMessage(
-    name="genesu",
-    num=88,
-    foo="bar",
+  name="genesu",
+  num=88,
+  foo="bar",
 )
-user_request = Any()
-user_request.Pack(test_in)  # Serialize the test_in to Any type
-response = stub.Predict(
-    RayServeRequest(
-        application="default_grpc-deployment",
-        user_request=user_request,
-        # request_id="123",  # optional, feature parity w/ http proxy
-        # multiplexed_model_id="123",  # optional, feature parity w/ http proxy
-    )
-)  # response is a type RayServeResponse
-print("Output type:", type(response))
+test_in_any = Any()
+test_in_any.Pack(test_in)  # Serialize the UserDefinedMessage to Any type
+metadata = (
+  ("route_path", "/"),
+  ("method_name", "unary"),
+  # ("application", "default_grpc-deployment"),
+  # ("request_id", "123"),  # Optional, feature parity w/ http proxy
+  # ("multiplexed_model_id", "456"),  # Optional, feature parity w/ http proxy
+)
+response, call = stub.Predict.with_call(request=test_in_any, metadata=metadata)
+print(call.trailing_metadata())  # Request id is returned in the trailing metadata
+print("Output type:", type(response))  # Response is a type Any
 print("Full output:", response)
-print("request_id:", response.request_id)
 
 test_out = UserDefinedResponse()
-response.user_response.Unpack(test_out)  # Deserialize the user_response to custom type
+response.Unpack(test_out)  # Deserialize the response to UserDefinedResponse type
 print("Output greeting field:", test_out.greeting)
 print("Output num_x2 field:", test_out.num_x2)
 ```
@@ -155,37 +147,33 @@ from ray.serve.generated.serve_pb2 import UserDefinedMessage, UserDefinedRespons
 
 
 @serve.deployment
-class gRPCDeploymentStreamingResponse:
-  def __call__(self, user_request: UserDefinedMessage) -> Generator[UserDefinedResponse, None, None]:
+class GrpcDeployment:
+  def streaming(self, request: UserDefinedMessage) -> Generator[UserDefinedResponse, None, None]:
     for i in range(10):
-      greeting = f"{i}: Hello {user_request.name} from {user_request.foo}"
-      num_x2 = user_request.num * 2 + i
-      user_response = UserDefinedResponse(
+      greeting = f"{i}: Hello {request.name} from {request.foo}"
+      num_x2 = request.num * 2 + i
+      output = UserDefinedResponse(
         greeting=greeting,
         num_x2=num_x2,
       )
-      yield ouser_response
+      yield output
 
       time.sleep(0.1)
 
 
-g2 = gRPCDeploymentStreamingResponse.options(
-  name="grpc-deployment-streaming-response"
-).bind()
+g = GrpcDeployment.options(name="grpc-deployment").bind()
+
 ```
 
 ```python
 # test_client.py
 
 import grpc
+from google.protobuf.any_pb2 import Any
 
 from ray.serve.generated.serve_pb2_grpc import RayServeServiceStub
 
-# Users need to include & build the Ray Serve protobuf so they can send requests
-# via the request wrapper proto.
-from ray.serve.generated.serve_pb2 import RayServeRequest
-
-# Users also need to include their custom message type which will be embedded in
+# Users need to include their custom message type which will be embedded in
 # the request.
 from ray.serve.generated.serve_pb2 import UserDefinedMessage, UserDefinedResponse
 
@@ -198,26 +186,27 @@ test_in = UserDefinedMessage(
   num=88,
   foo="bar",
 )
-user_request = Any()
-user_request.Pack(test_in)  # Serialize the test_in to Any type
-responses = stub.PredictStreaming(
-  RayServeRequest(
-    application="default_grpc-deployment-streaming-response",
-    user_request=user_request,
-    # request_id="123",  # optional, feature parity w/ http proxy
-    # multiplexed_model_id="123",  # optional, feature parity w/ http proxy
-  )
-)  # response is a generator of type RayServeResponse
+test_in_any = Any()
+test_in_any.Pack(test_in)  # Serialize the UserDefinedMessage to Any type
+metadata = (
+  ("route_path", "/"),
+  ("method_name", "streaming"),
+  # ("application", "default_grpc-deployment"),
+  # ("request_id", "123"),  # Optional, feature parity w/ http proxy
+  # ("multiplexed_model_id", "456"),  # Optional, feature parity w/ http proxy
+)
+responses = stub.PredictStreaming(test_in_any, metadata=metadata)
 for response in responses:
-  print("Output type:", type(response))
+  print("Output type:", type(response))  # Response is a type Any
   print("Full output:", response)
-  print("request_id:", response.request_id)
 
-  # Deserialize the user_response to custom type
+  # Deserialize the response to UserDefinedResponse type
   test_out = UserDefinedResponse()
-  response.user_response.Unpack(test_out)
+  response.Unpack(test_out)
   print("Output greeting field:", test_out.greeting)
   print("Output num_x2 field:", test_out.num_x2)
+  
+print(responses.trailing_metadata())  # Request id is returned in trailing metadata
 
 ```
 
@@ -242,9 +231,8 @@ HTTP and gRPC proxies
     these two methods are the return type being a unary object or stream object.
     These two methods also wrap the gRPC input objects into a `ServeRequest` object
     to use in shared `proxy_request()` method on the `GenericProxy`
-  - Setup request context and handle based on the input protobuf `RayServeRequest`
-  - Methods to process request and consume and return the response as
-    protobuf `RayServeResponse` object
+  - Setup request context and handle based on the input `Any` protobuf 
+  - Methods to process request and return the response as `Any` protobuf object
 - `RayServeHandle`, `Router`, and `Scheduler` all kept unchanged except
    added a new flag `serve_grpc_request` on the `HandleOptions` to signal to
    the replicas when it’s a gRPC request
@@ -256,13 +244,13 @@ HTTP and gRPC proxies
 ![serve_data_flow_chart](https://docs.google.com/drawings/d/e/2PACX-1vTtg5xhPRvzghhNuOsFCPCllrWWZwVSqEGVpL3xd3ggTiFSKquW4x0sEmEjT3hsDvijmEo0ZOTiTVJO/pub?w=1527&h=866)
 - HTTP clients continue to send requests through `HTTPProxy` using ASGI protocol.
   `HTTPProxy` will return the response in the ASGI `Send` object
-- gRPC clients send predefined protobuf `RayServeRequest` to the `gRPCProxy`.
-  `gRPCProxy` will return back a predefined protobuf `RayServeResponse` object.
-  - `RayServeRequest` contains `user_request` as Any protobuf to pass to the replicas,
-    `application` for which application to route to, `request_id` for tracking
-    the request, and `multiplexed_model_id` for doing model multiplexing
- - `RayServeResponse` contains `user_response` as Any protobuf to return to the client
-   and `request_id` for tracking the request
+  - gRPC clients send `Any` protobuf to the `gRPCProxy` to send request to the replicas.
+    `gRPCProxy` will return back `Any` protobuf
+    - Metadata contains `route_path` for the route to route to, `method_name` for
+      the method to call on the deployment, `application` for which application to
+      route to, `request_id` for tracking the request, and `multiplexed_model_id`
+      for doing model multiplexing
+ - Trailing Metadata contains `request_id` for tracking the request
 - The rest are existing code besides added a new `gRPCRequest` object to be used
   in place of `StreamingHTTPRequest` object in `RayServeHandle` and `Router`
 
@@ -292,16 +280,16 @@ You can find the prototype PR here: [ray-project/ray#37310](https://github.com/r
     the `ServeRequest` object
   - `send_request_to_replica_streaming()` does not need to change
 - `gRPCProxy` is a subclass from `GenericProxy`.
-  - `Predict()` is the entrypoint for unary gRPC requests. It takes a protobuf
-    `RayServeRequest` object and returns a protobuf `RayServeResponse` object.
+  - `Predict()` is the entrypoint for unary gRPC requests. It takes `Any` protobuf
+    as input and returns `Any` protobuf as the response. It wraps the input and the 
+    metadata into a `ServeRequest` object and calls `proxy_request()`
     It wraps the input into a `ServeRequest` object and calls `proxy_request()`
   - `PredictStreaming()` is the entrypoint for streaming gRPC requests. It takes
-    a protobuf `RayServeRequest` object and returns a generator of protobuf
-    `RayServeResponse` objects. It wraps the input into a `ServeRequest` object
-    and calls `proxy_request()`
-  - `setup_request_context_and_handle` is based on the input protobuf `RayServeRequest`
+    `Any` protobuf as the input and returns a generator of `Any` protobuf. It wraps 
+    the input into a `ServeRequest` object and calls `proxy_request()`
+  - `setup_request_context_and_handle` is based on the metadata
     `send_request_to_replica_streaming()` will handle request and return the
-    response as protobuf `RayServeResponse` object or yield the result based on
+    response as `Any` protobuf, or yield the result based on
     the stream flag
 - `HTTPProxyActor` will be changed to start both `HTTPProxy` and `gRPCProxy`.
   We have the choice to always start `gRPCProxy` on the side of `HTTPProxy` or
@@ -326,19 +314,10 @@ handle.
   and `Router` to be used for gRPC requests. It contains a `grpc_user_request`
   field to store the byte input for the replica and a `grpc_proxy_handle` field
   to store the ray serve handle to be used for gRPC requests.
-- `RayServeRequest` is a protobuf object to be used for gRPC requests. It contains
-  `user_request` as Any protobuf to pass to the replicas, `application` for which
-  application to route to, `request_id` for tracking the request, and
-  `multiplexed_model_id` for doing model multiplexing
-- `RayServeResponse` is a protobuf object to be used for gRPC requests. It contains
-  `user_response` as Any protobuf to return to the client and `request_id` for
-  tracking the request
 - `RayServeService` as protobuf service definition. It contains `Predict()` and
   `PredictStreaming()` methods to be used for gRPC requests
-  - `Predict()` takes a protobuf `RayServeRequest` object and returns a protobuf
-    `RayServeResponse` object
-  - `PredictStreaming()` takes a protobuf `RayServeRequest` object and returns
-    a stream of protobuf `RayServeResponse` objects
+  - `Predict()` takes `Any` protobuf object and returns `Any` protobuf
+  - `PredictStreaming()` takes `Any` protobuf and returns a stream of `Any` protobuf
 - `ServeRequest` is a new data model served as the input to `proxy_request()`
   method.
 - `ASGIServeRequest` is a subclass of `ServeRequest` used by `HTTPProxy`.
