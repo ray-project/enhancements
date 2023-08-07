@@ -45,8 +45,8 @@ the new gRPC port to serve with gRPC.
 ### High Level Description
 - We will serve gRPC from the same actors that currently serve HTTP
 - User will create their own protobufs, service, and method
-- User start Serve's gRPC proxy with port and their protobuf service function
-- User can call gRPC services using user defined protobufs, and with metadata
+- User will start Serve's gRPC proxy with port and their protobuf servicer functions
+- User will call gRPC services using user defined protobufs, and with metadata
   route path, application, request id, multiplexing model id, and method name
 - Client will receive user defined protobuf as response
 - Serve will also return request id back to the client with trailing metadata 
@@ -118,6 +118,8 @@ service UserDefinedService {
 ```
 
 ```yaml
+# config.yaml
+
 grpc_options:
 
   port: 9002
@@ -199,7 +201,7 @@ test_in = UserDefinedMessage(
 )
 metadata = (
   ("route_path", "/"),
-  ("method_name", "method2"),
+  ("method_name", "method2"),  # This is the method on the deployment. Default to __call__
   # ("application", "default_grpc-deployment"),
   # ("request_id", "123"),  # Optional, feature parity w/ http proxy
   # ("multiplexed_model_id", "456"),  # Optional, feature parity w/ http proxy
@@ -271,7 +273,7 @@ test_in = UserDefinedMessage(
 )
 metadata = (
   ("route_path", "/"),
-  ("method_name", "streaming"),
+  ("method_name", "streaming"),  # This is the method on the deployment. Default to __call__
   # ("application", "default_grpc-deployment"),
   # ("request_id", "123"),  # Optional, feature parity w/ http proxy
   # ("multiplexed_model_id", "456"),  # Optional, feature parity w/ http proxy
@@ -418,6 +420,7 @@ This is a new config option we added to the serve config. It contains two fields
 - `grpc_servicer_functions`: A list of servicer functions used to add the custom
   methods to the gRPC server. Default to empty list, which means no custom gRPC
   methods will be added.
+
 If Serve is started with `gRPCOptions` provided, the `HTTPProxyActor` will start
 the gRPC proxy with the provided port and the provided servicer functions.
 
