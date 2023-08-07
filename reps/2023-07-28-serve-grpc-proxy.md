@@ -46,8 +46,7 @@ the new gRPC port to serve with gRPC.
 - We will serve gRPC from the same actors that currently serve HTTP
 - User will create their own protobufs, service, and method
 - User will start Serve's gRPC proxy with port and their protobuf servicer functions
-- User will call gRPC services using user defined protobufs, and with metadata
-  route path, application, request id, multiplexing model id, and method name
+- User will call gRPC services using user defined protobufs, and with optional metadata
 - Client will receive user defined protobuf as response
 - Serve will also return request id back to the client with trailing metadata 
 - gRPC deployments will have full feature parity with HTTP, including
@@ -71,21 +70,21 @@ class gRPCOptionsSchema(BaseModel, extra=Extra.forbid):
   grpc_servicer_functions: List[str] = Field(
     default=[],
     description=(
-      "The servicer functions used to add the custom methods to the gRPC server."
-      "Default to empty list, which means no custom gRPC methods will be added."
+      "The servicer functions used to add the method handlers to the gRPC server."
+      "Default to empty list, which means no gRPC methods will be added"
+      "and no gRPC server will be started. The servicer functions need to be"
+      "importable from the context of where Serve is running."
     ),
   )
 
 ```
 
 #### Accepted Metadata
-- `route_path`: The route path to the application
-- `application`: The name of the application to route to. If `route_path` is
-  provided, this will be ignored
-- `request_id`: The request id to track the request
-- `multiplexed_model_id`: The model id to do model multiplexing
-- `method_name`: The method name to call on the application. Default to `__call__`
-  if not provided
+- `application`: The name of the application to route to. If not passed, first 
+  application will be used automatically. 
+- `request_id`: The request id to track the request. Feature parity with http proxy.
+- `multiplexed_model_id`: The model id to do model multiplexing. Feature parity with
+  http proxy.
 
 #### Unary gRPC example
 ```proto
@@ -110,9 +109,17 @@ message UserDefinedResponse {
   int64 num_x2 = 2;
 }
 
+message UserDefinedMessage2 {}
+
+message UserDefinedResponse2 {
+  string greeting = 1;
+}
+
 service UserDefinedService {
+  rpc __call__(UserDefinedMessage) returns (UserDefinedResponse);
   rpc Method1(UserDefinedMessage) returns (UserDefinedResponse);
-  rpc Streaming1(UserDefinedMessage) returns (stream UserDefinedResponse);
+  rpc Method2(UserDefinedMessage2) returns (UserDefinedResponse2);
+  rpc Streaming(UserDefinedMessage) returns (stream UserDefinedResponse);
 }
 
 ```
@@ -144,7 +151,12 @@ applications:
 # test_deployment.py
 
 # Users need to include their custom message type which will be embedded in the request.
-from user_defined_protos_pb2 import UserDefinedMessage, UserDefinedResponse
+from user_defined_protos_pb2 import (
+  UserDefinedMessage,
+  UserDefinedMessage2,
+  UserDefinedResponse,
+  UserDefinedResponse2,
+)
 
 from ray import serve
 
@@ -169,7 +181,7 @@ class GrpcDeployment:
     )
     return user_response
 
-  def method2(self, user_message: UserDefinedMessage) -> UserDefinedResponse:
+  def method2(self, user_message: UserDefinedMessage2) -> UserDefinedResponse2:
     greeting = "This is from method2"
     user_response = UserDefinedResponse(greeting=greeting)
     return user_response
@@ -185,7 +197,7 @@ g = GrpcDeployment.options(name="grpc-deployment").bind()
 import grpc
 
 # Users define their custom protobuf and services
-from user_defined_protos_pb2 import UserDefinedMessage, UserDefinedResponse
+from user_defined_protos_pb2 import UserDefinedMessage, UserDefinedMessage2
 from user_defined_protos_pb2_grpc import UserDefinedServiceStub
 
 # The gRPC port is defined in the config file
@@ -200,13 +212,21 @@ test_in = UserDefinedMessage(
   foo="bar",
 )
 metadata = (
-  ("route_path", "/"),
-  ("method_name", "method2"),  # This is the method on the deployment. Default to __call__
-  # ("application", "default_grpc-deployment"),
+  # ("application", "app1_grpc-deployment"),  # Optional, default to first deployment
   # ("request_id", "123"),  # Optional, feature parity w/ http proxy
   # ("multiplexed_model_id", "456"),  # Optional, feature parity w/ http proxy
 )
-# Method1 method is defined by user's proto file
+# __call__ method is defined by user's proto file and
+# match with deployment method `__call__()`
+response, call = stub.__call__.with_call(request=test_in, metadata=metadata)
+print(call.trailing_metadata())  # Request id is returned in the trailing metadata
+print("Output type:", type(response))  # Response is a type of UserDefinedResponse
+print("Full output:", response)
+print("Output greeting field:", response.greeting)
+print("Output num_x2 field:", response.num_x2)
+
+# Method1 method is defined by user's proto file and
+# match with deployment method `method1()` 
 response, call = stub.Method1.with_call(request=test_in, metadata=metadata)
 
 print(call.trailing_metadata())  # Request id is returned in the trailing metadata
@@ -214,6 +234,16 @@ print("Output type:", type(response))  # Response is a type of UserDefinedRespon
 print("Full output:", response)
 print("Output greeting field:", response.greeting)
 print("Output num_x2 field:", response.num_x2)
+
+test_in = UserDefinedMessage2()
+# Method2 method is defined by user's proto file and
+# match with deployment method `method2()`
+response, call = stub.Method2.with_call(request=test_in, metadata=metadata)
+
+print(call.trailing_metadata())  # Request id is returned in the trailing metadata
+print("Output type:", type(response))  # Response is a type of UserDefinedResponse2
+print("Full output:", response)
+print("Output greeting field:", response.greeting)
 
 ```
 
@@ -257,7 +287,7 @@ g = GrpcDeployment.options(name="grpc-deployment").bind()
 import grpc
 
 # Users define their custom protobuf and services
-from user_defined_protos_pb2 import UserDefinedMessage, UserDefinedResponse
+from user_defined_protos_pb2 import UserDefinedMessage
 from user_defined_protos_pb2_grpc import UserDefinedServiceStub
 
 # The gRPC port is defined in the config file
@@ -272,15 +302,14 @@ test_in = UserDefinedMessage(
   foo="bar",
 )
 metadata = (
-  ("route_path", "/"),
-  ("method_name", "streaming"),  # This is the method on the deployment. Default to __call__
-  # ("application", "default_grpc-deployment"),
+  # ("application", "app1_grpc-deployment"),  # Optional, default to first deployment
   # ("request_id", "123"),  # Optional, feature parity w/ http proxy
   # ("multiplexed_model_id", "456"),  # Optional, feature parity w/ http proxy
 )
 
-# Streaming1 method is defined by user's proto file
-responses = stub.Streaming1(test_in, metadata=metadata)
+# Streaming method is defined by user's proto file and
+# match with deployment method `streaming()`
+responses = stub.Streaming(test_in, metadata=metadata)
 
 for response in responses:
   print("Output type:", type(response))  # Response is a type of UserDefinedResponse
@@ -327,11 +356,10 @@ HTTP and gRPC proxies
   `HTTPProxy` will return the response in the ASGI `Send` object
 - gRPC clients send user defined protobuf to the `gRPCProxy` to send request
   to the replicas. `gRPCProxy` will return back user defined protobuf
-  - Metadata from the client to the gRPC server contains `route_path` for the
-    router to route to, `method_name` for the method to call on the deployment,
-    `application` for which application to route to if the `route_path` is not
-    provided, `request_id` for tracking the request, and `multiplexed_model_id`
-    for doing model multiplexing
+  - Metadata from the client to the gRPC server contains `application` for which 
+  - application to route to, `request_id` for tracking the request, and 
+    `multiplexed_model_id` for doing model multiplexing. All those are optional to 
+    a request.
   - Trailing Metadata from the server contains `request_id` for tracking the request
 - The rest are existing code besides added a new `gRPCRequest` object to be used
   in place of `StreamingHTTPRequest` object in `RayServeHandle` and `Router`
