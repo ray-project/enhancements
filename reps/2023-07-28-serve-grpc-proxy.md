@@ -48,7 +48,7 @@ the new gRPC port to serve with gRPC.
 - User will start Serve's gRPC proxy with port and their protobuf servicer functions
 - User will call gRPC services using user defined protobufs, and with optional metadata
 - Client will receive user defined protobuf as response
-- Serve will also return request id back to the client with trailing metadata 
+- Serve will also return request id back to the client with trailing metadata
 - gRPC deployments will have full feature parity with HTTP, including
   streaming responses, model multiplexing, and model composition support
 
@@ -80,8 +80,8 @@ class gRPCOptionsSchema(BaseModel, extra=Extra.forbid):
 ```
 
 #### Accepted Metadata
-- `application`: The name of the application to route to. If not passed, first 
-  application will be used automatically. 
+- `application`: The name of the application to route to. If not passed, first
+  application will be used automatically.
 - `request_id`: The request id to track the request. Feature parity with http proxy.
 - `multiplexed_model_id`: The model id to do model multiplexing. Feature parity with
   http proxy.
@@ -226,7 +226,7 @@ print("Output greeting field:", response.greeting)
 print("Output num_x2 field:", response.num_x2)
 
 # Method1 method is defined by user's proto file and
-# match with deployment method `method1()` 
+# match with deployment method `method1()`
 response, call = stub.Method1.with_call(request=test_in, metadata=metadata)
 
 print(call.trailing_metadata())  # Request id is returned in the trailing metadata
@@ -356,15 +356,15 @@ HTTP and gRPC proxies
   `HTTPProxy` will return the response in the ASGI `Send` object
 - gRPC clients send user defined protobuf to the `gRPCProxy` to send request
   to the replicas. `gRPCProxy` will return back user defined protobuf
-  - Metadata from the client to the gRPC server contains `application` for which 
-  - application to route to, `request_id` for tracking the request, and 
-    `multiplexed_model_id` for doing model multiplexing. All those are optional to 
+  - Metadata from the client to the gRPC server contains `application` for which
+    application to route to, `request_id` for tracking the request, and
+    `multiplexed_model_id` for doing model multiplexing. All those are optional to
     a request.
   - Trailing Metadata from the server contains `request_id` for tracking the request
 - The rest are existing code besides added a new `gRPCRequest` object to be used
   in place of `StreamingHTTPRequest` object in `RayServeHandle` and `Router`
 
-### Change Details 
+### Change Details
 You can find the prototype PR here: [ray-project/ray#37310](https://github.com/ray-project/ray/pull/37310)
 
 #### Proxy
@@ -422,12 +422,6 @@ handle.
   and `Router` to be used for gRPC requests. It contains a `grpc_user_request`
   field to store the byte input for the replica and a `grpc_proxy_handle` field
   to store the ray serve handle to be used for gRPC requests.
-- `RayServeService` as protobuf service definition. It contains `unary_unary()` and
-  `unary_stream()` methods to be used for gRPC requests
-  - `unary_unary()` takes `RayServeRequest` protobuf object and returns
-    `RayServeResponse` protobuf
-  - `unary_stream()` takes `RayServeRequest` protobuf and returns a stream of
-    `RayServeResponse` protobuf
 - `ServeRequest` is a new data model served as the input to `proxy_request()`
   method so any types of proxy can share the same GA entry point.
 - `ASGIServeRequest` is a subclass of `ServeRequest` used by `HTTPProxy`.
@@ -443,24 +437,29 @@ handle.
 
 ### gRPCOptions
 This is a new config option we added to the serve config. It contains two fields:
-- `port`: The port to start the gRPC proxy. If not provided, the gRPC proxy will
-  not be started
-- `grpc_servicer_functions`: A list of servicer functions used to add the custom
-  methods to the gRPC server. Default to empty list, which means no custom gRPC
-  methods will be added.
+- `port`: TPort for gRPC server. Will only start gRPC server if set. Cannot be
+  updated once Serve has started running. Serve must be shut down and restarted
+  with the new port instead.
+- `grpc_servicer_functions`: The servicer functions used to add the method handlers
+  to the gRPC server. Default to empty list, which means no gRPC methods will be
+  added and no gRPC server will be started. The servicer functions need to be
+  importable from the context of where Serve is running.
 
 If Serve is started with `gRPCOptions` provided, the `HTTPProxyActor` will start
 the gRPC proxy with the provided port and the provided servicer functions.
 
 #### gRPC Util
-This is where the magic of the serialization and deserialization happens. We created
-our custom function `create_serve_grpc_server()` and custom class `gRPCServer` to
-serialize and deserialize the user defined protobufs. The `create_serve_grpc_server()`
-is used as a factory to create `gRPCServer` instance with specific method handlers
-on `unary_unary()` and `unary_stream()` on the gRPC proxy. `gRPCServer` is subclass
-from `grpc.Server` and it overrides the `add_generic_rpc_handlers()` to use our method
-handlers and to disable the `response_serializer` so gRPC proxy can return raw
-user defined protobuf bytes to the user.
+This is where our implementation of gRPC the serialization and deserialization lives.
+We created our custom function `create_serve_grpc_server()` and custom class
+`gRPCServer` to serialize and deserialize user defined protobuf.
+- `create_serve_grpc_server()` is used as a factory function to create custom
+  `gRPCServer` instance. The function will take a method handler factory and
+  the factory will create a callable `unary_unary()` for unary request and
+  `unary_stream()` for streaming request.
+- `gRPCServer` is subclass from `grpc.Server` and it overrides
+  `add_generic_rpc_handlers()` to use our method handlers and to disable
+  `response_serializer` so gRPC proxy can return raw user defined protobuf bytes to
+  the user.
 
 #### Benchmark
 We will benchmark the performance of the gRPC proxy against the existing HTTP proxy
