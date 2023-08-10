@@ -9,7 +9,7 @@ features we built with HTTP proxy.
 ### General Motivation
 gRPC is generally a more performant way to talk to services. It utilizes the
 protobuf to serialize requests resulting in smaller payloads and faster
-communication. There are also customers who’s asking for this feature
+communication. There are also users who’s asking for this feature
 (e.g. SecondDinner) to be able to serve faster.
 
 There is an existing [Experimental gRPC Ingress](https://docs.ray.io/en/latest/serve/advanced-guides/direct-ingress.html)
