@@ -182,23 +182,77 @@ parent process with mulitple threaded mode. The overall architecture is:
 
 ### Key questions
 
+#### How to integrate databricks spark cluster autoscaling feature with Ray on spark NodeProvider backend ?
+
+See [Cluster size and autoscaling](https://docs.databricks.com/en/clusters/configure.html#autoscaling) and [Enhanced Autoscaling](https://docs.databricks.com/en/delta-live-tables/auto-scaling.html) for configuring databricks spark 
+clsuter autoscaling.
+
+Note that scaling up or down is triggered automatically. In Ray on spark NodeProvider
+backend, we just need to create or cancel spark jobs by demand, then databricks cluster
+will automatically scale up or down according to cluster resources utilization ratio.
+
+
 #### How to make `NodeProvider` backend support multiple Ray worker nodes running on the same virtual machine ?
 
-one node multiple worker nodes. node ip ?
+By default, `NodePrivider` implementation implement `internal_ip` and `external_ip` methods and convert `node_id` to IP, and different node must have different IP address,
+and Ray autoscaler internal code uses IP to track specific node status.
+
+But, for Ray on spark, one virtual machine (running a spark worker) might start multiple
+ray worker nodes. It breaks rules above, the workaround is, we can set `use_node_id_as_ip` configuration to `True` in autoscaler configuration file:
+
+```yaml
+provider:
+    type: ray_on_spark
+    use_node_id_as_ip: True
+    ...
+```
+
+and we use incremental number as the "fake node id" used in NodeProvider implementation code, and before creating Ray node process, setting an environment variable `NODE_ID_AS_RESOURCE` to be the "fake node id", then Ray autoscaler code can track
+these Ray nodes status correctly.
+See related logic code [here](https://github.com/ray-project/ray/blob/7a8b6a1b52488922fc27a1bc2a01d40f87d36af6/python/ray/autoscaler/_private/monitor.py#L304C34-L304C34) for reference.
 
 
-Use one spark job or one task per job ?
+#### Shall we merge multiple Ray worker nodes into one spark job ?
 
-how to start spark job ? spark job server ?
+This is difficult. When we cancel a spark job, all spark tasks in the job are killed.
+But the `NodeProvider` interface might trigger `terminate_node` solely on specific
+Ray node.
 
-How to handle node creation time gap ?
+On the other hand, create multiple spark jobs, one job with only one spark task
+(each spark task holds a Ray worker node)
+does not cause too much overhead, assuming we don't have enormous number (< 10000)
+of Ray worker nodes.
 
-spark task retries ?
+
+#### Can we create a new spark session in Ray autoscaler process instead of reusing parent process spark session ? So that we can avoid create a spark job server.
+
+This way it means creating a separate spark application but not running Ray cluster
+in parent process spark application, but the `setup_ray_cluster` is designed to
+start a Ray cluster via current spark application, and all Ray cluster resources
+requests must be limited inside the current spark application.
+
+So that we cannot use this way.
+
+#### When `NodeProvider.create_node_with_resources_and_labels` is triggered, and node creation request is emitted but it takes several minutes to launch a new spark worker nodes and create ray worker node, during the creation pending period, how to notify Ray autoscaler that the Ray worker node is pending creation, but not creation failure ?
+
+To be answered.
 
 
+#### When Ray worker nodes crashes unexpectedly, autoscaler should handle the case properly and start replacement nodes if needed. But we use spark task to hold the worker node, if the spark task fails, spark will retry running failed task. How to address conflicts here ?
 
-how to pass arguments to autoscaler ?
 
-shall we support different shape worker nodes ?
+In spark task, we start a child process to execute Ray worker node and the spark task python worker wait the child process until it terminates. When child processs (ray worker node) exit unexpectedly, the parent process (spark task python worker) does not raise error but returns normally, then spark will regard the task completes normally and does not trigger task retry but complete the spark job.
 
-minimal Ray cluster worker number.
+
+### Ray autoscaler supports setting multiple Ray worker groups, each Ray worker group
+has its individual CPU / GPU / memory resources configuration, and its own minumum / maximum worker number setting for autoscaling. Shall we support this feature
+in Ray on spark autoscaling ?
+
+
+We can support this if customer requires it.
+
+
+### What's the default Ray on spark minimum worker number we should use ?
+
+I propose to set it to zero. Ray worker node launching is very quick, and setting it to
+zero increases cluster resources utilization ratio especially when the Ray on spark cluster is often idle.
