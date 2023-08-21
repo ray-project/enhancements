@@ -244,15 +244,14 @@ To be answered.
 In spark task, we start a child process to execute Ray worker node and the spark task python worker wait the child process until it terminates. When child processs (ray worker node) exit unexpectedly, the parent process (spark task python worker) does not raise error but returns normally, then spark will regard the task completes normally and does not trigger task retry but complete the spark job.
 
 
-### Ray autoscaler supports setting multiple Ray worker groups, each Ray worker group
-has its individual CPU / GPU / memory resources configuration, and its own minumum / maximum worker number setting for autoscaling. Shall we support this feature
+#### Ray autoscaler supports setting multiple Ray worker groups, each Ray worker group has its individual CPU / GPU / memory resources configuration, and its own minumum / maximum worker number setting for autoscaling. Shall we support this feature ?
 in Ray on spark autoscaling ?
 
 
 We can support this if customer requires it.
 
 
-### What's the default Ray on spark minimum worker number we should use ?
+#### What's the default Ray on spark minimum worker number we should use ?
 
 I propose to set it to zero. Ray worker node launching is very quick, and setting it to
 zero increases cluster resources utilization ratio especially when the Ray on spark cluster is often idle.
