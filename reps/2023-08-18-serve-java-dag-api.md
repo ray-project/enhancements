@@ -196,6 +196,47 @@ public class Deployment {
 }
 ```
 This is also done to maintain consistency with the Python API, and to allow for easy removal of the deprecated API in the future.
+
+One more thing to note is the usage of `InputNode`. In Python, `InputNode` is very flexible and can represent a list, a dict, or structured object. However, in Java, it is difficult to simulate the invocation of arbitrary objects using `InputNode`, so we have made some compromises. We can simulate the invocation of a List or a Map using the `InputNode.get` method. As for structured objects, the only option is to pass the entire `InputNode` as a parameter. Here's an example:
+```java
+import io.ray.serve.api.Serve;
+import io.ray.serve.deployment.Application;
+import io.ray.serve.deployment.InputNode;
+import io.ray.serve.generated.DeploymentLanguage;
+
+public class Model {
+
+  private int weight;
+
+  public Model() {}
+
+  public Model(int weight) {
+    this.weight = weight;
+  }
+
+  public int forward(int input) {
+    return weight + input;
+  }
+
+  public static void main(String[] args) throws Exception {
+    Application m1 = Serve.deployment().setDeploymentDef(Model.class.getName()).create().bind(1);
+    Application m2 = Serve.deployment().setDeploymentDef(Model.class.getName()).create().bind(2);
+
+    try (InputNode userInput = InputNode.create()) {
+      Application m1Output = m1.method("forward").bind(userInput.get(0));
+      Application m2Output = m2.method("forward").bind(userInput.get(1));
+      Application combineOutput =
+          Serve.deployment()
+              .setDeploymentDef("deployment_graph.combine")
+              .setLanguage(DeploymentLanguage.PYTHON)
+              .create()
+              .bind(m1Output, m2Output, userInput.get(2));
+    }
+  }
+}
+
+```
+
 ## Test Plan and Acceptance Criteria
 Related test cases will be provided under ray/java/serve, and they will cover the three scenarios mentioned above.
 ## (Optional) Follow-on Work
