@@ -47,6 +47,7 @@ Main `ray` project. A part of java/serve.
 ### Update Java user API to be consistent with Python
 A standard Java deployment demo is shown below:
 ```java
+// Demo 1
 import io.ray.serve.api.Serve;
 import io.ray.serve.deployment.Application;
 import io.ray.serve.handle.RayServeHandle;
@@ -74,6 +75,7 @@ public class DeploymentDemo {
 In this demo, a DAG node is defined through the `bind` method of the Deployment, and it is deployed using the `Serve.run` API.
 Furthermore, a Deployment can bind other Deployments, and users can use the Deployment input parameters in a similar way to `RayServeHandle`. For example:
 ```java
+// Demo 2
 import io.ray.api.ObjectRef;
 import io.ray.serve.api.Serve;
 import io.ray.serve.deployment.Application;
@@ -127,6 +129,7 @@ def preprocess(inp: int) -> int:
 ```
 
 ```java
+// Demo 3
 import io.ray.serve.api.Serve;
 import io.ray.serve.deployment.Application;
 import io.ray.serve.deployment.DAGDriver;
@@ -173,32 +176,12 @@ public class Model {
 In this case, two deployments are defined:
 * model: a Java Deployment where the `predict` method takes an integer input and performs addition with the initialized value.
 * pyPreprocess: a Python deployment that adds one to the input parameter.
-During the graph composition, the output of pyPreprocess will be used as input to the `model.predict` method. `DAGDriver` acts as the Ingress Deployment and orchestrates the entire graph. Finally, the graph is deployed using Serve.run.
-## Compatibility, Deprecation, and Migration Plan
-In Java, the old API will be marked with the @Deprecated annotation, for example:
-```java
-public class Deployment {
-  @Deprecated
-  public void deploy(boolean blocking) {
-    Serve.getGlobalClient()
-        .deploy(
-            name,
-            deploymentDef,
-            initArgs,
-            rayActorOptions,
-            config,
-            version,
-            prevVersion,
-            routePrefix,
-            url,
-            blocking);
-  }
-}
-```
-This is also done to maintain consistency with the Python API, and to allow for easy removal of the deprecated API in the future.
+
+During the graph composition, the output of pyPreprocess will be used as input to the `model.predict` method. `DAGDriver` acts as the Ingress Deployment and orchestrates the entire graph. Finally, the graph is deployed using `Serve.run`.
 
 One more thing to note is the usage of `InputNode`. In Python, `InputNode` is very flexible and can represent a list, a dict, or structured object. However, in Java, it is difficult to simulate the invocation of arbitrary objects using `InputNode`, so we have made some compromises. We can simulate the invocation of a List or a Map using the `InputNode.get` method. As for structured objects, the only option is to pass the entire `InputNode` as a parameter. Here's an example:
 ```java
+// Demo 4
 import io.ray.serve.api.Serve;
 import io.ray.serve.deployment.Application;
 import io.ray.serve.deployment.InputNode;
@@ -231,12 +214,53 @@ public class Model {
               .setLanguage(DeploymentLanguage.PYTHON)
               .create()
               .bind(m1Output, m2Output, userInput.get(2));
+      
+      Application graph = DAGDriver.bind(combineOutput);
+      RayServeHandle handle = Serve.run(graph);
     }
   }
 }
 
 ```
+### Cross-language transmission of DAGDriver
+In the above examples, both Demo 1 and Demo 2 are deployments of regular Java applications, which are relatively easy to implement. However, for Demo 3 and Demo 4, they involve Python `DAGDriver`, where the input of `DAGDriver` may contain `RayServeDAGHandle` that carries information for graph execution. In order to fully support graph execution orchestration through Python `DAGDriver`, it would require support for cross-language transmission of several internal core types, such as `RayServeDAGHandle`, `DeploymentMethodExecutorNode`, `DeploymentFunctionExecutorNode`, `InputAttributeNode`, and `InputNode`. This could be a significant change and needs further evaluation.
 
+### Deploying deployments of other languages through Python API
+In another REP ([Add Cpp Deployment in Ray Serve](https://github.com/ray-project/enhancements/pull/34)), it is mentioned how to deploy C++ deployments through Python. Deploying Java deployments through Python is similar. Since Java and C++ do not have the decorator mechanism like Python, a straightforward way is to directly instantiate the corresponding Deployment object:
+
+```python
+deployment_config = DeploymentConfig()
+deployment_config.deployment_language = JAVA # or CPP
+
+deployment = Deployment(_func_or_class='io.ray.serve.ExampleDeployment', name='my_deployment', config=config)
+```
+Alternatively, you can directly use the deployment API (with the addition of a new `language` parameter):
+```python
+deployment = serve.deployment(_func_or_class='io.ray.serve.ExampleDeployment', name='my_deployment', language=JAVA)
+
+```
+## Compatibility, Deprecation, and Migration Plan
+In Java, the old API will be marked with the @Deprecated annotation, for example:
+```java
+public class Deployment {
+  @Deprecated
+  public void deploy(boolean blocking) {
+    Serve.getGlobalClient()
+        .deploy(
+            name,
+            deploymentDef,
+            initArgs,
+            rayActorOptions,
+            config,
+            version,
+            prevVersion,
+            routePrefix,
+            url,
+            blocking);
+  }
+}
+```
+This is also done to maintain consistency with the Python API, and to allow for easy removal of the deprecated API in the future.
 ## Test Plan and Acceptance Criteria
 Related test cases will be provided under ray/java/serve, and they will cover the three scenarios mentioned above.
 ## (Optional) Follow-on Work
