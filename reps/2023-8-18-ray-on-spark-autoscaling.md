@@ -5,9 +5,9 @@
 
 The purpose of Ray on spark autoscaling is to support following scenarios:
 
-- For a spark cluster with the fixed number spark workers, assuming multiple users share the spark cluster, without Ray on spark autoscaling, if one user starts a Ray on spark cluster with fixed number Ray worker nodes, but he does not run any Ray jobs on this Ray on spark cluster, then the spark cluster resources allocated to the Ray on spark cluster are locked and cannot be allocated to other spark cluster jobs until the Ray on spark cluster terminates. But, if Ray on spark cluster supports autoscaling, we can make the Ray on spark cluster starts with zero Ray worker nodes, and when Ray jobs are submitted, then the Ray on spark cluster requests more Ray worker nodes by demands (i.e. scales up), after Ray jobs completes, then the Ray on spark cluster scales down. So that with autoscaling enabled, when the Ray on spark cluster is idle, it does not occupy spark worker resources.
+- For a standalone mode apache/spark cluster, assuming multiple users share the spark cluster, and one user submits a spark application that running a Ray on spark cluster. If Ray on spark autoscaling is supported, and the spark application enables [dynamic resources allocation](https://spark.apache.org/docs/latest/job-scheduling.html#dynamic-resource-allocation), then the Ray on spark cluster starts with zero Ray worker nodes, and when Ray jobs are submitted, then the Ray on spark cluster requests more Ray worker nodes by demands (i.e. scales up), it will trigger more spark executors launching for this spark application, after Ray jobs completes, then the Ray on spark cluster scales down, it will terminate idle Ray worker nodes and then trigger some idle spark executor termination. So that with Ray on spark autoscaling feature enabled, when the Ray on spark cluster is idle, it does not occupy spark worker resources.
 
-- For a databricks spark cluster that enables spark worker autoscaling, with Ray on spark autoscaling enabled, we can start the databricks spark cluster with zero initial spark workers, and when Ray jobs are submitted, it triggers Ray on spark cluster scaling up, then it triggers databricks spark cluster scales up. Vice versa, when Ray jobs complete, it triggers Ray on spark cluster scaling down, then it triggers databricks spark cluster scales down. This feature helps databricks users to improve cloud resource utilization.
+- For a databricks spark cluster that enables [databricks cluster autoscaling](https://docs.databricks.com/en/clusters/cluster-config-best-practices.html#autoscaling), with Ray on spark autoscaling enabled, we can start the databricks spark cluster with zero initial spark workers, and when Ray jobs are submitted, it triggers Ray on spark cluster scaling up, then it triggers databricks spark cluster scales up. Vice versa, when Ray jobs complete, it triggers Ray on spark cluster scaling down, then it triggers databricks spark cluster scales down. This feature helps databricks users to improve cloud resource utilization.
 
 
 #### Key requirements:
@@ -182,7 +182,8 @@ parent process with mulitple threaded mode. The overall architecture is:
 
 ### Key questions
 
-#### How to integrate databricks spark cluster autoscaling feature with Ray on spark NodeProvider backend ?
+
+#### How to integrate Ray on spark NodeProvider backend with databricks spark cluster autoscaling feature ?
 
 See [Cluster size and autoscaling](https://docs.databricks.com/en/clusters/configure.html#autoscaling) and [Enhanced Autoscaling](https://docs.databricks.com/en/delta-live-tables/auto-scaling.html) for configuring databricks spark 
 clsuter autoscaling.
@@ -190,6 +191,14 @@ clsuter autoscaling.
 Note that scaling up or down is triggered automatically. In Ray on spark NodeProvider
 backend, we just need to create or cancel spark jobs by demand, then databricks cluster
 will automatically scale up or down according to cluster resources utilization ratio.
+
+
+#### How to integrate Ray on spark NodeProvider backend with apache/spark application dynamic resource allocation on standalone mode spark cluster ?
+
+See [dynamic resources allocation](https://spark.apache.org/docs/latest/job-scheduling.html#dynamic-resource-allocation) for configuring spark application dynamic resource allocation.
+
+Note that scaling up or down is triggered automatically. In Ray on spark NodeProvider
+backend, we just need to create or cancel spark jobs by demand, then the spark application executors will automatically scale up or down according to this spark application resources utilization ratio.
 
 
 #### How to make `NodeProvider` backend support multiple Ray worker nodes running on the same virtual machine ?
@@ -247,7 +256,6 @@ In spark task, we start a child process to execute Ray worker node and the spark
 #### Ray autoscaler supports setting multiple Ray worker groups, each Ray worker group has its individual CPU / GPU / memory resources configuration, and its own minumum / maximum worker number setting for autoscaling. Shall we support this feature ?
 in Ray on spark autoscaling ?
 
-
 We can support this if customer requires it.
 
 
@@ -255,3 +263,8 @@ We can support this if customer requires it.
 
 I propose to set it to zero. Ray worker node launching is very quick, and setting it to
 zero increases cluster resources utilization ratio especially when the Ray on spark cluster is often idle.
+
+
+#### Apache/spark dynamic resource allocation also supports Spark over Kubernetes/Yarn, can we make Ray on spark autoscaling supports Spark over Kubernetes/Yarn ?
+
+It is doable, but currently Ray on spark only supports apache/spark standalone mode. Once Ray on spark supports Spark over Kubernetes/Yarn, we can make Ray on spark autoscaling feature support it.
