@@ -183,6 +183,11 @@ parent process with mulitple threaded mode. The overall architecture is:
 ### Key questions
 
 
+#### We can use `ray up` command to set up a ray cluster with autoscaling, why we don't call `ray up` command in ray on spark autoscaling implementation ?
+
+In ray on spark, we only provides a python API `setup_ray_cluster`, ray on spark does not have a CLI, so in `setup_ray_cluster` implementation, we need to generate autoscale config YAML file according to `setup_ray_cluster` argument values, and then launch the ray head node with "--autoscaling-config" option, in this way Ray on Spark code can manage Ray head node process and ray worker nodes easier.
+
+
 #### How to integrate Ray on spark NodeProvider backend with databricks spark cluster autoscaling feature ?
 
 See [Cluster size and autoscaling](https://docs.databricks.com/en/clusters/configure.html#autoscaling) and [Enhanced Autoscaling](https://docs.databricks.com/en/delta-live-tables/auto-scaling.html) for configuring databricks spark 
@@ -242,9 +247,9 @@ requests must be limited inside the current spark application.
 
 So that we cannot use this way.
 
-#### When `NodeProvider.create_node_with_resources_and_labels` is triggered, and node creation request is emitted but it takes several minutes to launch a new spark worker nodes and create ray worker node, during the creation pending period, how to notify Ray autoscaler that the Ray worker node is pending creation, but not creation failure ?
+#### When `NodeProvider.create_node_with_resources_and_labels` is triggered, and node creation request is emitted, but it takes several minutes to launch a new spark worker nodes and create ray worker node, during the creation pending period, how to notify Ray autoscaler that the Ray worker node is pending creation, but not creation failure ?
 
-To be answered.
+Once `NodeProvider.create_node_with_resources_and_labels` is called, node creation request is emitted, and in spark node provider, this node status is marked as "setting-up", once the ray worker node is actually launched, spark node provider changes the node status to "up-to-date", if it detects the ray worker node is down, spark node provider removes the node out of active node list.
 
 
 #### When Ray worker nodes crashes unexpectedly, autoscaler should handle the case properly and start replacement nodes if needed. But we use spark task to hold the worker node, if the spark task fails, spark will retry running failed task. How to address conflicts here ?
