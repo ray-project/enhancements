@@ -208,7 +208,7 @@ backend, we just need to create or cancel spark jobs by demand, then the spark a
 
 #### How to make `NodeProvider` backend support multiple Ray worker nodes running on the same virtual machine ?
 
-By default, `NodePrivider` implementation implement `internal_ip` and `external_ip` methods and convert `node_id` to IP, and different node must have different IP address,
+By default, `NodeProvider` implementation implement `internal_ip` and `external_ip` methods and convert `node_id` to IP, and different node must have different IP address,
 and Ray autoscaler internal code uses IP to track specific node status.
 
 But, for Ray on spark, one virtual machine (running a spark worker) might start multiple
