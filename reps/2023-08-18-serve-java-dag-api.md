@@ -65,8 +65,8 @@ public class DeploymentDemo {
 
   public static void main(String[] args) {
     Application deployment =
-        Serve.deployment().setDeploymentDef(DeploymentDemo.class.getName()).create().bind();
-    RayServeHandle handle = Serve.run(deployment);
+        Serve.deployment().setDeploymentDef(DeploymentDemo.class.getName()).bind();
+    RayServeHandle handle = Serve.run(deployment).get();
     System.out.println(handle.remote().get());
   }
 }
@@ -109,13 +109,11 @@ public class Driver {
   }
 
   public static void main(String[] args) {
-    Application modelA =
-        Serve.deployment().setDeploymentDef(ModelA.class.getName()).create().bind();
-    Application modelB =
-        Serve.deployment().setDeploymentDef(ModelB.class.getName()).create().bind();
+    Application modelA = Serve.deployment().setDeploymentDef(ModelA.class.getName()).bind();
+    Application modelB = Serve.deployment().setDeploymentDef(ModelB.class.getName()).bind();
 
     Application driver =
-        Serve.deployment().setDeploymentDef(Driver.class.getName()).create().bind(modelA, modelB);
+        Serve.deployment().setDeploymentDef(Driver.class.getName()).bind(modelA, modelB);
     Serve.run(driver);
   }
 }
@@ -155,13 +153,11 @@ public class Model {
       Application model =
           Serve.deployment()
               .setDeploymentDef(Model.class.getName())
-              .create()
               .bind(2);
       Application pyPreprocess =
           Serve.deployment()
               .setDeploymentDef("deployment_graph.preprocess")
               .setLanguage(DeploymentLanguage.PYTHON)
-              .create()
               .bind(inp);
       Application output = model.method("predict").bind(pyPreprocess);
       Application serveDag = DAGDriver.bind(output);
@@ -184,8 +180,10 @@ One more thing to note is the usage of `InputNode`. In Python, `InputNode` is ve
 // Demo 4
 import io.ray.serve.api.Serve;
 import io.ray.serve.deployment.Application;
+import io.ray.serve.deployment.DAGDriver;
 import io.ray.serve.deployment.InputNode;
 import io.ray.serve.generated.DeploymentLanguage;
+import io.ray.serve.handle.RayServeHandle;
 
 public class Model {
 
@@ -202,8 +200,8 @@ public class Model {
   }
 
   public static void main(String[] args) throws Exception {
-    Application m1 = Serve.deployment().setDeploymentDef(Model.class.getName()).create().bind(1);
-    Application m2 = Serve.deployment().setDeploymentDef(Model.class.getName()).create().bind(2);
+    Application m1 = Serve.deployment().setDeploymentDef(Model.class.getName()).bind(1);
+    Application m2 = Serve.deployment().setDeploymentDef(Model.class.getName()).bind(2);
 
     try (InputNode userInput = InputNode.create()) {
       Application m1Output = m1.method("forward").bind(userInput.get(0));
@@ -212,9 +210,8 @@ public class Model {
           Serve.deployment()
               .setDeploymentDef("deployment_graph.combine")
               .setLanguage(DeploymentLanguage.PYTHON)
-              .create()
               .bind(m1Output, m2Output, userInput.get(2));
-      
+
       Application graph = DAGDriver.bind(combineOutput);
       RayServeHandle handle = Serve.run(graph);
     }
