@@ -1,41 +1,124 @@
-# Ray Enhancement Proposals
-This repo tracks Ray Enhancement Proposals (REP). The REP process is the main way to propose, discuss, and decide on features and other major changes to the Ray project. We'll start with a simple decision-making process (and evolve it over time):.
-- First, a draft PR is created against the repo with a draft REP. A senior Ray committer should be designated as the shepherd in the Stewardship section and assigned to the PR.
-- The shepherd will review the PR and get it into a polished state for further review by Ray committers.
-- Once the PR is reviewable, we will hold a vote on the ``ray-committers`` mailing list. In most cases this should reach consensus; if the result is not unanimous, Eric Liang (@ericl) and Philipp Moritz (@pcmoritz) will be the final deciders on whether to accept the change.
-- Based on the results of the vote and possible final decision, the PR will either be merged (REP approved) or closed (REP rejected) with a short summary of the decision.
+# Object Store Plugin Manager
 
-You can find a list of PRs for REPs here (both open and merged PRs are available for comment): https://github.com/ray-project/enhancements/pulls?q=is%3Apr
-
-Each REP should include the following information:
 ## Summary
 ### General Motivation
-What use cases is this proposal supposed to enhance. If possible, please include details like the environment and scale.
-### Should this change be within `ray` or outside?
-From a software layering perspective, should this change be part of the main `ray` project, part of an ecosystem project under `ray-project`, or a new ecosystem project?
+Ray stores large objects in the Plasma distributed object store. The object store is implemented with shared memory, and multiple workers on the same node can reference the same copy of an object. On the other hand, if the worker’s local shared memory store does not yet contain a copy of the object, the object has to be replicated over with RPCs.  We propose object store plugin interfaces to allow ray to support other object stores that may provide additional features without disruption of the overall ray object management. For example, a CXL memory sharing based object store may avoid object replication entirely. 
 
-When reviewing the REP, the reviewers and the shepherd should apply the following judgements:
-- If an author proposes a change to be within the `ray` repo, the reviewers and the shepherd should assess whether the change can be layered on top of `ray` instead. 
-If so we should try to make the change in a separate repo. 
-- For a change proposed as an ecosystem project under `ray-project`: the reviewers and the shepherd should make sure that the technical quality
-meets the bar of (at least) a good "experimental" or "alpha" feature -- we should be comfortable welcoming Ray users with similar use cases to try this project.
-- For a change proposed as a new ecosystem project (outside of `ray-project`): then this REP is just serving as a "request for comments". 
-We don't need to go through the voting process, since it's not Ray committers' decision to approve the change. 
+### Should this change be within `ray` or outside?
+Yes. The change should be within `ray`.
 
 ## Stewardship
 ### Required Reviewers
-The proposal will be open to the public, but please suggest a few experienced Ray contributors in this technical domain whose comments will help this proposal. Ideally, the list should include Ray committers. 
+@ericl, @scv119
+
 ### Shepherd of the Proposal (should be a senior committer)
-To make the review process more productive, the owner of each proposal should identify a **shepherd** (should be a senior Ray committer). The shepherd is responsible for working with the owner and making sure the proposal is in good shape (with necessary information) before marking it as ready for broader review.
 
 ## Design and Architecture
-The proposal should include sufficient technical details for reviewers to determine the anticipated benefits and risks.
+The design consists of the object store plugin interface and the plugin manager.
+
+### Plugin Interface
+
+The plugin provides the functionalities of an object store responsible for storing and retrieving logic. It can be implemented as source code within the Ray repository or a shared library to be loaded dynamically. 
+
+It shall implement classes inherited from `ObjectStoreClientInterface` and `ObjectStoreRunnerInterface`.   
+`ObjectStoreClientInterface` replaces the current `PlasmaClientInterface`. It keeps all the functions from the current `PlasmaClientInterface` to retain full compatibility along with some extensions. Current `PlasmaClient` shall implement `ObjectStoreClientInterface`.
+
+New virtual functions of `ObjectStoreClientInterface` :
+```c++
+/// Authentication to the object store.                                                     
+virtual Status Authenticate(const std::string& user, const std::string& passwd) = 0;
+virtual Status Authenticate(const std::string& secret) = 0;
+/// The object storage optimized memory copy.
+virtual void MemoryCopy(void* dest, const void* src, size_t len) = 0;
+```
+
+`ObjectStoreRunnerInterface` base class has all the functions from the current `PlasmaStoreRunner` to retain full compatibility along with some extensions. Current `PlasmaStoreRunner` shall implement `ObjectStoreRunnerInterface`.
+
+Updated virtual function of `ObjectStoreRunnerInterface` with additional parameters:
+```c++
+// Pass additional startup parameters                                                       
+virtual void Start(const std::map<std::string, std::string>& params, 
+                   ray::SpillObjectsCallback spill_objects_callback,
+                   std::function<void()> object_store_full_callback, 
+                   ray::AddObjectCallback add_object_callback, 
+                   ray::DeleteObjectCallback delete_object_callback) = 0;
+```
+
+New virtual functions of  `ObjectStoreRunnerInterface`:
+```c++
+/// The Current total allocated available memory size.
+virtual int64_t GetTotalMemorySize() const = 0;
+
+/// Maximal available memory size. It can be different from the Total memory size if the memory is dynamically expandable.
+virtual int64_t GetMaxMemorySize() const = 0;
+```
+
+The diagram for current plasma object store classes:
+![image](https://github.com/yiweizh-memverge/ray_plugin_manager_rep/blob/main/imgs/original_structure.png)
+
+The diagram for proposed object store plugin classes:
+![image](https://github.com/yiweizh-memverge/ray_plugin_manager_rep/blob/main/imgs/proposed_structure.png)
+
+If the plugin is implemented as a shared library, the implementation should implement an API to create the object store client instance and the runner instance.
+```c++
+extern "C" { 
+    ObjectStoreRunnerInterface CreateRunner(void); 
+    ObjectStoreClientInterface CreateClient(void); 
+}
+```
+### Plugin Manager
+
+The plugin manager shall create the instances that implement `ObjectStoreClientInterface` and `ObjectStoreRunnerInterface` based on specified plugin name if the plugin is implemented within the Ray repository.  If a plugin object store is implemented as a POSIX dynamic linking library, the library shall be opened with its full path using `dlopen()`, `dlsym()` shall be used to look up symbols  for `CreateRunner()` and `CreateClient()` and to lazy create the instances when actually needed. 
+
+The plugin manager shall provide the following APIs:
+```c++
+// Get an instance of the singleton PluginManager
+Static PluginManager& GetInstance()
+
+// Create the object store runner interface with the plugin object store name and configurations
+std::unique_ptr<ObjectStoreRunnerInterface>
+     CreateObjectorStoreRunnerInstance(const std::string& plugin_name,
+   const std::string& plugin_path, 
+   const std::string& plugin_config)
+
+// Create the object store client interface with the plugin object store name and configurations
+std::shared_ptr<ObjectStoreClientInterface> 
+     CreateObjectorStoreClientInstance(const std::string& plugin_name,
+                                       const std::string& plugin_path, 
+                                       const std::string& plugin_config) 
+```
+
+The plugin object store can be specified during Ray startup. The following CLI parameters, or  `ray.init()` options are proposed for the plugin.
+```c++
+ plugin_name:       Optional[str] = ‘default’           
+                    The name of the plugin object store. 
+ plugin_path:       Optional[str] = ‘’                
+                    The full path of the library if the plugin is a shared library.
+ plugin_config:     Optional[Dict[str, any]] = None     
+                    The objectstore startup configurations as a series of key-value pairs.  
+```
+
+The modified plasma plugin also would change the data path of how `CoreWorkerPlasmaStoreProvider` accesses the plasma storage. If global shared memory is used, it would retrieve from global shared memory, which appears as local memory.
+```c++
+CoreWorkerPlasmaStoreProvider::Get(&object_ids, …,results, ...) {
+  /* check whether global shared Plasma object store is in use. */
+  if (store_client_.IsGlobal()) {
+    std::vector<ObjectID> obj_list;
+    for (const auto& id : object_ids) {
+      obj_list.emplace_back(id);
+    }
+    /*retrieve objects from global shared Plasma object store*/
+    return GetIfLocal(obj_list, results); 
+  }
+  ...
+}
+```
 
 ## Compatibility, Deprecation, and Migration Plan
-An important part of the proposal is to explicitly point out any compability implications of the proposed change. If there is any, we should thouroughly discuss a plan to deprecate existing APIs and migration to the new one(s).
+Currently this plugin manager doesn’t support native Windows platform, as Windows platform doesn’t have POSIX dlfcn support, which is used for loading shared libraries.
 
 ## Test Plan and Acceptance Criteria
-The proposal should discuss how the change will be tested **before** it can be merged or enabled. It should also include other acceptance criteria including documentation and examples. 
+The plugin manager will be fully unit tested. 
 
 ## (Optional) Follow-on Work
 Optionally, the proposal should discuss necessary follow-on work after the change is accepted.
