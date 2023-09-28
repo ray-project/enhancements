@@ -4,8 +4,7 @@ Compared to the latest Serve API in Python, Ray Serve Java lacks a major version
 ```python
 import ray
 from ray import serve
-from ray.serve.dag import InputNode
-from ray.serve.drivers import DAGDriver
+from ray.serve.handle import RayServeHandle, DeploymentHandle
 
 
 @serve.deployment
@@ -44,10 +43,9 @@ Main `ray` project. A part of java/serve.
 ### Update Java User API to be Consistent with Python
 A standard Java deployment demo is shown below:
 ```java
-// Demo 1
 import io.ray.serve.api.Serve;
 import io.ray.serve.deployment.Application;
-import io.ray.serve.handle.RayServeHandle;
+import io.ray.serve.handle.DeploymentHandle;
 
 public class DeploymentDemo {
   private String msg;
@@ -63,16 +61,15 @@ public class DeploymentDemo {
   public static void main(String[] args) {
     Application deployment =
         Serve.deployment().setDeploymentDef(DeploymentDemo.class.getName()).bind();
-    RayServeHandle handle = Serve.run(deployment).get();
-    System.out.println(handle.remote().get());
+    DeploymentHandle handle = Serve.run(deployment).get();
+    System.out.println(handle.remote().result());
   }
 }
 
 ```
-In this demo, a DAG node is defined through the `bind` method of the Deployment, and it is deployed using the `Serve.run` API.
-Furthermore, a Deployment can bind other Deployments, and users can use the Deployment input parameters in a similar way to `DeploymentHandle`. For example:
+In this demo, a deployment is defined through the `bind` method, and it is deployed using the `Serve.run` API.
+Furthermore, a deployment can bind other deployments, and users can use the deployment input parameters in a similar way to the `DeploymentHandle`. For example:
 ```java
-// Demo 2
 import io.ray.serve.api.Serve;
 import io.ray.serve.deployment.Application;
 import io.ray.serve.handle.DeploymentHandle;
@@ -126,7 +123,74 @@ deployment = serve.deployment('io.ray.serve.ExampleDeployment', name='my_deploym
 
 ```
 ### Deploying through the Config File
-// TODO
+Using a config file, we can deploy the Serve application through the CLI. For Java deployment, we can also describe it in a Python file and generate the corresponding deployment configuration in the config file. Let's take the example of the text.py file:
+```python
+from ray import serve
+from ray.serve.generated.serve_pb2 import JAVA
+
+
+@serve.deployment
+class Hello:
+    def __call__(self) -> str:
+        return "Hello"
+
+
+world_java = serve.deployment('io.ray.serve.World', language=JAVA)
+
+
+@serve.deployment
+class Ingress:
+    def __init__(self, hello_handle, world_handle):
+        self._hello_handle = hello_handle.options(
+            use_new_handle_api=True,
+        )
+        self._world_handle = world_handle.options(
+            use_new_handle_api=True,
+        )
+
+    async def __call__(self) -> str:
+        hello_response = self._hello_handle.remote()
+        world_response = self._world_handle.remote()
+        return (await hello_response) + (await world_response)
+
+
+hello = Hello.bind()
+world = world_java.bind()
+
+app = Ingress.bind(hello, world)
+
+```
+In this code, we define the Java Deployment `World` using the Python API and then bind it with a Python Deployment `Hello` into the `Ingress` to form an app. By using the `serve build` command, the Serve config file can be generated.
+```shell
+$ serve build text:app -o serve_config.yaml
+```
+The generated config file looks like this:
+```yaml
+proxy_location: EveryNode
+
+http_options:
+  host: 0.0.0.0
+  port: 8000
+
+grpc_options:
+  port: 9000
+  grpc_servicer_functions: []
+
+applications:
+- name: app1
+  route_prefix: /
+  import_path: text:app
+  runtime_env: {}
+  deployments:
+  - name: Hello
+  - name: World
+  - name: Ingress
+
+```
+By using this serve config file, the Application can be deployed through the "serve run" command:
+```shell
+$ serve run serve_config.yaml
+```
 
 ### Serve Handle C++ Core
 
@@ -157,6 +221,5 @@ This is also done to maintain consistency with the Python API, and to allow for 
 ## Test Plan and Acceptance Criteria
 Related test cases will be provided under ray/java/serve, and they will cover the three scenarios mentioned above.
 ## (Optional) Follow-on Work
-- Modify the Ray Serve Java API to support the usage of DAGs.
 - Optimize the code by removing unused components and improving cross-language parameter handling.
 - Support the usage of streaming.
