@@ -1,17 +1,17 @@
 ## Summary
 ### General Motivation
 
-[Ray on spark](https://github.com/ray-project/enhancements/blob/main/reps/2022-09-19-ray-on-spark.md) supports launch the Ray cluster over spark cluster, and the Ray cluster resource requests are converted to spark cluster resources requests. But currently, Ray on spark does not support Ray cluster autoscaling, it only supports starting a Ray cluster with fixed number of worker nodes, and all worker nodes are configured with a fixed shape, i.e., all Ray on spark worker nodes are configured with the same CPU / GPU / memory resources config.
+[Ray on spark](https://github.com/ray-project/enhancements/blob/main/reps/2022-09-19-ray-on-spark.md) supports launching the Ray cluster over spark cluster. But currently, Ray on spark does not support Ray cluster autoscaling, it only supports starting a Ray cluster with fixed number of worker nodes.
 
 The purpose of Ray on spark autoscaling is to support following scenarios:
 
-- For a standalone mode apache spark cluster, assuming multiple users share the spark cluster, and one user submits a spark application that running a Ray on spark cluster. If Ray on spark autoscaling is supported, and the spark application enables [dynamic resources allocation](https://spark.apache.org/docs/3.4.1/job-scheduling.html#dynamic-resource-allocation), then the Ray on spark cluster starts with zero Ray worker nodes, and when Ray jobs are submitted, then the Ray on spark cluster requests more Ray worker nodes by demands (i.e. scales up), it will trigger more spark executors launching for this spark application, after Ray jobs completes, then the Ray on spark cluster scales down, it will terminate idle Ray worker nodes and then trigger some idle spark executor termination. So that with Ray on spark autoscaling feature enabled, when the Ray on spark cluster is idle, it does not occupy spark worker resources.
+- For a standalone mode apache spark cluster, assuming multiple users share the spark cluster, and one user submits a spark application that runs a Ray on spark cluster. If Ray on spark autoscaling is supported, and the spark application enables [dynamic resources allocation](https://spark.apache.org/docs/3.4.1/job-scheduling.html#dynamic-resource-allocation), then the Ray on spark cluster starts with zero Ray worker nodes. When Ray jobs are submitted, the Ray on spark cluster requests more Ray worker nodes based on demands (i.e. scales up). It will launch more spark executors for this spark application. After Ray jobs completes, then the Ray on spark cluster scales down. It will terminate idle Ray worker nodes and then trigger some idle spark executor termination. So that with Ray on spark autoscaling feature enabled, when the Ray on spark cluster is idle, it does not occupy spark worker resources.
 
-- For a databricks spark cluster that enables [databricks cluster autoscaling](https://docs.databricks.com/en/clusters/cluster-config-best-practices.html#autoscaling), with Ray on spark autoscaling enabled, we can start the databricks spark cluster with zero initial spark workers, and when Ray jobs are submitted, it triggers Ray on spark cluster scaling up, then it triggers databricks spark cluster scales up. Vice versa, when Ray jobs complete, it triggers Ray on spark cluster scaling down, then it triggers databricks spark cluster scales down. This feature helps databricks users to improve cloud resource utilization.
+- For a databricks spark cluster that enables [databricks cluster autoscaling](https://docs.databricks.com/en/clusters/cluster-config-best-practices.html#autoscaling), with Ray on spark autoscaling enabled, we can start the databricks spark cluster with zero initial spark workers. When Ray jobs are submitted, it triggers Ray on spark cluster scaling up and the underlying databricks spark cluster scaling up. When Ray jobs complete, it triggers Ray on spark cluster scaling down and the underlying databricks spark cluster scaling down. This feature helps databricks users to improve cloud resource utilization and save cost.
 
 
 #### Key requirements:
-- Supports apache/spark cluster that is configured with [standalone mode](https://spark.apache.org/docs/3.4.1/spark-standalone.html)
+- Supports Apache Spark cluster that is configured with [standalone mode](https://spark.apache.org/docs/3.4.1/spark-standalone.html)
 - Support Apache Spark application that enables dynamic resources allocation.
 - Supports databricks spark cluster that enables spark worker autoscaling
 
@@ -48,7 +48,7 @@ Within Ray. For better code maintenance.
   pip install "ray[debug,dashboard,tune,rllib,serve]"
   ```
 
-### Ray autoscaler plugin interfaces
+### Ray on spark autoscaling interfaces
 
 Integrate autoscaling feature into existing `ray.util.spark.cluster_init.setup_ray_cluster` API,
 The following new arguments are added:
@@ -68,12 +68,12 @@ The following new arguments are added:
 To start a Ray cluster that enables autoscaling, firstly, prepares a config file like following:
 
 ```yaml
-cluster_name: ray_on_spark
+cluster_name: spark
 max_workers: 8  # maximum number of workers
 provider:
     # This is the key of registered Ray autoscaling `NodeProvider` class that is
     # used as the backend of launching Ray worker nodes.
-    type: ray_on_spark
+    type: spark
     # This must be true since the nodes share the same ip!
     use_node_id_as_ip: True
     disable_node_updaters: True
@@ -106,92 +106,33 @@ ray start --head --autoscaling-config=/path/to/autoscaler-config.yaml
 ```
 
 The above command starts a Ray head node, it also starts a Ray autoscaler with
-above YAML configuration, it configures autoscaler with "ray_on_spark" `NodeProvider`
-backend, when Ray jobs are submitted Ray cluster is requested to scale up,
-the configured `NodeProvider` backend is called to trigger Ray worker node setup.
+above YAML configuration, it configures autoscaler with "spark" `NodeProvider`
+backend. When Ray cluster is requested to scale up,
+the configured `NodeProvider` is called to trigger Ray worker node setup.
 
-The `NodeProvider` [interfaces](https://github.com/ray-project/ray/blob/e1c48ab8b1225daa44ea63ed1e7dc956b0e7f411/python/ray/autoscaler/node_provider.py#L13) are defined like following (only some important interfaces are listed here):
+This is `NodeProvider` [interfaces](https://github.com/ray-project/ray/blob/e1c48ab8b1225daa44ea63ed1e7dc956b0e7f411/python/ray/autoscaler/node_provider.py#L13).
 
-```python
+### How to implement spark node provider?
 
-class NodeProvider:
-
-    def create_node_with_resources_and_labels(
-        self, node_config, tags, count, resources, labels
-    ):
-        """
-        Create `count` number of nodes, resources are node CPU / GPU / memory
-        requirements that are defined in autoscaler config YAML file.
-        After node creation, generate a unique node_id and link the node id with
-        several node metadata like tags / labels.
-        """
-        ...
-    
-    def terminate_node(self, node_id):
-        """
-        Terminate node by provided node id.
-        """
-  
-    def external_ip(self, node_id):
-        """
-        Get node external ip. In Ray on spark NodeProvider implementation,
-        we need to use fake IP that equals to node id, see Key questions
-        "How to make `NodeProvider` backend support multiple Ray worker nodes
-        running on the same virtual machine"
-        """
-        ...
-
-    def internal_ip(self, node_id):
-        """
-        Get node internal ip. In Ray on spark NodeProvider implementation,
-        we need to use fake IP that equals to node id, see Key questions
-        "How to make `NodeProvider` backend support multiple Ray worker nodes
-        running on the same virtual machine"
-        """
-        ...
-
-
-    def is_running(self, node_id):
-        """
-        query node running status.
-        """
-        ...
-
-    def is_terminated(self, node_id):
-        """
-        query whether node is terminated
-        """
-        ...
-
-    def node_tags(self, node_id):
-        """
-        query node tags
-        """
-        ...
-
-    def set_node_tags(self, node_id, tags):
-        """
-        set node tags
-        """
-        ...
-
-    @staticmethod
-    def bootstrap_config(cluster_config):
-        """
-        Override original autoscaler configs here.
-        """
-        ...
-```
-
-### How to implement Ray on spark node provider backend ?
-
-For Ray worker node creation, each Ray worker node, we start a spark job with only one spark
+For each Ray worker node, each Ray worker node, we start a spark job with only one spark
 task to hold this Ray worker node. When we need to terminate this Ray worker node, we cancel
 the corresponding spark task so that the Ray worker node is terminated.
 
-The critical issue is, in the process that executing `NodeProvider` backends, how to get
-the spark session in parent process ? We can set up a spark job server that runs inside
-parent process with mulitple threaded mode. The overall architecture is:
+One critical is: spark node provider runs in autoscaler process that is different process
+with the one that executes "setup_ray_cluster" API. User calls "setup_ray_cluster" in
+spark application driver node, and the semantic is "setup_ray_cluster" requests spark resources from
+this spark application, internally, "setup_ray_cluster" should use "spark session" instance
+to request spark application resources. But spark node provider runs in another python process,
+how to share current process spark session to the separate NodeProvider process ? The solution is
+We can set up a spark job server that runs inside spark application driver process (the process
+that calls "setup_ray_cluster" API), and in NodeProvider process, it sends RPC request to
+the spark job server for creating spark jobs in the spark application. Note that we cannot
+create another spark session in NodeProvider process, because if doing so, it means we create
+another spark application, and then it causes NodeProvider requests resources belonging to
+the new spark application, but we need to ensure all requested spark resources are belong to
+the original spark application that calls "setup_ray_cluster" API.
+
+The overall architecture is:
 
 ![ray on spark autoscaling architecture](https://github.com/ray-project/ray/assets/19235986/9f1f30bb-e395-4d98-8c8d-5fa60675bafa)
 
@@ -209,8 +150,8 @@ The second reason is ray-on-spark autoscaling only supports a very limited subse
 
 See [Cluster size and autoscaling](https://docs.databricks.com/en/clusters/configure.html#autoscaling) and [Enhanced Autoscaling](https://docs.databricks.com/en/delta-live-tables/auto-scaling.html) for configuring databricks spark cluster autoscaling.
 
-Note that scaling up or down is triggered automatically. In Ray on spark NodeProvider
-backend, we just need to create or cancel spark jobs by demand, then databricks cluster
+Note that scaling up or down is triggered automatically. In Ray on spark NodeProvider,
+we just need to create or cancel spark jobs by demand, then databricks cluster
 will automatically scale up or down according to cluster resources utilization ratio.
 
 
@@ -232,7 +173,7 @@ ray worker nodes. It breaks rules above, the workaround is, we can set `use_node
 
 ```yaml
 provider:
-    type: ray_on_spark
+    type: spark
     use_node_id_as_ip: True
     ...
 ```
@@ -244,9 +185,15 @@ See related logic code [here](https://github.com/ray-project/ray/blob/7a8b6a1b52
 
 #### Shall we merge multiple Ray worker nodes into one spark job ?
 
-This is difficult. When we cancel a spark job, all spark tasks in the job are killed.
-But the `NodeProvider` interface might trigger `terminate_node` solely on specific
-Ray node.
+We shouldn't. The NodeProvider interfaces are:
+- creating one or more Ray worker nodes, and allocating node ID for each of them
+- removing specific Ray worker node by node ID
+
+If we create a spark job with multiple spark tasks (each task holds one Ray worker node),
+then when NodeProvider want to remove a specific Ray worker node by node ID, we have no way
+to implement it, because the Ray worker might be launched in a spark job with other
+Ray worker nodes together, we can only cancel the whole spark job which causes all
+Ray worker nodes killed.
 
 On the other hand, create multiple spark jobs, one job with only one spark task
 (each spark task holds a Ray worker node)
@@ -254,16 +201,7 @@ does not cause too much overhead, assuming we don't have enormous number (< 1000
 of Ray worker nodes.
 
 
-#### Can we create a new spark session in Ray autoscaler process instead of reusing parent process spark session ? So that we can avoid create a spark job server.
-
-This way it means creating a separate spark application but not running Ray cluster
-in parent process spark application, but the `setup_ray_cluster` is designed to
-start a Ray cluster via current spark application, and all Ray cluster resources
-requests must be limited inside the current spark application.
-
-So that we cannot use this way.
-
-#### When `NodeProvider.create_node_with_resources_and_labels` is triggered, and node creation request is emitted, but it takes several minutes to launch a new spark worker nodes and create ray worker node, during the creation pending period, how to notify Ray autoscaler that the Ray worker node is pending creation, but not creation failure ?
+#### When `NodeProvider.create_node_with_resources_and_labels` is triggered, and node creation request is emitted, but it takes several minutes to launch a new spark worker node and create ray worker node, during the creation pending period, how to notify Ray autoscaler that the Ray worker node is pending creation, but not creation failure ?
 
 Once `NodeProvider.create_node_with_resources_and_labels` is called, node creation request is emitted, and in spark node provider, this node status is marked as "setting-up", once the ray worker node is actually launched, spark node provider changes the node status to "up-to-date", if it detects the ray worker node is down, spark node provider removes the node out of active node list.
 
@@ -277,7 +215,8 @@ In spark task, we start a child process to execute Ray worker node and the spark
 #### Ray autoscaler supports setting multiple Ray worker groups, each Ray worker group has its individual CPU / GPU / memory resources configuration, and its own minumum / maximum worker number setting for autoscaling. Shall we support this feature ?
 in Ray on spark autoscaling ?
 
-We can support this if customer requires it.
+Current use-cases only require all Ray worker nodes having the same shape,
+we can support this in future if customer requires it.
 
 
 #### What's the default Ray on spark minimum worker number we should use ?
