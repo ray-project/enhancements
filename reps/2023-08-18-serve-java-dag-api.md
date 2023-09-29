@@ -123,47 +123,144 @@ deployment = serve.deployment('io.ray.serve.ExampleDeployment', name='my_deploym
 
 ```
 ### Deploying through the Config File
-Using a config file, we can deploy the Serve application through the CLI. For Java deployment, we can also describe it in a Python file and generate the corresponding deployment configuration in the config file. Let's take the example of the text.py file:
-```python
-from ray import serve
-from ray.serve.generated.serve_pb2 import JAVA
+Based on the mentioned API, we can deploy a Java code file that orchestrates an application using the `serve run` command. For example, consider the following Text.java file:
+```java
+import io.ray.serve.api.Serve;
+import io.ray.serve.deployment.Application;
+import io.ray.serve.handle.DeploymentHandle;
 
+public class Text {
 
-@serve.deployment
-class Hello:
-    def __call__(self) -> str:
-        return "Hello"
+  public static class Hello {
+    public String call() {
+      return "Hello";
+    }
+  }
 
+  public static class World {
+    public String call() {
+      return " world!";
+    }
+  }
 
-world_java = serve.deployment('io.ray.serve.World', language=JAVA)
+  public static class Ingress {
+    private DeploymentHandle helloHandle;
+    private DeploymentHandle worldHandle;
 
+    public Ingress(DeploymentHandle helloHandle, DeploymentHandle worldHandle) {
+      this.helloHandle = helloHandle;
+      this.worldHandle = worldHandle;
+    }
 
-@serve.deployment
-class Ingress:
-    def __init__(self, hello_handle, world_handle):
-        self._hello_handle = hello_handle.options(
-            use_new_handle_api=True,
-        )
-        self._world_handle = world_handle.options(
-            use_new_handle_api=True,
-        )
+    public String call() {
+      return (String) helloHandle.remote().result() + worldHandle.remote().result();
+    }
+  }
 
-    async def __call__(self) -> str:
-        hello_response = self._hello_handle.remote()
-        world_response = self._world_handle.remote()
-        return (await hello_response) + (await world_response)
+  public static Application app() {
+    Application hello = Serve.deployment().setDeploymentDef(Hello.class.getName()).bind();
+    Application world = Serve.deployment().setDeploymentDef(World.class.getName()).bind();
 
-
-hello = Hello.bind()
-world = world_java.bind()
-
-app = Ingress.bind(hello, world)
+    Application app =
+        Serve.deployment().setDeploymentDef(Ingress.class.getName()).bind(hello, world);
+    return app;
+  }
+}
 
 ```
-In this code, we define the Java Deployment `World` using the Python API and then bind it with a Python Deployment `Hello` into the `Ingress` to form an app. By using the `serve build` command, the Serve config file can be generated.
+This code orchestrates an application within a static method named `app`. The CLI command for its deployment is as follows:
 ```shell
-$ serve build text:app -o serve_config.yaml
+$ serve run java:io.ray.serve.repdemo.Text:app
 ```
+
+> It should be noted that `java` is mentioned here to represent the programming language used for orchestrating the application. Currently, there is no clear plan on how to expand this parameter in the serve run command. One direct approach that comes to mind is to concatenate it before the `import_path`.
+
+Additionally, similar to the Python `app_builder`, a Java application also supports custom parameters. For example:
+```java
+import io.ray.serve.api.Serve;
+import io.ray.serve.deployment.Application;
+import java.util.Map;
+
+public class Hello {
+
+  public static class HelloWorld {
+    private String message;
+
+    public HelloWorld(String message) {
+      this.message = message;
+    }
+
+    public String call() {
+      return message;
+    }
+  }
+
+  public static Application appBuilder(Map<String, String> args) {
+    return Serve.deployment()
+        .setDeploymentDef(HelloWorld.class.getName())
+        .bind(args.get("message"));
+  }
+}
+
+```
+
+The `appBuilder` method takes a `Map` as input parameter, from which users can retrieve the required `message` parameter. The syntax for deployment is as follows:
+
+
+```shell
+$ serve run java:io.ray.serve.repdemo.Hello:appBuilder message="Hello from CLI"
+```
+
+Furthermore, it is worth mentioning that `appBuilder` also supports user-defined input parameter of custom types, as long as the type includes the specified attributes. For example:
+
+```java
+import io.ray.serve.api.Serve;
+import io.ray.serve.deployment.Application;
+import java.util.Map;
+
+public class Hello {
+
+  public static class HelloWorldArgs {
+    private String message;
+
+    public String getMessage() {
+      return message;
+    }
+
+    public void setMessage(String message) {
+      this.message = message;
+    }
+  }
+
+  public static class HelloWorld {
+    private String message;
+
+    public HelloWorld(String message) {
+      this.message = message;
+    }
+
+    public String call() {
+      return message;
+    }
+  }
+
+  public static Application typedAppBuilder(HelloWorldArgs args) {
+    return Serve.deployment().setDeploymentDef(HelloWorld.class.getName()).bind(args.getMessage());
+  }
+}
+
+```
+
+```shell
+$ serve run java:io.ray.serve.repdemo.Hello:typedAppBuilder message="Hello from CLI"
+```
+
+For the aforementioned `Text.java` file, we can generate the corresponding Serve config file using the `serve build` command:
+
+```shell
+$ serve build io.ray.serve.repdemo.Text:app -o serve_config.yaml
+```
+
 The generated config file looks like this:
 ```yaml
 proxy_location: EveryNode
@@ -177,9 +274,10 @@ grpc_options:
   grpc_servicer_functions: []
 
 applications:
-- name: app1
+- name: app
   route_prefix: /
-  import_path: text:app
+  import_path: io.ray.serve.repdemo.Text:app
+  language: java
   runtime_env: {}
   deployments:
   - name: Hello
@@ -187,7 +285,9 @@ applications:
   - name: Ingress
 
 ```
-By using this serve config file, the Application can be deployed through the "serve run" command:
+
+The `serve run` command allows direct specification of this config file for deploying the application:
+
 ```shell
 $ serve run serve_config.yaml
 ```
