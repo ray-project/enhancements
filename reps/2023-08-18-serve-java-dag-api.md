@@ -170,10 +170,8 @@ public class Text {
 ```
 This code orchestrates an application within a static method named `app`. The CLI command for its deployment is as follows:
 ```shell
-$ serve run java:io.ray.serve.repdemo.Text:app
+$ serve run io.ray.serve.repdemo.Text:app --language=java
 ```
-
-> It should be noted that `java` is mentioned here to represent the programming language used for orchestrating the application. Currently, there is no clear plan on how to expand this parameter in the serve run command. One direct approach that comes to mind is to concatenate it before the `import_path`.
 
 Additionally, similar to the Python `app_builder`, a Java application also supports custom parameters. For example:
 ```java
@@ -208,7 +206,7 @@ The `appBuilder` method takes a `Map` as input parameter, from which users can r
 
 
 ```shell
-$ serve run java:io.ray.serve.repdemo.Hello:appBuilder message="Hello from CLI"
+$ serve run io.ray.serve.repdemo.Hello:appBuilder --language=java message="Hello from CLI"
 ```
 
 Furthermore, it is worth mentioning that `appBuilder` also supports user-defined input parameter of custom types, as long as the type includes the specified attributes. For example:
@@ -252,13 +250,13 @@ public class Hello {
 ```
 
 ```shell
-$ serve run java:io.ray.serve.repdemo.Hello:typedAppBuilder message="Hello from CLI"
+$ serve run io.ray.serve.repdemo.Hello:typedAppBuilder --language=java message="Hello from CLI"
 ```
 
-For the aforementioned `Text.java` file, we can generate the corresponding Serve config file using the `serve build` command:
+For the aforementioned `Hello.java` file, we can generate the corresponding Serve config file using the `serve build` command:
 
 ```shell
-$ serve build io.ray.serve.repdemo.Text:app -o serve_config.yaml
+$ serve build io.ray.serve.repdemo.Hello:typedAppBuilder --language=java -o serve_config.yaml
 ```
 
 The generated config file looks like this:
@@ -276,17 +274,41 @@ grpc_options:
 applications:
 - name: app
   route_prefix: /
-  import_path: io.ray.serve.repdemo.Text:app
+  import_path: io.ray.serve.repdemo.Text:typedAppBuilder
   language: java
   runtime_env: {}
   deployments:
-  - name: Hello
-  - name: World
-  - name: Ingress
+  - name: HelloWorld
 
 ```
 
-The `serve run` command allows direct specification of this config file for deploying the application:
+We can modify the config file to pass the arguments required by the `appBuilder`, and then deploy the application based on the serve config using `serve run`. For the above config file, we add a parameter `message` to it:
+
+```yaml
+proxy_location: EveryNode
+
+http_options:
+  host: 0.0.0.0
+  port: 8000
+
+grpc_options:
+  port: 9000
+  grpc_servicer_functions: []
+
+applications:
+- name: app
+  route_prefix: /
+  import_path: io.ray.serve.repdemo.Text:typedAppBuilder
+  args:
+    message: "Hello from config"
+  language: java
+  runtime_env: {}
+  deployments:
+  - name: HelloWorld
+
+```
+
+Then deploy the config file:
 
 ```shell
 $ serve run serve_config.yaml
