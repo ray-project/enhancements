@@ -134,7 +134,7 @@ that calls "setup_ray_cluster" API), and in NodeProvider process, it sends RPC r
 the spark job server for creating spark jobs in the spark application. Note that we cannot
 create another spark session in NodeProvider process, because if doing so, it means we create
 another spark application, and then it causes NodeProvider requests resources belonging to
-the new spark application, but we need to ensure all requested spark resources are belong to
+the new spark application, but we need to ensure all requested spark resources belong to
 the original spark application that calls "setup_ray_cluster" API.
 
 The overall architecture is:
@@ -185,11 +185,6 @@ provider:
 
 and we use incremental number as the node id used in NodeProvider implementation code. Before creating Ray worker nodes, we set a special resource `NODE_ID_AS_RESOURCE` and the total quantity is the value of the node id. Ray autoscaler code can then track these Ray nodes status correctly.
 See related logic code [here](https://github.com/ray-project/ray/blob/7a8b6a1b52488922fc27a1bc2a01d40f87d36af6/python/ray/autoscaler/_private/monitor.py#L304C34-L304C34) for reference.
-
-
-#### When `NodeProvider.create_node_with_resources_and_labels` is triggered, and node creation request is emitted, but it takes several minutes to launch a new spark worker node and create ray worker node, during the creation pending period, how to notify Ray autoscaler that the Ray worker node is pending creation, but not creation failure ?
-
-Once `NodeProvider.create_node_with_resources_and_labels` is called, node creation request is emitted, and in spark node provider, this node status is marked as "setting-up". Once the ray worker node is actually launched, spark node provider changes the node status to "up-to-date". If it detects the ray worker node is down, spark node provider removes the node out of active node list.
 
 
 #### Ray autoscaler supports setting multiple Ray worker groups, each Ray worker group has its individual CPU / GPU / memory resources configuration, and its own minumum / maximum worker number setting for autoscaling. Shall we support this feature in Ray on spark autoscaling?
