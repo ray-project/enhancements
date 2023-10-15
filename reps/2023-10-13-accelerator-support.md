@@ -1,4 +1,4 @@
-# Ray Accelerator Support 
+# Ray Accelerator Support
 
 ## Summary
 
@@ -214,7 +214,10 @@ To auto populate `rayStartParams` resources using pod resources, some code is ne
 See https://github.com/ray-project/kuberay/blob/b7bc7ae8c983160bb700d6b8bb4014dda183ecea/ray-operator/controllers/ray/common/pod.go#L687 as an example of how GPU resource is populated.
 
 ### Observability
-TODO
+
+Currently we emit metrics about the physical usages of GPUs and also show them on Ray dashboard.
+Similarly, for other accelerators, we need to emit those metrics as well and update the Ray dashboard
+and Grafana dashboard to show them.
 
 ### Docker
 
@@ -227,5 +230,5 @@ TODO
 ### Testing
 
 For some of the CI tests, we can mock without actually running on the machine with those accelerators.
-But for some other CI tests and release tests, we do need machines with those accelerators to make sure real workoads can run using those accelerators successfully.
+But for some other CI tests and release tests, we do need machines with those accelerators to make sure real workoads can run successfully using those accelerators.
 
