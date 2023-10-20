@@ -179,7 +179,90 @@ class Accelerator(ABC):
 Besides defining the accelerator subclass, the accelerator resource needs to be marked as unit instance resource in config `RAY_custom_unit_instance_resources`.
 
 ### Ray Train
-TODO
+
+Ray Train will provide 2 new APIs to support different accelerator types. 
+
+
+#### 1. Specify Accelerator Type in `ScalingConfig`
+
+Ray Core automatically detects the accelerator type, and treats it as an additional resource tag. Ray Train will therefore be able to launch training jobs on specific accelerator types. We add a new initialization argument `accelerator_type` for `ray.train.ScalingConfig`.
+
+
+```python
+# CPU
+ScalingConfig(num_workers=4)
+
+# GPU
+# If no accelerator is specified, schedule workers on any GPU node
+ScalingConfig(num_workers=4, use_gpu=True)
+
+# GPU (A100)
+# If specified, schedule workers only on A100 nodes
+ScalingConfig(num_workers=4, use_gpu=True, accelerator_type="A100")
+
+# AWS Trainium
+ScalingConfig(num_workers=4, resources_per_worker={"neuron_cores": 1})
+
+# TPU (TPU-v3)
+ScalingConfig(num_workers=4, accelerator_type="TPU-V3", resources_per_worker={"TPU": 1})
+
+# HPU (Gaudi2)
+ScalingConfig(num_workers=4, accelerator_type="Gaudi2", resources_per_worker={"HPU": 1})
+```
+
+Internally, Ray Train adds the `accelerate_type` parameter in `ray.remote()` to start the training workers.
+
+#### 2. Specify PyTorch Backend for each Accelerator Family
+
+Different accelerator family uses different backend to launch deep learning training. Ray Train will implement a different backend class for each accelerator family to launch distributed groups and set environment variables.
+
+| Accelerator | Communication Backend | Developer APIs | User APIs | 
+| - | - | - | - |
+| GPU      | `nccl`, `gloo` | TorchBackend | TorchConfig |
+| TPU      | `xla[tpu]`      | TorchTPUXLABackend | TorchXLAConfig |
+| Trainium | `xla[neuronx]`  | TorchAwsNeuronXLABackend | TorchXLAConfig  |
+| HPU      | `hccl`         | TorchHPUBackend | TorchHCCLConfig |
+
+
+Putting things together, users should be able to set up the resources and backend with these two APIs in `TorchTrainer`.
+
+```python
+from ray.train import ScalingConfig
+from ray.train.torch import TorchTrainer
+from ray.train.torch.tpu import TorchXLAConfig
+
+# TPU Training
+trainer = TorchTrainer(
+    train_func,
+    scaling_config=ScalingConfig(
+        num_workers=4, 
+        accelerator_type="TPU-V4", 
+        resources_per_worker={"TPU": 1}
+    ),
+    torch_config=TorchXLAConfig(backend="tpu")
+)
+
+# AWS Trainium
+trainer = TorchTrainer(
+    train_func,
+    scaling_config=ScalingConfig(
+        num_workers=4, 
+        resources_per_worker={"neuron_cores": 1}
+    ),
+    torch_config=TorchXLAConfig(backend="neuronx")
+)
+
+# HPU
+trainer = TorchTrainer(
+    train_func,
+    scaling_config=ScalingConfig(
+        num_workers=4, 
+        resources_per_worker={"HPU": 1}
+    ),
+    torch_config=TorchHCCLConfig()
+)
+```
+
 
 ### Ray RLLib
 TODO
