@@ -218,18 +218,17 @@ Different accelerator family uses different backend to launch deep learning trai
 
 | Accelerator | Communication Backend | Developer APIs | User APIs | 
 | - | - | - | - |
-| GPU      | `nccl`, `gloo` | TorchBackend | TorchConfig |
-| TPU      | `xla[tpu]`      | TorchTPUXLABackend | TorchXLAConfig |
-| Trainium | `xla[neuronx]`  | TorchAwsNeuronXLABackend | TorchXLAConfig  |
-| HPU      | `hccl`         | TorchHPUBackend | TorchHCCLConfig |
+| GPU      | `nccl`, `gloo` | TorchBackend | `TorchConfig()` |
+| TPU      | `xla[tpu]`      | TorchTPUXLABackend | `TorchConfig("xla[tpu]")` |
+| Trainium | `xla[neuronx]`  | TorchAwsNeuronXLABackend | `TorchConfig("xla[neuronx]")`  |
+| HPU      | `hccl`         | TorchHCCLBackend | `TorchConfig("hccl")` |
 
 
 Putting things together, users should be able to set up the resources and backend with these two APIs in `TorchTrainer`.
 
 ```python
 from ray.train import ScalingConfig
-from ray.train.torch import TorchTrainer
-from ray.train.torch.tpu import TorchXLAConfig
+from ray.train.torch import TorchTrainer, TorchConfig
 
 # TPU Training
 trainer = TorchTrainer(
@@ -239,7 +238,7 @@ trainer = TorchTrainer(
         accelerator_type="TPU-V4", 
         resources_per_worker={"TPU": 1}
     ),
-    torch_config=TorchXLAConfig(backend="tpu")
+    torch_config=TorchConfig(backend="xla[tpu]")
 )
 
 # AWS Trainium
@@ -249,7 +248,7 @@ trainer = TorchTrainer(
         num_workers=4, 
         resources_per_worker={"neuron_cores": 1}
     ),
-    torch_config=TorchXLAConfig(backend="neuronx")
+    torch_config=TorchConfig(backend="xla[neuronx]")
 )
 
 # HPU
@@ -259,7 +258,7 @@ trainer = TorchTrainer(
         num_workers=4, 
         resources_per_worker={"HPU": 1}
     ),
-    torch_config=TorchHCCLConfig()
+    torch_config=TorchConfig(backend="hccl")
 )
 ```
 
