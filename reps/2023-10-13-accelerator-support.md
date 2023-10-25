@@ -241,9 +241,9 @@ Besides defining the accelerator subclass, the accelerator resource needs to be 
 Ray Train will provide 2 new APIs to support different accelerator types. 
 
 
-#### 1. Specify Accelerator Type in `ScalingConfig`
+#### 1. Specify Resources in `ScalingConfig`
 
-Ray Core automatically detects the accelerator type, and treats it as an additional resource tag. Ray Train will therefore be able to launch training jobs on specific accelerator types. We add a new initialization argument `accelerator_type` for `ray.train.ScalingConfig`.
+Ray Core automatically detects the accelerator type and the corresponding resources quantity. Ray Train users can directly specify the new accelerator resources in `ray.train.ScalingConfig(resources_per_worker=)`.
 
 
 ```python
@@ -254,21 +254,17 @@ ScalingConfig(num_workers=4)
 # If no accelerator is specified, schedule workers on any GPU node
 ScalingConfig(num_workers=4, use_gpu=True)
 
-# GPU (A100)
-# If specified, schedule workers only on A100 nodes
-ScalingConfig(num_workers=4, use_gpu=True, accelerator_type="A100")
-
 # AWS Trainium
 ScalingConfig(num_workers=4, resources_per_worker={"neuron_cores": 1})
 
-# TPU (TPU-v3)
-ScalingConfig(num_workers=4, accelerator_type="TPU-V3", resources_per_worker={"TPU": 1})
+# TPU
+ScalingConfig(num_workers=4, resources_per_worker={"TPU": 1})
 
-# HPU (Gaudi2)
-ScalingConfig(num_workers=4, accelerator_type="Gaudi2", resources_per_worker={"HPU": 1})
+# HPU
+ScalingConfig(num_workers=4, resources_per_worker={"HPU": 1})
 ```
 
-Internally, Ray Train adds the `accelerate_type` parameter in `ray.remote()` to start the training workers.
+In the future, Ray Train will restructure the `ScalingConfig` class, and incorporate the `accelerate_type` parameter in a more structured way.
 
 #### 2. Specify PyTorch Backend for each Accelerator Family
 
@@ -293,7 +289,6 @@ trainer = TorchTrainer(
     train_func,
     scaling_config=ScalingConfig(
         num_workers=4, 
-        accelerator_type="TPU-V4", 
         resources_per_worker={"TPU": 1}
     ),
     torch_config=TorchConfig(backend="xla[tpu]")
