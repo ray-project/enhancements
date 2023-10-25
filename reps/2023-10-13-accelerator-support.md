@@ -9,7 +9,7 @@ to add new accelerator support in the future.
 ### General Motivation
 
 Nowadays, more and more specialized accelerators (e.g. TPU, HPU) are coming out to speed up AI workloads.
-Supporting those accelerators natively in Ray will increase Ray's adoption as the computing framework for scaling AI applications.
+Supporting those accelerators natively (similar to how Ray supports Nvidia GPUs) in Ray will increase Ray's adoption as the computing framework for scaling AI applications.
 
 ### Should this change be within `ray` or outside?
 
@@ -59,7 +59,9 @@ def task():
 ##### Alternatives
 Other alternative APIs considered:
 
-Similar to `num_gpus`, having a top level parameter for each accelerator family:
+Similar to `num_gpus`, having a top level parameter for each accelerator family.
+One issue is that this will add many top level parameters to `.remote()` that users
+need to learn even though they don't use those accelerators.
 
 ```python
 @ray.remote(num_tpus=1)
@@ -72,7 +74,9 @@ def task():
 ```
 
 A single `ACCELERATOR` resource for the ability to schedule a task on any accelerator
-and an `accelerator_family` is also introduced to allow specifying the family of the accelerators to use:
+and an `accelerator_family` is also introduced to allow specifying the family of the accelerators to use.
+People feel this is less obvious or expclit than having a reosurce name per accelerator family
+and the ability to schedule a task on any accelerator is not that needed.
 
 ```python
 @ray.remote(resources={"ACCELERATOR": 1})
@@ -318,7 +322,7 @@ trainer = TorchTrainer(
 
 
 ### Ray RLLib
-TODO
+Currently there is no plan to support other accelerators in RLLib.
 
 ### Ray Serve
 Nothing needs to be changed on the serve side.
