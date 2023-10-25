@@ -250,8 +250,8 @@ Ray Core automatically detects the accelerator type and the corresponding resour
 # CPU
 ScalingConfig(num_workers=4)
 
-# GPU
-# If no accelerator is specified, schedule workers on any GPU node
+# GPU (Nvidia/Intel)
+# If use_gpu=True, set resources_per_worker={"GPU": 1} by default
 ScalingConfig(num_workers=4, use_gpu=True)
 
 # AWS Trainium
@@ -276,6 +276,7 @@ Different accelerator family uses different backend to launch deep learning trai
 | TPU      | `xla[tpu]`      | TorchTPUXLABackend | `TorchConfig("xla[tpu]")` |
 | Trainium | `xla[neuronx]`  | TorchAwsNeuronXLABackend | `TorchConfig("xla[neuronx]")`  |
 | HPU      | `hccl`         | TorchHCCLBackend | `TorchConfig("hccl")` |
+| XPU      | `oneCCL`       | TorchOneCCLBackend | `TorchConfig("ccl")`|
 
 
 Putting things together, users should be able to set up the resources and backend with these two APIs in `TorchTrainer`.
