@@ -361,10 +361,11 @@ Currently `rayproject/ray-ml` has `-gpu` versions that are based on `NVIDIA CUDA
 Similarly, for other accelerators, we need to publish docker images with their software installed.
 
 ### Documentation
-TODO
+
+All the supported accelerators need to be documented with code examples in both Ray core and Ray train.
 
 ### Testing
 
-For some of the CI tests, we can mock without actually running on the machine with those accelerators.
-But for some other CI tests and release tests, we do need machines with those accelerators to make sure real workoads can run successfully using those accelerators.
+For some of the CI tests, we can mock without actually running on the machines with those accelerators.
+But for some other CI tests and release tests, we do need machines with those accelerators to make sure real workoads can run successfully using those accelerators. Currently Ray CI only supports testing accelerators that are available on AWS.
 
