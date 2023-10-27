@@ -32,7 +32,17 @@ To make the review process more productive, the owner of each proposal should id
 ### Ray Core
 
 #### API
-Users will use accelerators through Ray resources. For GPU accelerators (e.g. Nvidia, AMD, Intel GPUs), they will use the `GPU` resource name. For other accelerators, they will each have their own resource name (e.g. TPU accelerator has resource name `TPU`). `accelerator_type` option can also be used to specify a particular type of accelerator for a task or actor.
+Users will use accelerators through Ray resources. For GPU accelerators (e.g. Nvidia, AMD, Intel GPUs), they will use the `GPU` resource name. For other accelerators, they will each have their own resource name (e.g. TPU accelerator has resource name `TPU`).
+
+| Resource    | Accelerator               |
+| ----------- | ------------------------- |
+| GPU         | Nvidia, Intel, AMD, Apple |
+| TPU         | TPU                       |
+| HPU         | Habana Gaudi              |
+| neuron_cores| AWS Trainium, Inferentia  |
+| ...         | ...                       |
+
+`accelerator_type` option can also be used to specify a particular type of accelerator for a task or actor.
 
 ```python
 @ray.remote(num_gpus=1)
