@@ -108,6 +108,24 @@ def task()
     ...
 ```
 
+##### Runtime Context API
+
+Currently we have `ray.get_gpu_ids()` and we need similar APIs for getting available ids of other accelerators.
+
+The new API will be inside RuntimeContext since it returns accelerator ids that are available to a worker.
+
+```python
+class RuntimeContext:
+    def get_accelerator_ids() -> Dict[str, List[str]]:
+        """
+        Get the current worker's available accelerator ids.
+
+        Returns:
+            A dictionary keyed by the resource name. The values are list
+            of ids. E.g., `{'GPU': ['0', '1']}`, `{'neuron_cores': ['0', '3']}`.
+        """
+```
+
 #### Implementation
 
 Core defines an `AcceleratorManager` base class and each accelerator needs to implement a subclass (e.g. `TPUAcceleratorManager`):
