@@ -85,7 +85,7 @@ def task():
 
 A single `ACCELERATOR` resource for the ability to schedule a task on any accelerator
 and an `accelerator_family` is also introduced to allow specifying the family of the accelerators to use.
-People feel this is less obvious or expclit than having a reosurce name per accelerator family
+People feel this is less obvious or expclit than having a resource name per accelerator family
 and the ability to schedule a task on any accelerator is not that needed.
 
 ```python
