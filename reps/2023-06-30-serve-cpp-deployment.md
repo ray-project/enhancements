@@ -7,9 +7,13 @@ main ray project. Changes are made to the Ray Serve level.
 
 ### Required Reviewers
 @sihanwang41
+@edoakes
+@akshay-anyscale
 
 ### Shepherd of the Proposal (should be a senior committer)
 @sihanwang41
+@edoakes
+@akshay-anyscale
 
 ## Design and Architecture
 
@@ -343,17 +347,16 @@ SERVE_DEPLOYMENT(RankService::FactoryCreate);
 RecommendService is a sequential invocation of other services without complex processing logic, so we can directly use the DAG ability to connect these services, eliminating the need for RecommendService and simplifying user logic. 
 Next, we start the Ray Serve runtime and use Python Serve API deploy these Service as Deployment: 
 ```python
-feature_service = serve.deployment(_func_or_class='FeatureService::FactoryCreate', name='feature_service', language='CPP')
-similarity_service = serve.deployment(_func_or_class='SimilarityService::FactoryCreate', name='similarity_service', language='CPP')
-rank_service = serve.deployment(_func_or_class='RankService::FactoryCreate', name='rank_service', language='CPP')
+feature_deployment = serve.deployment(_func_or_class='FeatureService::FactoryCreate', name='feature_service', language='CPP')
+similarity_deployment = serve.deployment(_func_or_class='SimilarityService::FactoryCreate', name='similarity_service', language='CPP')
+rank_deployment = serve.deployment(_func_or_class='RankService::FactoryCreate', name='rank_service', language='CPP')
 
-with InputNode() as input:
-    features = feature_service.GetVector.bind(input[0])
-    similarities = similarity_service.GetSimilarity.bind(features)
-    rank_result = rank_service.Rank.bind(similarities, input[1])
+feature_service = feature_deployment.bind()
+similarity_service = similarity_deployment.bind()
+rank_service = rank_deployment.bind()
 
-graph = DAGDriver.bind(rank_result, http_adapter=json_request)
-handle = serve.run(graph)
+app = RecommendService.bind(feature_service, similarity_service, rank_service)
+handle = serve.run(app)
 ref = handle.GetVector.remote()
 result = ray.get(ref)
 print(result)
