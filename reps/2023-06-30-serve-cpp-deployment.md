@@ -344,7 +344,6 @@ SERVE_DEPLOYMENT(RankService::FactoryCreate);
 }  // namespace ray
 
 ```
-RecommendService is a sequential invocation of other services without complex processing logic, so we can directly use the DAG ability to connect these services, eliminating the need for RecommendService and simplifying user logic. 
 Next, we start the Ray Serve runtime and use Python Serve API deploy these Service as Deployment: 
 ```python
 feature_deployment = serve.deployment(_func_or_class='FeatureService::FactoryCreate', name='feature_service', language='CPP')
