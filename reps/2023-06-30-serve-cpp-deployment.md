@@ -346,9 +346,9 @@ SERVE_DEPLOYMENT(RankService::FactoryCreate);
 ```
 Next, we start the Ray Serve runtime and use Python Serve API deploy these Service as Deployment: 
 ```python
-feature_deployment = serve.deployment(_func_or_class='FeatureService::FactoryCreate', name='feature_service', language='CPP')
-similarity_deployment = serve.deployment(_func_or_class='SimilarityService::FactoryCreate', name='similarity_service', language='CPP')
-rank_deployment = serve.deployment(_func_or_class='RankService::FactoryCreate', name='rank_service', language='CPP')
+feature_deployment = serve.deployment('FeatureService::FactoryCreate', name='feature_service', language='CPP')
+similarity_deployment = serve.deployment('SimilarityService::FactoryCreate', name='similarity_service', language='CPP')
+rank_deployment = serve.deployment('RankService::FactoryCreate', name='rank_service', language='CPP')
 
 feature_service = feature_deployment.bind()
 similarity_service = similarity_deployment.bind()
