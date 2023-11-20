@@ -100,6 +100,16 @@ There are two pivotal options in the major implementation of this project, each 
 In Option 1, we choose to store `GPU_Memory` as part of the NodeResource. This implementation ensures synchronization between GPU and `GPU_Memory`. During node feasibility checks and resource allocation, the `ConvertRelativeResource` function performs two conversions: calculating `gpu_memory` if `num_gpus` is specified and vice versa. 
 
 ```c++
+// Example: Given a Node with total_single_gpu_memory = 110000 (in mb) with ResourceRequest.ResourceSet
+// {
+//     "gpu_memory": 1010,
+// }
+// which is then converted to equivalent GPU rounded up and recompute gpu_memory after roundup
+// {
+//     "GPU": 0.0092, (1010/100000 = 0.00918181818 the rounded up)
+//     "gpu_memory": 1012, (0.0092 x 110000)
+// }
+
 const ResourceSet NodeResources::ConvertRelativeResource(
     const ResourceSet &resource) const {
   ResourceSet adjusted_resource = resource;
@@ -143,6 +153,15 @@ Cons:
 In Option 2, we opt to store only GPU and convert `gpu_memory` to GPU. This implementation involves saving metadata of the single node's `total_gpu_memory`. `ConvertRelativeResource` converts `gpu_memory` in `ResourceRequest` to `num_gpus` based on the single node's `total_gpu_memory` during node feasibility checks and resource allocation. 
 
 ```c++
+// Example: Given a Node with total_single_gpu_memory = 110000 (in mb) with ResourceRequest.ResourceSet
+// {
+//     "gpu_memory": 1010 
+// }
+// which is then converted to equivalent GPU resource
+// {
+//     "GPU": 0.0092 (1010/110000 = 0.00918181818 the rounded up)
+// }
+
 const ResourceSet NodeResources::ConvertRelativeResource(
     const ResourceSet &resource) const {
   ResourceSet adjusted_resource = resource;
