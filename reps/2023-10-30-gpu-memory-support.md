@@ -6,7 +6,11 @@ Design docummentation for supporting gpu-memory on ray core resource scheduler.
 
 ### General Motivation
 
-Currently, `ray` support `num_gpus` to scheduler resource to tasks/actors, which then assign either `num_gpus` number of gpus or a fraction of a single gpu if `num_gpus < 1`. However, there are often use cases where users want to specify gpu by amount of memory. The current workaround is ray users require to specify the gpu they want to use and convert the gpu memory into fractional value w.r.t the specified gpu. This new scheduler design will allows users to directly scheduler gpu resources by amount of memory.
+Currently, `ray` supports `num_gpus` to scheduler resource to tasks/actors, which then assign either `num_gpus` number of gpu ids to be used by the tasks/actors. Additionally, `ray` provides support fractional gpus allocation by specifying `num_gpus < 1` so a single GPU can be used to run multiple tasks. This works well if the cluster only has a single type of GPUs. However, imagining a cluster has both A100 40GB and A100 80GB GPUs, setting num_gpus to a fixed number doesn’t work that well: if we set to 0.1 then we will get 4GB if the scheduler picks A100 40GB but 8GB if the scheduler picks A100 80GB which is a waste of resource. We can also set accelerator_type to A100_40GB and num_gpus to 0.1 to make sure we get the exact amount of GPU memory we need but then the task cannot run on A100 80GB even if it’s free.
+
+This new scheduler design will allows users to directly schedule fractional gpu resources by amount of memory. In our example, if user specify `_gpu_memory = 20GB`, then `ray` automatically convert the value to `num_gpus` depending on which nodes the request is assigned too. As example, if it's scheduled on A100 40GB node, then `num_gpus = 0.5`, otherwise if it's scheduled on A100 80GB node, then `num_gpus = 0.25`. As a result, user can schedule a fixed amount of GPU resources without depending on which types of GPUs the tasks/actos are scheduled to.
+
+... issue with num gpus
 
 **Ray community users’s demand**:
 
@@ -17,6 +21,10 @@ https://github.com/ray-project/ray/issues/26929
 https://discuss.ray.io/t/how-to-specify-gpu-resources-in-terms-of-gpu-ram-and-not-fraction-of-gpu/4128
 
 https://discuss.ray.io/t/gpu-memory-aware-scheduling/2922/5
+
+https://discuss.ray.io/t/automatic-calculation-of-a-value-for-the-num-gpu-param/7844/4
+
+https://discuss.ray.io/t/ray-train-ray-tune-ray-clusters-handling-different-gpus-with-different-gpu-memory-sizes-in-a-ray-cluster/9220
 
 ### Should this change be within `ray` or outside?
 
@@ -88,6 +96,10 @@ def nvidia_a100_gpu_task:
 def nvidia_a10_gpu_task:
   …
 ```
+
+#### Placement Group
+TBD
+
 ### Resource API
 We introduce a new `ResourceID` named `GPU_Memory` (`gpu_memory` in string) to specify the amount of GPU memory resources. `GPU_Memory` is treated as a GPU resource with a distinct representation, where the relationship is defined as `GPU` equals to `GPU_Memory` divided by the total memory of a single GPU in the node as GPU resources in the node is homogeneous. Despite their distinct representations, both `GPU` and `GPU_Memory` signify the same underlying resource, with the caveat that Ray currently only supports homogeneous GPU type for each node.
 
@@ -135,11 +147,12 @@ NodeResource(available={"GPU": [0.9998,1,1]})
 ```
 
 Pros:
-- Enhanced Observability: Users can see the remaining GPU memory resources after roundup allocation, providing detailed insights.
+- Simplified Resource Model: Better emphasizes to new users that Ray only have `GPU` to represent GPU resource, simplifying the resource model.
+- Straightforward Conversion: `GPU_Memory` is converted to GPU based on the single node's total_single_gpu_memory during node feasibility checks and resource allocation with the roundup logic applied underhood.
 
 Cons:
-- Synchronization Overhead: Requires synchronization for both `GPU` and `GPU_Memory`, introducing an additional layer of complexity by updating both `GPU` and `GPU_Memory` for rounding up.
-- Resource Duality: Users need to grasp that both resources, `GPU` and `GPU_Memory`, essentially denote the same underlying resource.
+- Limited Observability: `ray.available_resources()` only displays remaining GPU resources in terms of percentage, without specific amounts for `GPU_Memory`.
+- Incompatibility with Heterogeneous GPUs: Doesn't work for heterogeneous GPUs in a single node, a limitation existing in Ray's current support.
 
 #### Option 2: Store both GPU and GPU_Memory Resources
 We store `GPU_Memory` as part of the `NodeResource`. This implementation ensures synchronization between GPU and `GPU_Memory`. During node feasibility checks and resource allocation, the `ConvertRelativeResource` function performs two conversions: calculating `gpu_memory` if `num_gpus` is specified and vice versa. 
@@ -183,12 +196,12 @@ NodeResource(available={"GPU": [0.9998,1,1], "gpu_memory": ["79.984GB", "80GB", 
 ```
 
 Pros:
-- Simplified Resource Model: Better emphasizes to new users that Ray only have `GPU` to represent GPU resource, simplifying the resource model.
-- Straightforward Conversion: `GPU_Memory` is converted to GPU based on the single node's total_single_gpu_memory during node feasibility checks and resource allocation with the roundup logic applied underhood.
+- Enhanced Observability: Users can see the remaining GPU memory resources after roundup allocation, providing detailed insights.
 
 Cons:
-- Limited Observability: `ray.available_resources()` only displays remaining GPU resources in terms of percentage, without specific amounts for `GPU_Memory`.
-- Incompatibility with Heterogeneous GPUs: Doesn't work for heterogeneous GPUs in a single node, a limitation existing in Ray's current support.
+- Synchronization Overhead: Requires synchronization for both `GPU` and `GPU_Memory`, introducing an additional layer of complexity by updating both `GPU` and `GPU_Memory` for rounding up.
+- Resource Duality: Users need to grasp that both resources, `GPU` and `GPU_Memory`, essentially denote the same underlying resource.
+
 
 ### Implementation
 The primary implementation entails the automatic detection of GPU memory during the initialization of a Ray cluster.
@@ -248,3 +261,6 @@ def _inplace_subtract(node: ResourceDict, resources: ResourceDict) -> None:
 ```
 
 For the second option, there's no required addition of `node:gpu_memory_per_gpu_` since `GPU_Memory` is part of resources, but the `_convert_relative_resources` still required.
+
+#### Placement Group
+TBD
