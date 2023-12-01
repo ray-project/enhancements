@@ -407,7 +407,6 @@ The new feature is to add C++ deployment for Ray Serve, without modifying or dep
 - Benchmarks on C++ Deployment
 
 ## (Optional) Follow-on Work
-- Init Ray Serve C++ project structure
-- Create C++ Deployment through Python/Java API
+- Implement C++ Deployment
+- Accessing C++ Deployment using HTTP or Python ServeHandle
 - ServeHandler for C++
-- Accessing C++ Deployment using Python/Java/C++ ServeHandle or HTTP
