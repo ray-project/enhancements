@@ -6,7 +6,7 @@ Enhance Ray fractional gpu support with gpu memory based scheduling.
 
 ### General Motivation
 
-Currently, `ray` supports `num_gpus` to scheduler resource to tasks/actors, which then assign either `num_gpus` number of gpu ids to be used by the tasks/actors. Additionally, `ray` provides support fractional gpus allocation by specifying `num_gpus < 1` so a single GPU can be used to run multiple tasks. This works well if the cluster only has a single type of GPUs. However, imagining a cluster has both A100 40GB and A100 80GB GPUs, setting num_gpus to a fixed number doesn’t work that well: if we set to 0.1 then we will get 4GB if the scheduler picks A100 40GB but 8GB if the scheduler picks A100 80GB which is a waste of resource if the task only needs 4GB. We can also set accelerator_type to A100_40GB and num_gpus to 0.1 to make sure we get the exact amount of GPU memory we need but then the task cannot run on A100 80GB even if it’s free. Many users also have encountered this issue:
+Currently, `ray` supports `num_gpus` to scheduler resource to tasks/actors, which then assign `num_gpus` number of gpu ids to be used by the tasks/actors. Additionally, `ray` provides fractional gpus allocation by specifying `num_gpus < 1` so a single GPU can be used to run multiple tasks. This works well if the cluster only has a single type of GPUs. However, imagining a cluster has both A100 40GB and A100 80GB GPUs, setting num_gpus to a fixed number doesn’t work that well: if we set to 0.1 then we will get 4GB if the scheduler picks A100 40GB but 8GB if the scheduler picks A100 80GB which is a waste of resource if the task only needs 4GB. We can also set accelerator_type to A100_40GB and num_gpus to 0.1 to make sure we get the exact amount of GPU memory we need but then the task cannot run on A100 80GB even if it’s free. Many users also have encountered this issue:
 
 - https://github.com/ray-project/ray/issues/37574
 
@@ -20,23 +20,7 @@ Currently, `ray` supports `num_gpus` to scheduler resource to tasks/actors, whic
 
 - https://discuss.ray.io/t/ray-train-ray-tune-ray-clusters-handling-different-gpus-with-different-gpu-memory-sizes-in-a-ray-cluster/9220
 
-This REP allows users to directly schedule fractional gpu resources by amount of memory. In our example, if user specify `gpu_memory = 20GB`, then `ray` automatically convert the value to `num_gpus` depending on which nodes the request is assigned too. As example, if it's scheduled on A100 40GB node, then `num_gpus = 0.5`, otherwise if it's scheduled on A100 80GB node, then `num_gpus = 0.25`. As a result, user can schedule a fixed amount of GPU resources without depending on which types of GPUs the tasks/actos are scheduled to.
-
-... issue with num gpus
-
-**Ray community users’s demand**:
-
-https://github.com/ray-project/ray/issues/37574
-
-https://github.com/ray-project/ray/issues/26929
-
-https://discuss.ray.io/t/how-to-specify-gpu-resources-in-terms-of-gpu-ram-and-not-fraction-of-gpu/4128
-
-https://discuss.ray.io/t/gpu-memory-aware-scheduling/2922/5
-
-https://discuss.ray.io/t/automatic-calculation-of-a-value-for-the-num-gpu-param/7844/4
-
-https://discuss.ray.io/t/ray-train-ray-tune-ray-clusters-handling-different-gpus-with-different-gpu-memory-sizes-in-a-ray-cluster/9220
+This REP allows users to directly schedule fractional gpu resources by amount of memory. In our example, if user specify `gpu_memory = 20GB`, then `ray` automatically converts the value to `num_gpus` depending on which nodes the request is assigned to. As example, if it's scheduled on A100 40GB node, then `num_gpus = 0.5`, otherwise if it's scheduled on A100 80GB node, then `num_gpus = 0.25`. As a result, user can schedule a fixed amount of GPU resources without depending on which types of GPUs the tasks/actos are scheduled to.
 
 ### Should this change be within `ray` or outside?
 
@@ -76,6 +60,8 @@ ray start –num_gpus=3 –gpu_memory=3000 * 1024 * 1024 * 1024 # manual overrid
 ```
 
 Note that GPU memory and compute unit is 1-1 conversion, means 20GB of gpu memory is equivalent to 0.5 fractional value of an `A100_40GB` gpu. So, for simplicity and consistency, ray doesn't allow users to specify both `num_gpus` and `gpu_memory` in a single ray task/actor.
+Note that GPU memory and GPU is 1-1 conversion, means 20GB of gpu memory is equivalent to 0.5 fractional value of an `A100_40GB` gpu. So, for simplicity and consistency, ray doesn't allow users to specify both `num_gpus` and `gpu_memory` in a single ray task/actor.
+
 
 ```python
 # Request a fractional GPU both num_gpus and gpu_memory is not allowed
@@ -110,7 +96,17 @@ def nvidia_a10_gpu_task:
 ```
 
 #### Placement Group
-TBD
+User also able to request `gpu_memory` as a placement group as follows:
+
+```python
+pg = placement_group([{"gpu_memory": 1024 * 1024, "CPU": 1}, {"GPU": 1}])
+
+# Wait until placement group is created.
+ray.get(pg.ready(), timeout=10)
+
+# You can also use ray.wait.
+ready, unready = ray.wait([pg.ready()], timeout=10)
+```
 
 ### Implementation
 The primary implementation entails the automatic detection of GPU memory during the initialization of a Ray cluster.
@@ -121,26 +117,29 @@ class AcceleratorManager:
     # else return total GPU memory of a single GPU
     def get_current_node_gpu_memory(self):
       ...  
-``` 
+```
+The detected memory is added as a node label. 
 
-Subsequently, we added another change within the scheduler to convert `gpu_memory` to `num_gpus` depending on which node the request got assigned to check if resource request is feasible in the node and allocate the resource.
+During scheduling, the resource request that contains `gpu_memory` will be converted to the corresponding `num_gpus` resource request depending on which node the scheduler is considering.
 
 ```pseudocode
-for node in node_list: 
-
-++  def convert_relative_resources(resource_request, node): # option 1 implementation
-++      if gpu_memory in resource_request: 
-++          resource_request.num_gpus = roundup(gpu_memory / node.label["gpu_memory_per_gpu"] , 0.0001)
-++          resource_request.gpu_memory = 0
-++      return resource_request
-++  convert_relative_resources(resource_request, node)
-
-    if check_is_feasible(resource_request):
-        allocation = TryAllocate(resource_request)
+for node in nodes: 
+  def convert_relative_resources(resource_request, node):
+      if gpu_memory in resource_request: 
+          resource_request.num_gpus = roundup(gpu_memory / node.label["gpu_memory_per_gpu"] , 0.0001)
+          resource_request.gpu_memory = 0
+      return resource_request
+ 
+  convert_relative_resources(resource_request, node)
+ 
+  # After converting from gpu_memory to num_gpus, the remaining is the same  
+  if check_is_available(resource_request, node):
+        allocation = allocate(resource_request, node)
+        break
 ```
 
 #### Resources API
-We introduce a new `ResourceID` named `GPU_Memory` (`gpu_memory` in string) to specify the amount of GPU memory resources. `GPU_Memory` is treated as a GPU resource with a distinct representation, where the relationship is defined as `GPU` equals to `GPU_Memory` divided by the total memory of a single GPU in the node as GPU resources in the node is homogeneous. Despite their distinct representations, both `GPU` and `GPU_Memory` signify the same underlying resource, with the caveat that Ray currently only supports homogeneous GPU type for each node.
+We introduce a new `ResourceID` named `GPU_Memory` (`gpu_memory` in string) to specify the amount of GPU memory resources. `GPU_Memory` is treated as a GPU resource with a distinct representation, where the relationship is defined as `GPU` equals to `GPU_Memory` divided by the total memory of a single GPU in the node as GPU resources in the node is homogeneous. Despite their distinct representations, both `GPU` and `GPU_Memory` signify the same underlying node resource, with the caveat that Ray currently only supports homogeneous GPU type for each node.
 
 We opt to store only `GPU` in `NodeResource` and convert `gpu_memory` to GPU means `gpu_memory` is `ResourceRequest` only resource. This implementation involves saving metadata of the single node's `total_single_gpu_memory`. `ConvertRelativeResource` converts `gpu_memory` in `ResourceRequest` to `num_gpus` based on the single node's `total_single_gpu_memory` during node feasibility checks and resource allocation.
 
@@ -190,8 +189,8 @@ Cons:
 - Limited Observability: `ray.available_resources()` only displays remaining GPU resources in terms of percentage, without specific amounts for `GPU_Memory`.
 - Incompatibility with Heterogeneous GPUs: Doesn't work for heterogeneous GPUs in a single node, a limitation existing in Ray's current support.
 
-##### Alternatives NodeResources API
-For the alternative resource implementtion, we store `GPU_Memory` as part of the `NodeResource`. This implementation ensures synchronization between GPU and `GPU_Memory`. During node feasibility checks and resource allocation, the `ConvertRelativeResource` function performs two conversions: calculating `gpu_memory` if `num_gpus` is specified and vice versa. 
+##### Alternative
+For the alternative resource implementtion, we store `GPU_Memory` as part of the `NodeResource`. This implementation ensures synchronization between GPU and `GPU_Memory` Node resources. During node availability checks and resource allocation, the `ConvertRelativeResource` function performs two conversions: calculating `gpu_memory` if `num_gpus` is specified and vice versa.
 
 ```python
 # Suppose we have two nodes with GPU type A100 40GB and A100 80gb respectively
@@ -269,6 +268,3 @@ def _inplace_subtract(node: ResourceDict, resources: ResourceDict) -> None:
 ```
 
 For the second option, there's no required addition of `node:gpu_memory_per_gpu_` since `GPU_Memory` is part of resources, but the `_convert_relative_resources` still required.
-
-#### Placement Group
-TBD
