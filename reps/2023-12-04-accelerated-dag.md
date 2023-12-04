@@ -4,19 +4,19 @@ accelerator-native execution substrate.
 The two major goals are:
 
 -   Task overheads in the tens of microseconds, compared to 1ms or more
-    > today
+    today
 
 -   Support GPU-native communication, compared to CPU-only object store
-    > today
+    today
 
 Either of these alone also has benefits:
 
 -   Lower task overheads can be applied to other application use cases
-    > such as web serving, as long as the task control flow is
-    > relatively static and predictable.
+    such as web serving, as long as the task control flow is
+    relatively static and predictable.
 
 -   GPU-native communication can make it easier to develop distributed
-    > ML applications
+    ML applications
 
 But together, we believe they can make Ray Core into an
 accelerator-native execution substrate, allowing Ray Core to execute as
@@ -40,15 +40,15 @@ On the other hand, there has been recent evidence of the two major
 downsides of SPMD:
 
 -   **Flexibility:** It is difficult to express more complex
-    > applications that might involve multiple models, parallelism
-    > strategies, and/or dynamic control flow. See the [[Pathways
-    > paper]{.underline}](https://arxiv.org/pdf/2203.12533.pdf) for more
-    > information.
+    applications that might involve multiple models, parallelism
+    strategies, and/or dynamic control flow. See the [[Pathways
+    paper]{.underline}](https://arxiv.org/pdf/2203.12533.pdf) for more
+    information.
 
 -   **Fault tolerance:** The SPMD model requires all processes to run
-    > the same program. If one process goes down, everyone must restart
-    > leading to significant downtime. This is a pain point in
-    > large-scale training.
+    the same program. If one process goes down, everyone must restart
+    leading to significant downtime. This is a pain point in
+    large-scale training.
 
 Ray uses a single-controller model, where a "driver" coordinates the
 execution. It can also wrap multi-controller frameworks, as Ray Train
@@ -61,32 +61,32 @@ Ray has the exact opposite properties as SPMD systems, prioritizing
 flexibility and fault tolerance at the cost of:
 
 -   **High control plane overheads:** Because tasks are dynamic (they
-    > can be spawned at any time on any process), Ray has to perform
-    > some bookkeeping for each individual task execution. This
-    > bookkeeping sometimes requires distributed protocols, such as for
-    > scheduling and garbage collection. This means that Ray developers
-    > need to make sure that each task has at least 10s of ms of
-    > computation, to reduce system overheads.
+    can be spawned at any time on any process), Ray has to perform
+    some bookkeeping for each individual task execution. This
+    bookkeeping sometimes requires distributed protocols, such as for
+    scheduling and garbage collection. This means that Ray developers
+    need to make sure that each task has at least 10s of ms of
+    computation, to reduce system overheads.
 
     -   Ray Train example: Coordination tasks need to be either
-        > relatively coarse-grained (e.g., contain many training steps)
-        > or asynchronous with training (e.g., metrics reporting).
+        relatively coarse-grained (e.g., contain many training steps)
+        or asynchronous with training (e.g., metrics reporting).
 
 -   **Generic CPU-based communication transport**: Ray's flexibility
-    > requires it to be highly general, so it implements a generic
-    > TCP-based communication transport. Adding native support for
-    > specialized communication transports such as GPU collective
-    > communication would be thorny.
+    requires it to be highly general, so it implements a generic
+    TCP-based communication transport. Adding native support for
+    specialized communication transports such as GPU collective
+    communication would be thorny.
 
     -   Ray Train example: Ray only provides generic communication, so
-        > GPU communication takes place out-of-band from Ray's
-        > perspective. This is not necessarily a problem; actually it's
-        > the recommended approach for accelerators. But the issue is
-        > that Ray doesn\'t really have any control over the
-        > communication then, so optimizations that Ray can do for CPU
-        > memory are not possible for GPU memory, like recovering
-        > quickly from communication failure or overlapping with
-        > compute.
+        GPU communication takes place out-of-band from Ray's
+        perspective. This is not necessarily a problem; actually it's
+        the recommended approach for accelerators. But the issue is
+        that Ray doesn\'t really have any control over the
+        communication then, so optimizations that Ray can do for CPU
+        memory are not possible for GPU memory, like recovering
+        quickly from communication failure or overlapping with
+        compute.
 
 *Vision for* *Ray Train in Ray 3.0: Ray Train is built on Ray's
 single-controller model, but with much finer-grained tasks and more
@@ -179,25 +179,25 @@ tasks.
 To support compiled DAGs, we need to make a few assumptions:
 
 -   The application can be expressed as a handful of
-    > [[DAGs]{.underline}](https://docs.ray.io/en/latest/ray-core/ray-dag.html).
+    [[DAGs]{.underline}](https://docs.ray.io/en/latest/ray-core/ray-dag.html).
 
 -   Tasks may dynamically call Ray tasks as usual, but the execution of
-    > these nested tasks will not be accelerated.
+    these nested tasks will not be accelerated.
 
 -   A DAG must be declared before it can be executed. The initial
-    > declaration may be higher latency than a single DAG execution.
+    declaration may be higher latency than a single DAG execution.
 
     -   For now, dynamic control/data flow within a DAG will not be
-        > allowed. These could eventually be supported by splitting a
-        > DAG into sub-DAGs, and using the driver to coordinate the
-        > control/data flow between sub-DAGs.
+        allowed. These could eventually be supported by splitting a
+        DAG into sub-DAGs, and using the driver to coordinate the
+        control/data flow between sub-DAGs.
 
     -   The max size of task outputs must be declared.
 
     -   A task output can only be read by the downstream DAG nodes,
-        > unless it is one of the final outputs of the DAG. (i.e. one
-        > cannot access intermediate outputs through the usual ObjectRef
-        > API).
+        unless it is one of the final outputs of the DAG. (i.e. one
+        cannot access intermediate outputs through the usual ObjectRef
+        API).
 
 ### Fault tolerance
 
@@ -240,7 +240,7 @@ on a Channel concept:
   def send(self, send\_meta: BufferMetadata):\
   \"\"\"Ideally async. Called by the sender\"\"\"\
   pass\
-  def recv(self, recv\_meta: BufferMetadata) -\> Buffer:\
+  def recv(self, recv\_meta: BufferMetadata) -\Buffer:\
   \"\"\"Ideally async. Called by the receiver.\"\"\"
 
   -----------------------------------------------------------------------------------------------
@@ -289,14 +289,14 @@ Goals:
 -   Performance parity to validate system overheads
 
 -   Validate API expressivity - we want to show that it is much simpler
-    > to implement these patterns with a single-controller interface
+    to implement these patterns with a single-controller interface
 
 -   Increase the flexibility of (some) patterns. For example, pipeline
-    > parallelism is a well-known technique provided by Deepspeed, but
-    > Deepspeed only supports it for sequential
-    > module[[s]{.underline}](https://docs.google.com/document/d/19CLurWtDy5arUdOiRCFrx6EH1vITBLJPzbMmTtj5gMw/edit#heading=h.qerlw2f5ndu9)
-    > ([[link]{.underline}](https://www.deepspeed.ai/tutorials/pipeline/#getting-starting-with-pipeline-parallelism)),
-    > meaning that it can't be used for DAGs of modules.
+    parallelism is a well-known technique provided by Deepspeed, but
+    Deepspeed only supports it for sequential
+    module[[s]{.underline}](https://docs.google.com/document/d/19CLurWtDy5arUdOiRCFrx6EH1vITBLJPzbMmTtj5gMw/edit#heading=h.qerlw2f5ndu9)
+    ([[link]{.underline}](https://www.deepspeed.ai/tutorials/pipeline/#getting-starting-with-pipeline-parallelism)),
+    meaning that it can't be used for DAGs of modules.
 
 **Advanced patterns:** These workloads may use multiple types of
 parallelism, multiple models, and/or are more "dynamic" in some sense
@@ -417,10 +417,10 @@ overheads. However, we do believe that it will improve flexibility and
 reduce implementation burden. In particular:
 
 -   Single-controller model allows the controller to coordinate
-    > operations such as failure detection and reconfiguration of layers
-    > across workers
+    operations such as failure detection and reconfiguration of layers
+    across workers
 
 -   Ability to reuse worker processes
 
 -   Ability to pipeline various steps in recovery, by breaking recovery
-    > into smaller tasks that can be scheduled as a DAG
+    into smaller tasks that can be scheduled as a DAG
