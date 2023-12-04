@@ -1,3 +1,5 @@
+# Accelerated DAGs
+
 Tl;dr: We propose changes needed to make Ray Core into an
 accelerator-native execution substrate.
 
@@ -5,7 +7,6 @@ The two major goals are:
 
 -   Task overheads in the tens of microseconds, compared to 1ms or more
     today
-
 -   Support GPU-native communication, compared to CPU-only object store
     today
 
@@ -14,7 +15,6 @@ Either of these alone also has benefits:
 -   Lower task overheads can be applied to other application use cases
     such as web serving, as long as the task control flow is
     relatively static and predictable.
-
 -   GPU-native communication can make it easier to develop distributed
     ML applications
 
