@@ -362,7 +362,7 @@ print(result)
 ```
 ### Calling Ray Serve Deployment with HTTP
 ```java
-curl http://127.0.0.1:8000?request=computer&num=1
+curl -d '{"request": "computer", "num": 1}' http://127.0.0.1:8000
 ```
 ### Overall Design
    ![image](https://user-images.githubusercontent.com/40862361/250100276-5eeed3a1-70a2-4208-8563-e0b1bf7f7fd2.png)  
