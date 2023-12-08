@@ -64,7 +64,7 @@ Ray uses a single-controller model, where a "driver" coordinates the
 execution. It can also wrap multi-controller frameworks, as Ray Train
 does, but its interface is primarily based on a single-controller model.
 
-<img style="background-color:white" src="2023-12-04-accelerated-dag-figures/image4.png">
+<img style="background-color:white" src="2023-12-04-accelerated-dag-figures/image3.png">
 
 *Ray Train example: Ray Train is built on Ray's single-controller model, but the execution is still SPMD.*
 
@@ -99,7 +99,7 @@ flexibility and fault tolerance at the cost of:
         quickly from communication failure or overlapping with
         compute.
 
-<img style="background-color:white" src="2023-12-04-accelerated-dag-figures/image3.png">
+<img style="background-color:white" src="2023-12-04-accelerated-dag-figures/image4.png">
 
 *Vision for Ray Train in Ray 3.0: Ray Train is built on Ray's single-controller model, but with much finer-grained tasks and more control over the execution. The physical execution is as fast as SPMD.*
 
