@@ -87,6 +87,32 @@ message FixedSizeNodes {
 }
 ```
 
+#### Job API
+
+Currently we have two ways to run a Ray job: ``ray.init()`` and ``ray job submit``. Both will take an optional parameter specifying the spec of the virtual cluster inside which the job will run. If unspecified, the default virtual cluster has zero min resources and infinite max resources meaning it can scale up to use the entire physical cluster resources.
+
+```
+# Default virtual cluster
+# The job can use up to the entire physical cluster resources.
+ray.init()
+
+# The job can use at least 1 CPU and at most 8 CPUs.
+ray.init(virtual_cluster=VirtualCluster(flexible_resource_min={"CPU": 1}, flexible_resource_max={"CPU": 8}))
+```
+
+```
+# Default virtual cluster
+# The job can use up to the entire physical cluster resources.
+ray job submit -- python job.py
+
+# The job needs 2 * 1 GPU that are strict spreaded.
+ray job submit --virtual-cluster='{"fixed_size_nodes": [{"nodes": [{"resources": {"GPU": 1}}, {"resources": {"GPU": 1}}], "scheduling_policy": "STRICT_SPREAD"}]}' -- python job.py
+```
+
+Once a job is running inside a virtual cluster, it can use all the Ray APIs as if it's running inside its own Ray cluster.
+
+#### Placement Group API
+
 #### Cluster Introspection API
 
 ### Implementation
