@@ -36,6 +36,8 @@ Virtual clusters with different min and max resources are autoscalable. When sca
 
 A Ray physical cluster consists of a set of Ray physical nodes and, similarly, a virtual cluster consists of a set of virtual nodes. Each virtual node is a partition of a single physical node and it has resources and node labels just like the physical node. A virtual node can be either fixed size or flexible/resizable. For a single virtual cluster, there can be multiple fixed-size virtual nodes but at most one flexible virtual node on a single physical node.
 
+<img src="https://user-images.githubusercontent.com/898023/291710281-41d5b172-95ae-4134-8fab-a6da6c08701a.png" alt="drawing" width="729"/>
+
 ### API
 
 #### Virtual Cluster Spec
@@ -68,7 +70,7 @@ message VirtualCluster {
 
 message FixedSizeNode {
   map<string, double> resources
-  
+
   // Additional labels that the
   // virtual node has in addition to
   // those inherited from the parent node.
@@ -347,3 +349,50 @@ Raylet2:
   remote_nodes: {"raylet1": [Node(total_resources={"CPU": 4}, available_resources={"CPU": 4}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"})]}
 ```
 
+#### Autoscaling
+
+Same as now, raylet will periodically report request demands to GCS. Those demands can come from different virtual clusters from different jobs. If a virtual cluster has demands and it currently has no available resources to fullfill these demands, GCS will first try to scale up the virtual cluster by borrowing the available resources from the parent cluster and if the parent cluster has available resources, the scaling up is instant since we don't need to wait for new physical nodes to be added. If the parent cluster has no available resources, the demands will become parent's demands and the same process happens recursively. If no ancestor has available resources, those demands will eventually become the root's demands (i.e. the physical cluster's demands) and will be sent to autoscaler. Autoscaler will add new physical nodes and those new resources will then be allocated to the actual virtual clusters that have demands.
+
+Let's walk through an example and we assume every cluster has infinite max resources. We start with a single node Ray cluster.
+
+```
+Raylet1:
+  local_nodes: [Node(total_resources={"CPU": 2}, available_resources={"CPU": 2}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"})]
+  remote_nodes: {}
+```
+
+A job with min 1 CPU is started.
+
+```
+Raylet1:
+  local_nodes: [Node(total_resources={"CPU": 2}, available_resources={"CPU": 1}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 1}, available_resources={"CPU": 1}, labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"})]
+  remote_nodes: {}
+```
+
+A 1 CPU task is submitted.
+
+```
+Raylet1:
+  local_nodes: [Node(total_resources={"CPU": 2}, available_resources={"CPU": 1}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 1}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"})]
+  remote_nodes: {}
+```
+
+Now another 1 CPU task is submitted. Since the virtual custer has no available resources, it will try to upscale. In this case, the parent cluster still has 1 available CPU so it can be borrowed immediately.
+
+```
+Raylet1:
+  local_nodes: [Node(total_resources={"CPU": 2}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 2}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"})]
+  remote_nodes: {}
+```
+
+Then another 1 CPU task is submitted. Now even the root physical cluster has no available resources, autoscaler will add a new node.
+
+```
+Raylet1:
+  local_nodes: [Node(total_resources={"CPU": 2}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 2}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"})]
+  remote_nodes: {"raylet2": [Node(total_resources={"CPU": 2}, available_resources={"CPU": 1}, labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 1}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "vnode2", "ray.io/vcluster_id": "vcluster1"})]}
+
+Raylet2:
+  local_nodes: [Node(total_resources={"CPU": 2}, available_resources={"CPU": 1}, labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 1}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "vnode2", "ray.io/vcluster_id": "vcluster1"})]
+  remote_nodes: {"raylet1": [Node(total_resources={"CPU": 2}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 2}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"})]}
+```
