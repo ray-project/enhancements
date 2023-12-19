@@ -94,7 +94,7 @@ message FixedSizeNodes {
 
 Currently we have two ways to run a Ray job: ``ray.init()`` and ``ray job submit``. Both will take an optional parameter specifying the spec of the virtual cluster inside which the job will run. If unspecified, the default virtual cluster has zero min resources and infinite max resources meaning it can scale up to use the entire physical cluster resources.
 
-```
+```python
 # Default virtual cluster
 # The job can use up to the entire physical cluster resources.
 ray.init()
@@ -103,7 +103,7 @@ ray.init()
 ray.init(virtual_cluster=VirtualCluster(flexible_resource_min={"CPU": 1}, flexible_resource_max={"CPU": 8}))
 ```
 
-```
+```shell
 # Default virtual cluster
 # The job can use up to the entire physical cluster resources.
 ray job submit -- python job.py
@@ -118,7 +118,7 @@ Once a job is running inside a virtual cluster, it can use all the Ray APIs as i
 
 Since virtual clusters are nestable and support gang scheduling, they can be used to implement or replace placement groups.
 
-```
+```python
 # Create a placement group with two bundles that are packed
 pg = placement_group([{"GPU": 4}, {"GPU": 1}], strategy="PACK")
 # Run the task inside the placement group
@@ -132,7 +132,7 @@ with vc:
   task.remote()
 ```
 
-```
+```python
 # Create a placement group with two bundles that are strict spreaded
 pg = placement_group([{"GPU": 4}, {"GPU": 1}], strategy="STRICT_SPREAD")
 # Run the actor using the bundle 0 resources
@@ -157,7 +157,7 @@ For each example, we show both the code using current Ray APIs and the code usin
 
 ##### Gang scheduling a group of actors
 
-```
+```python
 ray.init()
 pg = placement_group([{"GPU": 1}, {"GPU": 1}], strategy="STRICT_SPREAD")
 actors = []
@@ -165,7 +165,7 @@ for i in range(2):
   actors.append(Actor.options(num_gpus=1, scheduling_strategy=PlacementGroupSchedulingStrategy(placement_group=pg, placement_group_bundle_index=i)).remote())
 ```
 
-```
+```python
 ray.init(virtual_cluster=VirtualCluster(fixed_size_nodes=[FixedSizeNodes(nodes=[FixedSizeNode(resources={"GPU": 1}, labels={"bundle_index": "0"}), FixedSizeNode(resources={"GPU": 1}, labels={"bundle_index": "1"})], scheduling_policy=STRICT_SPREAD)]))
 actors = []
 for i in range(2):
@@ -174,14 +174,14 @@ for i in range(2):
 
 ##### Tune + Dataset
 
-```
+```python
 # Tune can run 2 trails (each trail runs two 1 GPU trainers) in parallel and Dataset can use 1-10 CPUs
 ray.init(virtual_cluster=VirtualCluster(fixed_size_nodes=[FixedSizeNodes(nodes=[FixedSizeNode(resources={"GPU": 1}), FixedSizeNode(resources={"GPU": 1})], scheduling_policy=PACK), FixedSizeNodes(nodes=[FixedSizeNode(resources={"GPU": 1}), FixedSizeNode(resources={"GPU": 1})], scheduling_policy=PACK)], flexible_resource_min={"CPU": 1}, flexible_resource_max={"CPU": 10}))
 ```
 
 ##### Multi-datasets
 
-```
+```python
 ray.init(virtual_cluster=VirtualCluster(flexible_resource_min={"CPU": 100}, flexible_resource_max={"CPU": 100}))
 
 train_dataset_vc = VirtualCluster(flexible_resource_min={"CPU": 80}, flexible_resource_max={"CPU": 80})
@@ -197,7 +197,7 @@ with validation_dataset_vc:
 
 With virtual clusters, Ray jobs should have the illusion that they are running inside their own clusters exclusively. This means all the existing cluster instrospection APIs (e.g. ``ray.cluster_resources()``) need to return data that are only relevant to the current virtual cluster.
 
-```
+```python
 ray.cluster_resources():
   """This returns the total resources of the current virtual cluster."""
 
@@ -219,7 +219,7 @@ ray.util.state.*():
 
 Besides the existing APIs, we also introduce more introspection APIs for virtual clusters.
 
-```
+```python
 class RuntimeContext:
   def current_cluster() -> VirtualClusterInfo:
     """Return the current virtual cluster this process is in.
@@ -302,7 +302,7 @@ Raylet2:
 
 Next we submit a 1 CPU task:
 
-```
+```python
 task.options(num_cpus=1).remote()
 
 # This will be rewritten to
