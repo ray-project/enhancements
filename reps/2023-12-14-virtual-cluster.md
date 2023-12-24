@@ -70,8 +70,43 @@ message VirtualCluster {
   repeated FixedSizeNodes fixed_size_nodes
 }
 
+message LabelIn {
+  repeated string values = 1;
+}
+
+message LabelNotIn {
+  repeated string values = 1;
+}
+
+message LabelExists {}
+
+message LabelDoesNotExist {}
+
+message LabelOperator {
+  oneof label_operator {
+    LabelIn label_in = 1;
+    LabelNotIn label_not_in = 2;
+    LabelExists label_exists = 3;
+    LabelDoesNotExist label_does_not_exist = 4;
+  }
+}
+
+message LabelMatchExpression {
+  string key = 1;
+  LabelOperator operator = 2;
+}
+
+message LabelMatchExpressions {
+  repeated LabelMatchExpression expressions = 1;
+}
+
 message FixedSizeNode {
   map<string, double> resources
+
+  // Use label match expression to
+  // specify candidate parent nodes
+  // of this fixed size node.
+  LabelMatchExpressions parent_node_selector
 
   // Additional labels that the
   // virtual node has in addition to
@@ -110,6 +145,9 @@ ray.init()
 
 # The job can use at least 1 CPU and at most 8 CPUs.
 ray.init(virtual_cluster=VirtualCluster(flexible_resource_min={"CPU": 1}, flexible_resource_max={"CPU": 8}))
+
+# The job uses 1 A100 GPU.
+ray.init(virtual_cluster=VirtualCluster(fixed_size_nodes=[FixedSizeNode(resources={"GPU": 1}, parent_node_selector={"accelerator_type": In("A100")})]))
 ```
 
 ```shell
