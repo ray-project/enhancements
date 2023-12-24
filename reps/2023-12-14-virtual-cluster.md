@@ -2,9 +2,9 @@
 
 ## Summary
 
-Ray currently has the [physical cluster](https://docs.ray.io/en/releases-2.9.0/cluster/getting-started.html) concept and we proposes to add a new virtual cluster concept. A virtual cluster is a partition of the physical cluster and can be dynamically scaled at runtime. A physical cluster can be partitioned into multiple virtual clusters and each virtual cluster runs a single Ray job. Through this way, multiple jobs can share the cluster resources with isolation. Virtual cluster is a fundamental building block for multi-tenant Ray.
+In addition to the existing [physical cluster](https://docs.ray.io/en/releases-2.9.0/cluster/getting-started.html) and physical node concepts, we propose to add new virtual cluster and virtual node concepts. A virtual node is a partition of a single physical node and it has resources and node labels just like the physical node. A virtual cluster made up of virtual nodes is a partition of the physical cluster and can be dynamically scaled at runtime. A physical cluster can be partitioned into multiple virtual clusters and each virtual cluster runs a single Ray job. Through this way, multiple jobs can share a physical cluster with logical resources isolation. Virtual cluster is a fundamental building block for multi-tenant Ray.
 
-<img src="https://user-images.githubusercontent.com/898023/291094699-35bac047-5844-4f2c-a794-17cd18e96219.png" alt="drawing" width="726"/>
+<img src="https://user-images.githubusercontent.com/898023/291710281-41d5b172-95ae-4134-8fab-a6da6c08701a.png" alt="drawing" width="729"/>
 
 ### General Motivation
 
@@ -26,17 +26,15 @@ Inside `ray` project since this is a Ray Core feature.
 
 ## Design
 
-With the introduction of virtual clusters, every Ray job runs in its own virtual cluster and only has access to resources inside that virtual cluster. Each virtual cluster has a spec that defines the min and max resources of the cluster. Min resources are minimal resources required for the job to run and they are atomically reserved for gang scheduling. If min resources cannot be reserved when there are not enough available resources, the job will be queued. With job queueing, we can implement different policies such as FIFO or priority-based queueing. Max resources are the autoscaling limit of the virtual cluster and the maximal resources can be used by the job.
+With the introduction of virtual clusters, every Ray job runs in its own virtual cluster and only has access to (logical) resources inside that virtual cluster. Each virtual cluster has a spec that defines the min and max resources of the cluster. Min resources are minimal resources required for the job to run and they are atomically reserved for gang scheduling. If min resources cannot be reserved when there are not enough available resources, the job will be queued. With job queueing, we can implement different policies such as FIFO or priority-based queueing. Max resources are the autoscaling limit of the virtual cluster and the maximal resources can be used by the job.
 
-Virtual clusters can be nested and a Ray job can create sub-clusters to isolate separate parts of its application workload. For example, a Tune grid sweep job can create a sub-cluster for each of its nested Train workload. These possibly nested virtual clusters form a tree where the root is the entire physical cluster.
+Virtual clusters can be nested and a Ray job can create sub-clusters to isolate separate parts of its application workload. For example, a Tune grid sweep job can create a sub-cluster for each of its nested Train workload. These possibly nested virtual clusters form a tree where the root is the entire Ray cluster.
 
 <img src="https://user-images.githubusercontent.com/898023/291139618-0be11470-db09-466d-8c2c-37b9e5b3765c.png" alt="drawing" width="508"/>
 
-Virtual clusters with different min and max resources are autoscalable. When scaling up, virtual clusters will try to borrow more resources from their parent virtual clusters. If their parents have available resources, the scaling up is instant. Otherwise, parents will try to borrow resources from their parents recursively and eventually this may cause the upscale of the physical cluster. When scaling down, virtual clusters will return resources to their parents recursively and eventually this may cause the downscale of the physical cluster.
+Virtual clusters with different min and max resources are autoscalable. When scaling up, virtual clusters will try to borrow more resources from their parent clusters. If their parents have available resources, the scaling up is instant. Otherwise, parents will try to borrow resources from their parents recursively and eventually this may cause the upscale of the physical cluster. When scaling down, virtual clusters will return resources to their parents recursively and eventually this may cause the downscale of the physical cluster.
 
-A Ray physical cluster consists of a set of Ray physical nodes and, similarly, a virtual cluster consists of a set of virtual nodes. Each virtual node is a partition of a single physical node and it has resources and node labels just like the physical node. A virtual node can be either fixed size or flexible/resizable. For a single virtual cluster, there can be multiple fixed-size virtual nodes but at most one flexible virtual node on a single physical node.
-
-<img src="https://user-images.githubusercontent.com/898023/291710281-41d5b172-95ae-4134-8fab-a6da6c08701a.png" alt="drawing" width="729"/>
+Virtual nodes of a virtual cluster can be either fixed size or flexible/resizable. For a single virtual cluster, there can be multiple fixed-size virtual nodes but at most one flexible virtual node on a single physical node. The upscaling of a virtual cluster can be achieved by adding new virtual nodes or scaling up an existing flexible virtual node.
 
 ### API
 
@@ -47,8 +45,11 @@ message VirtualCluster {
   // A virtual cluster consits of flexible resources and fixed size resources.
 
   // == Flexible resources ==
-  // Defines flexible resource limit across the virtual cluster.
-  // Ray will guarantee flexible resource usage does not exceed this limit.
+  // Flexible resources are stored in flexible virtual nodes
+  // and Ray will use as few flexible virtual nodes as possible
+  // for the given amount of flexible resources to minimize fragmentation.
+  // In other words, Ray prefers to scale up a flexible virtual node
+  // than adding a new flexible virtual node.
 
   // If specified, ensure we have at least this min amount
   // of resources before starting the cluster.
@@ -61,8 +62,9 @@ message VirtualCluster {
   map<string, double> flexible_resource_max
 
   // == Fixed size resources ==
-  // Fixed sized resources to request, e.g. {"GPU": 4}.
-  // These resources are part of the min resources
+  // Fixed sized virtual nodes to request, e.g. {"GPU": 4}.
+  // These virtual node resources are part of the min resources
+  // together with flexible_resource_min
   // that will be atomically reserved when the
   // virtual cluster is created.
   repeated FixedSizeNodes fixed_size_nodes
@@ -78,12 +80,17 @@ message FixedSizeNode {
 }
 
 enum SchedulingPolicy {
+  // Same as the current placement group strategies.
   PACK
   SPREAD
   STRICT_SPREAD
 }
 
 message FixedSizeNodes {
+  // This can be used to represent placement groups
+  // where each bundle is a FixedSizeNode and
+  // the scheduling policy is the placement group strategy.
+
   repeated FixedSizeNode nodes
   // One of PACK, SPREAD, or STRICT_SPREAD. These would be
   // defined with respect to parent virtual nodes for nested
@@ -245,7 +252,8 @@ class VirtualClusterInfo:
     def parent_cluster() -> Optional[VirtualClusterInfo]
 
 class VirtualNodeInfo:
-    def node_id() -> str
+    def node_id() -> str # Virtual node id
+    def physical_node_id() -> str # Physical/root node id
     def node_labels() -> Dict[str, str]
     def used_resources() -> Dict[str, double]
     def avail_resources() -> Dict[str, double]
@@ -257,7 +265,7 @@ class VirtualNodeInfo:
 
 #### Scheduling
 
-Unlike the placement group implementation which is based on custom resources, virtual clusters and virtual nodes will be first-class citizen concept in Ray Core and we will use node labels to schedule tasks or actors to nodes.
+Unlike the placement group implementation which is based on custom resources, virtual clusters and virtual nodes will be first-class citizen concept in Ray Core and we will use node labels to schedule tasks or actors to virtual nodes.
 
 With virtual clusters, each raylet will maintain a flatten list of local virtual nodes and resource view of remote virtual nodes.
 
@@ -377,7 +385,7 @@ Raylet1:
   remote_nodes: {}
 ```
 
-Now another 1 CPU task is submitted. Since the virtual custer has no available resources, it will try to upscale. In this case, the parent cluster still has 1 available CPU so it can be borrowed immediately.
+Now another 1 CPU task is submitted. Since the virtual custer has no available resources, it will try to scale up. In this case, the parent cluster still has 1 available CPU so it can be borrowed immediately.
 
 ```
 Raylet1:
@@ -385,7 +393,7 @@ Raylet1:
   remote_nodes: {}
 ```
 
-Then another 1 CPU task is submitted. Now even the root physical cluster has no available resources, autoscaler will add a new node.
+Then another 1 CPU task is submitted. Now even the root physical cluster has no available resources, autoscaler will add a new node and a new virtual node will be created out of it to satisfy the 1 CPU demand.
 
 ```
 Raylet1:
@@ -395,4 +403,12 @@ Raylet1:
 Raylet2:
   local_nodes: [Node(total_resources={"CPU": 2}, available_resources={"CPU": 1}, labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 1}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "vnode2", "ray.io/vcluster_id": "vcluster1"})]
   remote_nodes: {"raylet1": [Node(total_resources={"CPU": 2}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 2}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"})]}
+```
+
+Eventually when the job finishes, newly added nodes will be idle terminated.
+
+```
+Raylet1:
+  local_nodes: [Node(total_resources={"CPU": 2}, available_resources={"CPU": 2}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"})]
+  remote_nodes: {}
 ```
