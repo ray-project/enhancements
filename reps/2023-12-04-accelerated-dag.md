@@ -108,7 +108,7 @@ tolerance, but: (a) reduce control plane overheads, and (b) support
 specialized communication transports. The basic ideas are to: (a) reuse
 control plane decisions from past executions, (b) support
 application-defined transports such as
-[NCCL](https://developer.nvidia.com/nccl) and
+[NCCL](https://developer.nvidia.com/nccl), [libfabric](https://ofiwg.github.io/libfabric/) and
 [UCX](https://openucx.org/). Ultimately, the goal is to
 make Ray into a native execution substrate for distributed ML
 applications.
@@ -137,7 +137,7 @@ Although some operations can be overlapped with other tasks (e.g.,
 transferring arguments for one task while executing another),
 fundamentally most of these operations need to be done *synchronously
 with the task execution.* Overall these overheads add up to \~1ms of
-execution overhead per task, even when execution is on the same node.
+execution overhead per task and potentially significant CPU processing overhead, even when execution is on the same node.
 
 Essentially, the current model is "interpreted". But this isn't
 necessary for cases where a similar DAG will get executed again. For a
@@ -171,9 +171,9 @@ with a special "compiled" option. This API already allows DAG reuse but
 currently carries the same execution overheads described above. The main
 Ray Core APIs based on individual task and actor calls will not be
 affected, but will be compatible with compiled DAGs, i.e. compiled DAGs'
-outputs can be passed as arguments to normal tasks, and vice versa. In
-the future, we may consider "just-in-time" compiling individual Ray
-tasks.
+outputs can be passed as arguments to normal tasks, and vice versa.
+
+In the future, we may consider "just-in-time" compiling normal Ray tasks.  Concretely, on the first execution of a Ray program fragment, we may trace the Ray remote functions that are called, compile the traced DAG, then reuse the DAG for future remote function calls. This has quite a few technical challenges so is unlikely to be supported soon.
 
 To support compiled DAGs, we need to make a few assumptions:
 
@@ -186,30 +186,46 @@ To support compiled DAGs, we need to make a few assumptions:
 -   A DAG must be declared before it can be executed. The initial
     declaration may be higher latency than a single DAG execution.
 
-    -   For now, dynamic control/data flow within a DAG will not be
-        allowed. These could eventually be supported by splitting a
-        DAG into sub-DAGs, and using the driver to coordinate the
-        control/data flow between sub-DAGs.
-
-    -   The max size of task outputs must be declared.
+    -   The max size of task outputs must be declared. Larger outputs can also be supported, at some performance cost.
 
     -   A task output can only be read by the downstream DAG nodes,
         unless it is one of the final outputs of the DAG. (i.e. one
         cannot access intermediate outputs through the usual ObjectRef
         API).
+    
+    -   For now, only actor tasks are supported, and the actors must already be
+        instantiated. In the future, we can consider relaxing this, e.g., by
+        supporting a "virtual actor"-like interface.
+
+### Non-requirements
+
+**Dynamic control/data flow:** For now, dynamic control/data flow within a DAG
+ will not be
+allowed. These could eventually be supported by splitting a DAG into sub-DAGs,
+and using the driver to coordinate the control/data flow between sub-DAGs.
+
+**Dynamic routing:** Dynamic routing is useful for load balancing in general-purpose online serving. We do not consider it here because we focus on high-performance settings where it is practical to have a centralized controller that can route all DAGs and synchronize workers as needed. The former is likely to be a bottleneck and the latter is unnecessary for most serving use cases. It is possible to use accelerated DAGs for dynamic load-balancing, by instantiating a different DAG for each route that a data item can take, but we do not yet plan to support it automatically.
+
+**Autoscaling:** Autoscaling is decoupled from the accelerated DAG design. The Ray cluster can continue to be autoscaled via the existing autoscaler SDK and/or resource requests. The main requirement from the DAG system to support autoscaling is that the driver can dynamically create, destroy, and invoke compiled DAGs.
 
 ### Fault tolerance
 
-Initially, we will provide failure detection at the DAG level. In
+We will provide failure detection at the DAG level. In
 particular, if any task in the DAG fails due to application exception or
 worker death, we will propagate the error to the DAG outputs.
+If a worker dies, we will teardown any DAGs that the worker participated in.
+Remaining workers may be reused to create additional DAGs.
+New workers may also be created (as usual).
 
 Currently, Ray Core also provides automatic task-level re-execution. At
 the moment, we do not plan to support this, as it would likely require
-extra overhead from tracking intermediate task outputs. However,
-automatic DAG-level re-execution may be possible.
+extra overhead from tracking intermediate task outputs.
+Thus, currently the caller must retry failed DAGs manually.
 
-## Application-defined transports
+Ray Core also provides automatic actor restart.
+Automatic DAG-level re-execution may be supported in the future via actor restart and automatically re-invoking the DAG with the original inputs.
+
+## Pluggable transports
 
 ***Goal:** Give the application greater control over the communication
 method, but allow Ray Core to schedule the communication.* This could
@@ -225,46 +241,303 @@ sender/receiver are colocated, and shared memory/Ray Core for
 cross-node.
 
 To support specialized transports, we will extend the DAG API to allow
-application-defined transports that can be called from either Python or
-C++. The exact API is TBD, but here is a simple initial proposal based
-on a Channel concept:
+pluggable transports that can be called from either Python or
+C++ and include a default transport for direct GPU-GPU communication.
+Future transports may support interconnects such as RDMA.
+
+Here is an initial API proposal for transports based on a Channel concept:
 
 ```python
-class Transport:
-  def __init__(self, sender: ray.ActorHandle, receiver: ray.ActorHandle):
-    pass
-  def send(self, send_meta: BufferMetadata):
-    """Ideally async. Called by the sender"""
-    pass
-  def recv(self, recv_meta: BufferMetadata) -> Buffer:
-    """Ideally async. Called by the receiver."""
-    pass
+class Channel:
+    def __init__(self,
+        max_message_bytes: int,
+        writer_actor_handle: Optional["ray.actor.ActorHandle"] = None,
+        reader_actor_handles: Optional[List["ray.actor.ActorHandle"]] = None):
+        """Allocate a single-writer channel that can be read by multiple actors
+        (or the current process).
+
+        Args:
+            max_message_bytes: The maximum size per message in the channel.
+                Writing a larger value than this will error. In the future, this
+                can support larger values, at the cost of lower performance
+                (because memory must be allocated dynamically).
+            writer_actor_handle: The writer's actor handle. If None, then the
+                current process (the driver) is the writer. The writer will
+                block until all readers have read the previously written value.
+            reader_actor_handles: The readers' actor handles. None indicates the
+                current process (the driver). The writer will block on writing
+                until exactly these readers have read the previously written
+                value.
+        """
+        pass
+
+    def write(self, value: Any) -> None:
+        """
+        Write a value to the channel.
+
+        Blocks if there are still pending readers for the previous value. The
+        writer may not write again until the specified number of readers have
+        called ``end_read_channel``.
+        """
+        pass
+
+    def _begin_write(self) -> None:
+        """
+        Begin sending a stream of values.
+        """
+        pass
+
+    def _end_write(self) -> None:
+        """
+        End sending a stream of values.
+        """
+        pass
+
+    def read(self) -> Any:
+        """
+        Read the latest value from the channel. This call will block until a
+        value is available to read.
+
+        Once the client's copy of the read value goes out of scope, the channel
+        will be ready to write again.
+
+        If multiple values were written using _begin_write and _end_write, then
+        this blocks until all values that were written to the stream have been
+        received.
+        """
+        pass
+
+    def read_stream(self) -> Generator[Any]:
+        """
+        Return a generator of values that were written using _begin_write and
+        _end_write.
+        """
+        pass
+
+
+class GPUChannel(Channel):
+
+    def write(self, value: cp.ndarray) -> None:
+        pass
+
+    def read(self) -> Union[cp.ndarray, Generator[cp.ndarray]]:
+        pass
 ```
 
-When an application-defined transport is used, we will use the default
-transport to synchronize between the sender and receiver, but we only
-send the BufferMetadata in along the default transport. This will act as
-a signal to begin the actual \`Transport.send\` and \`Transport.recv\`
-of the application data.
+Transports may be used in two ways:
 
-Initially, our goal is to add a UCX-based transport, which supports
-GPU-GPU and RDMA, among others. For GPU objects, we can also provide a
-fallback transport, i.e. when a specialized GPU-GPU transport is not
-available, the fallback transport copies the GPU object to the Ray
-object store, then uses the default transport to transfer the object.
+1. Standalone: The application code manually instantiates the Channel with the
+   correct reader and writer handles and is responsible for deciding when to
+   read/write.
+2. Implicitly, through the DAG API: The DAG backend instantiates the correct
+   Channels on behalf of the application. The DAG backend handles scheduling of
+   reads/writes, pipelining transfers with DAG tasks, etc.
+
+Some pluggable transports that rely on message-passing may require
+synchronization to ensure that senders and receivers do not deadlock. For these,
+we can use the default transport to synchronize the sender and receiver.
+In low-latency cases like RDMA, this synchronization overhead may be significant; future implementations may instead allow a transport plug-in to signal directly to the caller when data is available to read, e.g., using a semaphore or other condition.
+
+Default transports have strict requirements because we may use them to
+synchronize individual tasks:
+- Latency overhead <100us per read/write
+- Can be used across nodes without presence of an accelerated interconnect like
+    NVLink
+- Fault-tolerant: individual messages should be able to fail without interfering
+    with other messages
+
+We are exploring options for implementing the default transport, including:
+1. A custom implementation based on shared memory for intra-node messages.
+2. a ``gloo`` backend.
+
+For the default GPU transport, we are exploring the following options:
+1. A custom implementation based on [NVSHMEM](https://developer.nvidia.com/nvshmem).
+2. Third-party implementation based on
+    [NCCL](https://developer.nvidia.com/nccl),
+    [libfabric](https://ofiwg.github.io/libfabric/), or [UCX](https://openucx.org/).
+3. A fallback transport, i.e. when a specialized GPU-GPU transport is not
+    available, the fallback transport copies the GPU object to the Ray object
+    store, then uses the default transport to transfer the object.
 
 The other potential complexity in this work is supporting collective
 communication, which can deadlock if not properly scheduled. During the
-initial prototyping, we can continue to execute collective communication
+initial prototyping, as long as processes do not participate in multiple collectives, we can continue to execute collective communication
 out-of-band, as part of the application code. However, to realize the
-long-term goals, we will introduce an API that captures collective
+long-term goals, we may introduce an API that captures collective
 communication ops as part of the DAG. An example API:
 
 ```python
 workers = [Worker.remote() for worker in workers]
 # A task called on the CollectiveGroup will be gang-scheduled on each worker.
+# Gang-scheduled tasks are guaranteed to execute in a consistent order across
+# different workers.
 pool = CollectiveGroup(workers)
 outputs = pool.allreduce.bind(inputs)
+```
+
+API examples
+============
+
+These examples will use Ray actors, and extend the existing Ray API for [lazy DAGs](https://docs.ray.io/en/latest/ray-core/ray-dag.html):
+
+```python
+import ray
+# DAG placeholders for the input and output values.
+from ray.dag import InputNode, MultiOutputNode
+
+a = Actor.remote()
+
+with InputNode() as inp:
+    dag = a.echo.bind(inp)
+
+# Produce a "compiled" DAG.
+dag = dag.experimental_compile()
+# Execute asynchronously. Return an ObjectRef, which can be `ray.get` and
+# `ray.wait` like normal ObjectRefs.
+ray.get(dag.execute(b"hello"))
+```
+
+## Tensor-parallel inference and training
+
+```python
+@ray.remote
+class ModelWorker:
+    def forward(self, inp):
+        # Internally, performs collective ops with other ModelWorkers.
+        return self.model.forward(inp)
+
+with InputNode() as inp:
+    dag = MultiOutputNode([worker.forward.bind(inp) for worker in workers])
+```
+
+## Pipeline-parallel inference
+
+Example applications:
+- Inter-node model parallelism
+- Pipelined inference between different models, e.g., target vs. draft models in speculative decoding
+
+```python
+@ray.remote
+class ModelWorker:
+    def forward(self, inp):
+        # Internally, performs collective ops with other ModelWorkers.
+        return self.model.forward(inp)
+
+
+with InputNode() as inp:
+    dag = inp
+    for worker in workers:
+        dag = worker.forward.bind(dag)
+```
+
+## Pipeline-parallel training
+
+Using [GPipe](https://arxiv.org/pdf/1811.06965.pdf)-style pipeline parallelism:
+
+```python
+T = 4  # Pipeline parallelism degree.
+workers = [ModelWorker.bind() for _ in range(T)]
+
+with InputNode() as inp:
+    microbatches_done = []
+    for microbatch in inp.microbatches:
+        for worker in workers:
+            microbatch = worker.forward.bind(microbatch)
+        for worker in reversed(workers):
+            microbatch = worker.backward.bind(microbatch)
+        # Empty objects signaling that the backwards pass is done.
+        microbatches_done.append(microbatch)
+    dag = MultiOutputNode([
+        worker.apply_gradient.bind(*microbatches_done)
+        for worker in workers])
+```
+
+## Transfering data with GPU channels
+
+Let's take an example where we want to overlap some execution on a producer/consumer with direct GPU-GPU transfer between them. One example of this is in [prefill disaggregation](https://arxiv.org/abs/2311.18677), where the prefill and decode forward passes for different layers may be overlapped with transfer of the KV cache for that layer.
+
+There are a few options for expressing this:
+
+1. Synchronously send data with the producer and consumer tasks. Simple, but GPUs will idle during the transfer.
+
+```python
+@ray.remote
+class Producer:
+    def produce_all_sync(self, inp):
+        gpu_tensors = []
+        for layer in model:
+            inp, gpu_tensor_shard = layer.forward(inp)
+            gpu_tensors.append(gpu_tensor_shard)
+
+        return inp, gpu_tensors
+
+@ray.remote
+class Consumer:
+    def consume_all_sync(self, gpu_tensors):
+        pass
+
+with InputNode() as inp:
+    with InputGPUChannel() as gpu_channel:
+        _, tensors = producer.produce_all_sync.bind(inp.input)
+        gpu_tensors = gpu_channel.bind(tensors)
+        dag = consumer.consume_all_sync.bind(gpu_tensors)
+
+```
+
+2. Allow direct reads/writes to the GPU channel from the producer/consumer tasks. Pipelining is supported by executing compute tasks concurrently.
+
+```python
+@ray.remote
+class Producer:
+    def produce_pipelined(self, inp, gpu_channel):
+        for layer in model:
+            inp, gpu_tensor_shard = layer.forward(inp)
+            # With async write, the send can be pipelined with layer.forward.
+            gpu_channel.write(gpu_tensor_shard) 
+
+        return inp
+
+@ray.remote(max_concurrency=2)
+class Consumer:
+    def recv(tag, gpu_channel):
+        for layer_idx, gpu_tensor_shard in enumerate(gpu_channel.read_stream()):
+            self.buffer[tag][layer_idx] = gpu_tensor_shard
+
+    def consume_buffer_loop(self):
+        while True:
+            # Pop newly received data from buffer.
+            pass
+
+# Run the actual `consume` task in a background loop to pipeline with recv.
+consumer.consume_buffer_loop.remote()
+
+with InputNode() as inp_seq:
+    with InputGPUChannel() as gpu_channel:
+        producer.produce_pipelined.bind(inp.input, gpu_channel.write_handle())
+        dag = consumer.recv.bind(inp.tag, gpu_channel.read_handle())
+```
+
+3. DAG backend schedules the GPU sends/recvs and automatically pipelines with producer/consumer tasks.
+
+```python
+@ray.remote
+class Producer:
+    def produce_single_layer(self, layer_idx, inp):
+        inp, gpu_tensor_shard = model[layer_idx].forward(inp)
+        return inp, gpu_tensor_shard
+
+@ray.remote
+class Consumer:
+    def consume_single_layer(self, layer_idx, gpu_tensor_shard):
+        # GPU transfer happens in the background before this task begins.
+        pass
+
+with InputNode() as inp_seq:
+    with InputGPUChannel() as gpu_channel:
+        for layer_idx in range(num_layers):
+            inp, tensor_shard = producer.produce_single_layer.bind(layer_idx, inp)
+            gpu_tensor_shard = gpu_channel.bind(tensor_shard)
+            dag = consumer.consume_single_layer.bind(layer_idx, gpu_tensor_shard)
 ```
 
 Workloads
@@ -301,10 +574,13 @@ Goals:
 -   Validate integration with higher-level ML frameworks
 -   Enable new workloads via Ray's superior flexibility.
 
-We plan to implement all of the common patterns during prototype
-validation, and will select some advanced patterns as we are closer to
-release. Feedback on workload selection is welcome! The following
-categories are in rough order of technical complexity:
+
+For prototype validation, we plan to implement:
+- vLLM tensor parallelism: a basic scatter-gather DAG
+- prefill disaggregation: an advanced pattern that includes direct GPU-GPU execution and pipeline parallelism
+
+Feedback on workload selection is welcome! The following categories are in rough
+order of technical complexity:
 
 ### Common patterns: Microbenchmarks (simple distributed inference)
 
@@ -326,6 +602,7 @@ categories are in rough order of technical complexity:
 ### Advanced patterns
 |                                                                 | Key properties / requirements                                        | Goals                                                            |
 |-----------------------------------------------------------------|----------------------------------------------------------------------|------------------------------------------------------------------|
+| [Prefill disaggregation](https://arxiv.org/abs/2311.18677) | P2P GPU communication; Pipelined execution | Performance parity; Increase flexibility of scheduling and pipelining |
 | [Pipedream](https://arxiv.org/pdf/1806.03377.pdf) style pipeline-parallel distributed training (PP)     | Iterative P2P GPU communication                                      | Performance parity; Increase flexibility of partitioning scheme   |
 | vLLM pipeline parallelism on heterogeneous GPUs                 | Asymmetric compute                                                   | Reduce implementation burden                                     |
 | Fault-tolerant distributed serving                              | Resume execution w/o restarting everyone                             | Reduce downtime via greater recovery flexibility                 |
