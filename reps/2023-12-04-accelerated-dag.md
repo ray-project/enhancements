@@ -527,18 +527,20 @@ consumer.consume_buffer_loop.remote()
 @ray.remote
 class Producer:
     def produce_pipelined(self, inp, gpu_channel):
+        gpu_channel._begin_write()
         for layer in model:
             inp, gpu_tensor_shard = layer.forward(inp)
             # With async write, the send can be pipelined with layer.forward.
             gpu_channel.write(gpu_tensor_shard) 
+        gpu_channel._end_write()
 
         return inp
 
 @ray.remote(max_concurrency=2)
 class Consumer:
     def recv(tag, gpu_channel):
-        # read_stream() only returns values written by the corresponding produce
-        # task.
+        # read_stream() only returns values that were written between the last
+        # _begin_write() and _end_write().
         for layer_idx, gpu_tensor_shard in enumerate(gpu_channel.read_stream()):
             self.buffer[tag][layer_idx] = gpu_tensor_shard
 
@@ -550,9 +552,9 @@ class Consumer:
 # consumer and the other to execute over the data.
 
 with InputNode() as inp_seq:
-    with InputGPUChannel() as gpu_channel:
-        producer.produce_pipelined.bind(inp.input, gpu_channel.write_handle())
-        transfer_dag = consumer.recv.bind(inp.tag, gpu_channel.read_handle())
+    gpu_channel = GPUChannel(producer, consumer)
+    producer.produce_pipelined.bind(inp.input, gpu_channel)
+    transfer_dag = consumer.recv.bind(inp.tag, gpu_channel)
 
 # Run the actual `consume` task in a second thread to pipeline with recv.
 with InputNode() as inp_tag:
