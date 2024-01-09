@@ -462,7 +462,33 @@ Although this appears simple, it is actually a relatively advanced use case if:
 
 There are a few options for expressing this:
 
-1. Without DAG API. Pass data through the GPU channel out-of-band and execute asynchronously using two different loops, one for receiving data and one for execution.
+1. With the DAG API, synchronously send data with the producer and consumer tasks. Simple, but GPUs will idle during the transfer.
+
+```python
+@ray.remote
+class Producer:
+    def produce_all_sync(self, inp):
+        gpu_tensors = []
+        for layer in model:
+            inp, gpu_tensor_shard = layer.forward(inp)
+            gpu_tensors.append(gpu_tensor_shard)
+
+        return inp, gpu_tensors
+
+@ray.remote
+class Consumer:
+    def consume_all_sync(self, gpu_tensors):
+        pass
+
+with InputNode() as inp:
+    with InputGPUChannel() as gpu_channel:
+        _, gpu_tensors = producer.produce_all_sync.bind(inp.input)
+        gpu_tensors.set_channel_impl(GPUChannel)
+        dag = consumer.consume_all_sync.bind(gpu_tensors)
+
+```
+
+2. Without DAG API. Pass data through the GPU channel out-of-band and execute asynchronously using two different loops, one for receiving data and one for execution.
 
 ```python
 @ray.remote
@@ -495,33 +521,7 @@ consumer.recv_loop.remote(gpu_channel)
 consumer.consume_buffer_loop.remote()
 ```
 
-2. With the DAG API, synchronously send data with the producer and consumer tasks. Simple, but GPUs will idle during the transfer.
-
-```python
-@ray.remote
-class Producer:
-    def produce_all_sync(self, inp):
-        gpu_tensors = []
-        for layer in model:
-            inp, gpu_tensor_shard = layer.forward(inp)
-            gpu_tensors.append(gpu_tensor_shard)
-
-        return inp, gpu_tensors
-
-@ray.remote
-class Consumer:
-    def consume_all_sync(self, gpu_tensors):
-        pass
-
-with InputNode() as inp:
-    with InputGPUChannel() as gpu_channel:
-        _, gpu_tensors = producer.produce_all_sync.bind(inp.input)
-        gpu_tensors.set_channel_impl(GPUChannel)
-        dag = consumer.consume_all_sync.bind(gpu_tensors)
-
-```
-
-3. With the DAG API, plus GPU channel. Pipelining is supported by executing compute tasks in another thread.
+3. With the DAG API, plus GPU channel. The task definitions are the same as above, but no longer run in a loop because they are triggered by the DAG backend.
 
 ```python
 @ray.remote
@@ -542,17 +542,21 @@ class Consumer:
         for layer_idx, gpu_tensor_shard in enumerate(gpu_channel.read_stream()):
             self.buffer[tag][layer_idx] = gpu_tensor_shard
 
-    def consume_buffer_loop(self):
+    def consume_buffer(self, tag):
         # Pop received data from buffer and execute.
         pass
 
-# Run the actual `consume` task in a background loop to pipeline with recv.
-consumer.consume_buffer_loop.remote()
+# We execute two different DAGs concurrently, one to receive the data on the
+# consumer and the other to execute over the data.
 
 with InputNode() as inp_seq:
     with InputGPUChannel() as gpu_channel:
         producer.produce_pipelined.bind(inp.input, gpu_channel.write_handle())
-        dag = consumer.recv.bind(inp.tag, gpu_channel.read_handle())
+        transfer_dag = consumer.recv.bind(inp.tag, gpu_channel.read_handle())
+
+# Run the actual `consume` task in a second thread to pipeline with recv.
+with InputNode() as inp_tag:
+    consume_dag = consumer.consume_buffer.bind(tag)
 ```
 
 4. DAG backend schedules the GPU sends/recvs and automatically pipelines with producer/consumer tasks.
