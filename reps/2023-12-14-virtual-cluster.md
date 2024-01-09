@@ -54,17 +54,17 @@ message VirtualCluster {
   // If specified, ensure we have at least this min amount
   // of resources before starting the cluster.
   // If not specified, the default value is 0.
-  map<string, double> flexible_resource_min
+  map<string, double> flex_resource_min
 
   // If specified, limit the consumption of these resources to
   // the specified values.
   // If not specified, the default value is infinite.
-  map<string, double> flexible_resource_max
+  map<string, double> flex_resource_max
 
   // == Fixed size resources ==
   // Fixed sized virtual nodes to request, e.g. {"GPU": 4}.
   // These virtual node resources are part of the min resources
-  // together with flexible_resource_min
+  // together with flex_resource_min
   // that will be atomically reserved when the
   // virtual cluster is created.
   repeated FixedSizeNodes fixed_size_nodes
@@ -144,7 +144,7 @@ Currently we have two ways to run a Ray job: ``ray.init()`` and ``ray job submit
 ray.init()
 
 # The job can use at least 1 CPU and at most 8 CPUs.
-ray.init(virtual_cluster=VirtualCluster(flexible_resource_min={"CPU": 1}, flexible_resource_max={"CPU": 8}))
+ray.init(virtual_cluster=VirtualCluster(flex_resource_min={"CPU": 1}, flex_resource_max={"CPU": 8}))
 
 # The job uses 1 A100 GPU.
 ray.init(virtual_cluster=VirtualCluster(fixed_size_nodes=[FixedSizeNode(resources={"GPU": 1}, parent_node_selector={"accelerator_type": In("A100")})]))
@@ -222,20 +222,20 @@ for i in range(2):
 ##### Tune + Dataset
 
 ```python
-# Tune can run 2 trails (each trail runs two 1 GPU trainers) in parallel and Dataset can use 1-10 CPUs
-ray.init(virtual_cluster=VirtualCluster(fixed_size_nodes=[FixedSizeNodes(nodes=[FixedSizeNode(resources={"GPU": 1}), FixedSizeNode(resources={"GPU": 1})], scheduling_policy=PACK), FixedSizeNodes(nodes=[FixedSizeNode(resources={"GPU": 1}), FixedSizeNode(resources={"GPU": 1})], scheduling_policy=PACK)], flexible_resource_min={"CPU": 1}, flexible_resource_max={"CPU": 10}))
+# Tune can run 2 trials (each trial runs two 1 GPU trainers) in parallel and Dataset can use 1-10 CPUs
+ray.init(virtual_cluster=VirtualCluster(fixed_size_nodes=[FixedSizeNodes(nodes=[FixedSizeNode(resources={"GPU": 1}), FixedSizeNode(resources={"GPU": 1})], scheduling_policy=PACK), FixedSizeNodes(nodes=[FixedSizeNode(resources={"GPU": 1}), FixedSizeNode(resources={"GPU": 1})], scheduling_policy=PACK)], flex_resource_min={"CPU": 1}, flex_resource_max={"CPU": 10}))
 ```
 
 ##### Multi-datasets
 
 ```python
-ray.init(virtual_cluster=VirtualCluster(flexible_resource_min={"CPU": 100}, flexible_resource_max={"CPU": 100}))
+ray.init(virtual_cluster=VirtualCluster(flex_resource_min={"CPU": 100}, flex_resource_max={"CPU": 100}))
 
-train_dataset_vc = VirtualCluster(flexible_resource_min={"CPU": 80}, flexible_resource_max={"CPU": 80})
+train_dataset_vc = VirtualCluster(flex_resource_min={"CPU": 80}, flex_resource_max={"CPU": 80})
 with train_dataset_vc:
   ...
 
-validation_dataset_vc = VirtualCluster(flexible_resource_min={"CPU": 20}, flexible_resource_max={"CPU": 20})
+validation_dataset_vc = VirtualCluster(flex_resource_min={"CPU": 20}, flex_resource_max={"CPU": 20})
 with validation_dataset_vc:
   ...
 ```
