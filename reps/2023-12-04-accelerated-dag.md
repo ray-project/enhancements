@@ -462,7 +462,7 @@ Although this appears simple, it is actually a relatively advanced use case if:
 
 There are a few options for expressing this:
 
-1. With the DAG API, synchronously send data with the producer and consumer tasks. Simple, but GPUs will idle during the transfer.
+1. With the DAG API, synchronously send data with the producer and consumer tasks. Simple, but the transfer cannot be overlapped with the corresponding producer and consumer task. Other concurrent producer and consumer tasks can still be pipelined with the transfer.
 
 ```python
 @ray.remote
@@ -488,7 +488,7 @@ with InputNode() as inp:
 
 ```
 
-2. Without DAG API. Pass data through the GPU channel out-of-band and execute asynchronously using two different loops, one for receiving data and one for execution.
+2. Without DAG API. Pass data through the GPU channel out-of-band and execute asynchronously using two different loops, one for receiving data and one for execution. Application is responsible for triggering each producer and consumer task in the `while` loops.
 
 ```python
 @ray.remote
@@ -561,7 +561,7 @@ with InputNode() as inp_tag:
     consume_dag = consumer.consume_buffer.bind(tag)
 ```
 
-4. DAG backend schedules the GPU sends/recvs and automatically pipelines with producer/consumer tasks.
+4. DAG backend schedules the GPU sends/recvs and automatically pipelines with fine-grained producer/consumer tasks.
 
 ```python
 @ray.remote
@@ -630,7 +630,7 @@ order of technical complexity:
 |                                                                 | Key properties / requirements                                        | Goals                                                            |
 |-----------------------------------------------------------------|----------------------------------------------------------------------|------------------------------------------------------------------|
 | vLLM tensor parallelism                                         |                                                                      | Reduce Ray overheads                                             |
-| vLLM pipeline parallelism                                       | P2P/cross-node GPU communication                                     | Reduce (expected) Ray overheads; Validate cross-node performance  |
+| vLLM pipeline parallelism                                       | P2P/cross-node GPU communication; Pipelining                                     | Reduce (expected) Ray overheads; Validate cross-node performance  |
 
 
 
@@ -639,22 +639,21 @@ order of technical complexity:
 |-----------------------------------------------------------------|----------------------------------------------------------------------|------------------------------------------------------------------|
 | Tensor-parallel distributed training (TP)                       | Iterative                                                            | Performance parity                                               |
 | Distributed data-parallel (DDP)                                 | Iterative; Collective ops that must be overlapped with backwards pass | Performance parity                                               |
-| [GPipe](https://arxiv.org/abs/1811.06965) style pipeline-parallel distributed training (PP)         | Iterative P2P GPU communication                                      | Performance parity; Increase flexibility of partitioning scheme   |
+| [GPipe](https://arxiv.org/abs/1811.06965) style pipeline-parallel distributed training (PP)         | Iterative; P2P GPU communication                                      | Performance parity; Increase flexibility of partitioning scheme   |
 
 
 ### Advanced patterns
 |                                                                 | Key properties / requirements                                        | Goals                                                            |
 |-----------------------------------------------------------------|----------------------------------------------------------------------|------------------------------------------------------------------|
-| [Prefill disaggregation](https://arxiv.org/abs/2311.18677) | P2P GPU communication; Pipelined execution | Performance parity; Increase flexibility of scheduling and pipelining |
-| [Pipedream](https://arxiv.org/pdf/1806.03377.pdf) style pipeline-parallel distributed training (PP)     | Iterative P2P GPU communication                                      | Performance parity; Increase flexibility of partitioning scheme   |
+| [Prefill disaggregation](https://arxiv.org/abs/2311.18677) | P2P GPU communication; Pipelining; Dynamic scheduling | Performance parity; Increase flexibility of scheduling and pipelining |
+| [Pipedream](https://arxiv.org/pdf/1806.03377.pdf) style pipeline-parallel distributed training (PP)     | Iterative; P2P GPU communication                                      | Performance parity; Increase flexibility of partitioning scheme   |
 | vLLM pipeline parallelism on heterogeneous GPUs                 | Asymmetric compute                                                   | Reduce implementation burden                                     |
-| Fault-tolerant distributed serving                              | Resume execution w/o restarting everyone                             | Reduce downtime via greater recovery flexibility                 |
-| Fault-tolerant distributed training                             | Resume execution w/o restarting everyone and recover state           | Reduce downtime via greater recovery flexibility                 |
+| Fault-tolerant distributed serving                              | Resume execution w/o restarting everyone; Dynamic re-routing                             | Reduce downtime via greater recovery flexibility                 |
+| Fault-tolerant distributed training                             | Resume execution w/o restarting everyone and recover state; Dynamic reconfiguration           | Reduce downtime via greater recovery flexibility                 |
 | Alpa                                                            | TP, DDP and PP training                                              | Reduce implementation burden                                     |
-| Fully sharded data parallel (FSDP)                              | Overlap forwards pass with backwards pass                            | Performance parity; Increase flexibility of partitioning scheme   |
-| Activation offloading to CPU                                    | Overlap GPU-CPU communication with other computation                 | Performance parity                                               |
-| Speculative decoding for LLM inference                          | Model composition                                                    | Reduce Ray overheads; Increase flexibility of partitioning scheme |
-| Disaggregated prefill for LLM inference                          | Dynamic scheduling | Reduce Ray overheads; Increase flexibility of scheduling |
+| Fully sharded data parallel (FSDP)                              | Pipeline forwards and backwards pass                            | Performance parity; Increase flexibility of partitioning scheme   |
+| Activation offloading to CPU                                    | Pipeline GPU-CPU communication | Performance parity                                               |
+| Speculative decoding for LLM inference                          | Pipelining; Dynamic scheduling                                                    | Reduce Ray overheads; Increase flexibility of partitioning scheme |
 
 ### A note on fault tolerance
 
