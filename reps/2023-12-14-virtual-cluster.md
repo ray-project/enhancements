@@ -144,10 +144,17 @@ Currently we have two ways to run a Ray job: ``ray.init()`` and ``ray job submit
 ray.init()
 
 # The job can use at least 1 CPU and at most 8 CPUs.
-ray.init(virtual_cluster=VirtualCluster(flex_resource_min={"CPU": 1}, flex_resource_max={"CPU": 8}))
+ray.init(virtual_cluster=VirtualCluster(
+    flex_resource_min={"CPU": 1}, flex_resource_max={"CPU": 8}))
 
 # The job uses 1 A100 GPU.
-ray.init(virtual_cluster=VirtualCluster(fixed_size_nodes=[FixedSizeNode(resources={"GPU": 1}, parent_node_selector={"accelerator_type": In("A100")})]))
+ray.init(virtual_cluster=VirtualCluster(
+    fixed_size_nodes=[
+        FixedSizeNode(
+            resources={"GPU": 1},
+            parent_node_selector={"accelerator_type": In("A100")}
+        )
+    ]))
 ```
 
 ```shell
@@ -169,10 +176,20 @@ Since virtual clusters are nestable and support gang scheduling, they can be use
 # Create a placement group with two bundles that are packed
 pg = placement_group([{"GPU": 4}, {"GPU": 1}], strategy="PACK")
 # Run the task inside the placement group
-task.options(scheduling_strategy=PlacementGroupSchedulingStrategy(placement_group=pg)).remote()
+task.options(
+    scheduling_strategy=PlacementGroupSchedulingStrategy(placement_group=pg)).remote()
 
 # Create a virtual cluster with two virtual nodes that are packed
-vc = VirtualCluster(fixed_size_nodes=[FixedSizeNodes(nodes=[FixedSizeNode(resources={"GPU": 4}), FixedSizeNode(resources={"GPU": 1})], scheduling_policy=PACK)])
+vc = VirtualCluster(
+    fixed_size_nodes=[
+        FixedSizeNodes(
+            nodes=[
+                FixedSizeNode(resources={"GPU": 4}),
+                FixedSizeNode(resources={"GPU": 1})
+            ],
+            scheduling_policy=PACK
+        )
+    ])
 # A nested virtual cluster inside the job virtual cluster
 with vc:
   # Run the task inside the virtual cluster
@@ -183,10 +200,21 @@ with vc:
 # Create a placement group with two bundles that are strict spreaded
 pg = placement_group([{"GPU": 4}, {"GPU": 1}], strategy="STRICT_SPREAD")
 # Run the actor using the bundle 0 resources
-Actor.options(scheduling_strategy=PlacementGroupSchedulingStrategy(placement_group=pg, placement_group_bundle_index=0)).remote()
+Actor.options(
+    scheduling_strategy=PlacementGroupSchedulingStrategy(
+        placement_group=pg, placement_group_bundle_index=0)).remote()
 
 # Create a virtual cluster with two virtual nodes that are strict spreaded
-vc = VirtualCluster(fixed_size_nodes=[FixedSizeNodes(nodes=[FixedSizeNode(resources={"GPU": 4}, labels={"bundle_index": "0"}), FixedSizeNode(resources={"GPU": 1}, labels={"bundle_index": "1"})], scheduling_policy=STRICT_SPREAD)])
+vc = VirtualCluster(
+    fixed_size_nodes=[
+        FixedSizeNodes(
+            nodes=[
+                FixedSizeNode(resources={"GPU": 4}, labels={"bundle_index": "0"}),
+                FixedSizeNode(resources={"GPU": 1}, labels={"bundle_index": "1"})
+            ],
+            scheduling_policy=STRICT_SPREAD
+        )
+    ])
 with vc:
   # Run the actor using the first virtual node resources
   Actor.options(node_labels={"bundle_index": In("0")}).remote()
@@ -209,33 +237,72 @@ ray.init()
 pg = placement_group([{"GPU": 1}, {"GPU": 1}], strategy="STRICT_SPREAD")
 actors = []
 for i in range(2):
-  actors.append(Actor.options(num_gpus=1, scheduling_strategy=PlacementGroupSchedulingStrategy(placement_group=pg, placement_group_bundle_index=i)).remote())
+    actors.append(Actor.options(
+        num_gpus=1,
+        scheduling_strategy=PlacementGroupSchedulingStrategy(
+            placement_group=pg, placement_group_bundle_index=i)).remote())
 ```
 
 ```python
-ray.init(virtual_cluster=VirtualCluster(fixed_size_nodes=[FixedSizeNodes(nodes=[FixedSizeNode(resources={"GPU": 1}, labels={"bundle_index": "0"}), FixedSizeNode(resources={"GPU": 1}, labels={"bundle_index": "1"})], scheduling_policy=STRICT_SPREAD)]))
+ray.init(virtual_cluster=VirtualCluster(
+    fixed_size_nodes=[
+        FixedSizeNodes(
+            nodes=[
+                FixedSizeNode(resources={"GPU": 1}, labels={"bundle_index": "0"}),
+                FixedSizeNode(resources={"GPU": 1}, labels={"bundle_index": "1"})
+            ],
+            scheduling_policy=STRICT_SPREAD
+        )
+    ]))
+
 actors = []
 for i in range(2):
-  actors.append(Actor.options(num_gpus=1, node_labels={"bundle_index": In(str(i))}).remote())
+    actors.append(Actor.options(
+        num_gpus=1,
+        node_labels={"bundle_index": In(str(i))}).remote())
 ```
 
 ##### Tune + Dataset
 
 ```python
 # Tune can run 2 trials (each trial runs two 1 GPU trainers) in parallel and Dataset can use 1-10 CPUs
-ray.init(virtual_cluster=VirtualCluster(fixed_size_nodes=[FixedSizeNodes(nodes=[FixedSizeNode(resources={"GPU": 1}), FixedSizeNode(resources={"GPU": 1})], scheduling_policy=PACK), FixedSizeNodes(nodes=[FixedSizeNode(resources={"GPU": 1}), FixedSizeNode(resources={"GPU": 1})], scheduling_policy=PACK)], flex_resource_min={"CPU": 1}, flex_resource_max={"CPU": 10}))
+ray.init(virtual_cluster=VirtualCluster(
+    fixed_size_nodes=[
+        FixedSizeNodes(
+            nodes=[
+                FixedSizeNode(resources={"GPU": 1}),
+                FixedSizeNode(resources={"GPU": 1})
+            ],
+            scheduling_policy=PACK
+        ),
+        FixedSizeNodes(
+            nodes=[
+                FixedSizeNode(resources={"GPU": 1}),
+                FixedSizeNode(resources={"GPU": 1})
+            ],
+            scheduling_policy=PACK
+        )
+    ],
+    flex_resource_min={"CPU": 1},
+    flex_resource_max={"CPU": 10}))
 ```
 
 ##### Multi-datasets
 
 ```python
-ray.init(virtual_cluster=VirtualCluster(flex_resource_min={"CPU": 100}, flex_resource_max={"CPU": 100}))
+ray.init(virtual_cluster=VirtualCluster(
+    flex_resource_min={"CPU": 100},
+    flex_resource_max={"CPU": 100}))
 
-train_dataset_vc = VirtualCluster(flex_resource_min={"CPU": 80}, flex_resource_max={"CPU": 80})
+train_dataset_vc = VirtualCluster(
+    flex_resource_min={"CPU": 80},
+    flex_resource_max={"CPU": 80})
 with train_dataset_vc:
   ...
 
-validation_dataset_vc = VirtualCluster(flex_resource_min={"CPU": 20}, flex_resource_max={"CPU": 20})
+validation_dataset_vc = VirtualCluster(
+    flex_resource_min={"CPU": 20},
+    flex_resource_max={"CPU": 20})
 with validation_dataset_vc:
   ...
 ```
@@ -246,36 +313,36 @@ With virtual clusters, Ray jobs should have the illusion that they are running i
 
 ```python
 ray.cluster_resources():
-  """This returns the total resources of the current virtual cluster."""
+    """This returns the total resources of the current virtual cluster."""
 
 ray.available_resources():
-  """This returns the available resources of the current virtual cluster."""
+    """This returns the available resources of the current virtual cluster."""
 
 ray.nodes():
-  """This returns all virtual nodes of the current virtual cluster."""
+    """This returns all virtual nodes of the current virtual cluster."""
 
 ray.util.state.summarize_tasks():
-  """Summarize the tasks in the current virtual cluster."""
+    """Summarize the tasks in the current virtual cluster."""
 
 ray.util.state.summarize_objects():
-  """Summarize the objects in the current virtual cluster."""
+    """Summarize the objects in the current virtual cluster."""
 
 ray.util.state.*():
-  """Only return state of the current virtual cluster."""
+    """Only return state of the current virtual cluster."""
 ```
 
 Besides the existing APIs, we also introduce more introspection APIs for virtual clusters.
 
 ```python
 class RuntimeContext:
-  def current_cluster() -> VirtualClusterInfo:
-    """Return the current virtual cluster this process is in.
+    def current_cluster() -> VirtualClusterInfo:
+        """Return the current virtual cluster this process is in.
 
-    You can get the parent cluster using current_cluster().parent_cluster().
-    """
+        You can get the parent cluster using current_cluster().parent_cluster().
+        """
 
-  def current_node() -> VirtualNodeInfo:
-    """Return the current virtual node this process is in."""
+    def current_node() -> VirtualNodeInfo:
+        """Return the current virtual node this process is in."""
 
 class VirtualClusterInfo:
     def spec() -> VirtualCluster
@@ -309,17 +376,17 @@ With virtual clusters, each raylet will maintain a flatten list of local virtual
 
 ```
 class Raylet:
-  local_nodes: List[Node]
-  # Raylet id -> a list of virtual nodes on that raylet
-  remote_nodes: Dict[str, List[Node]]
+    local_nodes: List[Node]
+    # Raylet id -> a list of virtual nodes on that raylet
+    remote_nodes: Dict[str, List[Node]]
 
 class Node:
-  total_resources: Dict[str, float]
-  available_resources: Dict[str, float]
-  # Besides custom labels, each node will have two system labels
-  # one is virtual node id label and the other is virtual cluster id label.
-  # e.g. {"ray.io/vnode_id": "88888", "ray.io/vcluster_id": "66666"}
-  labels: Dict[str, str]
+    total_resources: Dict[str, float]
+    available_resources: Dict[str, float]
+    # Besides custom labels, each node will have two system labels
+    # one is virtual node id label and the other is virtual cluster id label.
+    # e.g. {"ray.io/vnode_id": "88888", "ray.io/vcluster_id": "66666"}
+    labels: Dict[str, str]
 ```
 
 When submitting a task or actor, Ray will automatically add the virtual cluster id label selector so that the task or actor can be scheduled to virtual nodes belonging to the current virtual cluster.
@@ -328,24 +395,96 @@ Let's walk through an example to understand this better. We first start with a R
 
 ```
 Raylet1:
-  local_nodes: [Node(total_resources={"CPU": 4}, available_resources={"CPU": 4}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"})]
-  remote_nodes: {"raylet2": [Node(total_resources={"CPU": 4}, available_resources={"CPU": 4}, labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"})]}
+    local_nodes: [
+        Node(
+            total_resources={"CPU": 4},
+            available_resources={"CPU": 4},
+            labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}
+        )
+    ]
+
+    remote_nodes: {"raylet2": [
+        Node(
+            total_resources={"CPU": 4},
+            available_resources={"CPU": 4},
+            labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"}
+        )
+    ]}
 
 Raylet2:
-  local_nodes: [Node(total_resources={"CPU": 4}, available_resources={"CPU": 4}, labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"})]
-  remote_nodes: {"raylet1": [Node(total_resources={"CPU": 4}, available_resources={"CPU": 4}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"})]}
+    local_nodes: [
+        Node(
+            total_resources={"CPU": 4},
+            available_resources={"CPU": 4},
+            labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"}
+        )
+    ]
+
+    remote_nodes: {"raylet1": [
+        Node(
+            total_resources={"CPU": 4},
+            available_resources={"CPU": 4},
+            labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}
+        )
+    ]}
 ```
 
 Now a Job with a fixed size virtual cluster (2 * 1 CPU, STRICT_SPREAD) is started:
 
 ```
 Raylet1:
-  local_nodes: [Node(total_resources={"CPU": 4}, available_resources={"CPU": 3}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 1}, available_resources={"CPU": 1}, labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"})]
-  remote_nodes: {"raylet2": [Node(total_resources={"CPU": 4}, available_resources={"CPU": 3}, labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 1}, available_resources={"CPU": 1}, labels={"ray.io/vnode_id": "vnode2", "ray.io/vcluster_id": "vcluster1"})]}
+    local_nodes: [
+        Node(
+            total_resources={"CPU": 4},
+            available_resources={"CPU": 3},
+            labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}
+        ),
+        Node(
+            total_resources={"CPU": 1},
+            available_resources={"CPU": 1},
+            labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"}
+        )
+    ]
+
+    remote_nodes: {"raylet2": [
+        Node(
+            total_resources={"CPU": 4},
+            available_resources={"CPU": 3},
+            labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"}
+        ),
+        Node(
+            total_resources={"CPU": 1},
+            available_resources={"CPU": 1},
+            labels={"ray.io/vnode_id": "vnode2", "ray.io/vcluster_id": "vcluster1"}
+        )
+    ]}
 
 Raylet2:
-  local_nodes: [Node(total_resources={"CPU": 4}, available_resources={"CPU": 3}, labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 1}, available_resources={"CPU": 1}, labels={"ray.io/vnode_id": "vnode2", "ray.io/vcluster_id": "vcluster1"})]
-  remote_nodes: {"raylet1": [Node(total_resources={"CPU": 4}, available_resources={"CPU": 3}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 1}, available_resources={"CPU": 1}, labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"})]}
+    local_nodes: [
+        Node(
+            total_resources={"CPU": 4},
+            available_resources={"CPU": 3},
+            labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"}
+        ),
+        Node(
+            total_resources={"CPU": 1},
+            available_resources={"CPU": 1},
+            labels={"ray.io/vnode_id": "vnode2", "ray.io/vcluster_id": "vcluster1"}
+        )
+    ]
+
+    remote_nodes: {"raylet1": [
+        Node(
+            total_resources={"CPU": 4},
+            available_resources={"CPU": 3},
+            labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}
+        ),
+        Node(
+            total_resources={"CPU": 1},
+            available_resources={"CPU": 1},
+            labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"}
+        )
+    ]}
 ```
 
 Next we submit a 1 CPU task:
@@ -354,31 +493,125 @@ Next we submit a 1 CPU task:
 task.options(num_cpus=1).remote()
 
 # This will be rewritten to
-task.options(num_cpus=1, node_labels={"ray.io/vcluster_id": ray.get_runtime_context().current_cluster().cluster_id()}).remote()
+task.options(
+    num_cpus=1,
+    node_labels={"ray.io/vcluster_id": ray.get_runtime_context().current_cluster().cluster_id()}).remote()
 ```
 
 When raylet1 (assuming it's the local raylet) receives the lease request, it will look at local nodes and remote nodes and find all nodes that match the node label selectors. In this case they are vnode1 and vnode2. Since vnode1 is local, it will choose vnode1 to run the task:
 
 ```
 Raylet1:
-  local_nodes: [Node(total_resources={"CPU": 4}, available_resources={"CPU": 3}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 1}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"})]
-  remote_nodes: {"raylet2": [Node(total_resources={"CPU": 4}, available_resources={"CPU": 3}, labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 1}, available_resources={"CPU": 1}, labels={"ray.io/vnode_id": "vnode2", "ray.io/vcluster_id": "vcluster1"})]}
+    local_nodes: [
+        Node(
+            total_resources={"CPU": 4},
+            available_resources={"CPU": 3},
+            labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}
+        ),
+        Node(
+            total_resources={"CPU": 1},
+            available_resources={"CPU": 0},
+            labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"}
+        )
+    ]
+
+    remote_nodes: {"raylet2": [
+        Node(
+            total_resources={"CPU": 4},
+            available_resources={"CPU": 3},
+            labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"}
+        ),
+        Node(
+            total_resources={"CPU": 1},
+            available_resources={"CPU": 1},
+            labels={"ray.io/vnode_id": "vnode2", "ray.io/vcluster_id": "vcluster1"}
+        )
+    ]}
 
 Raylet2:
-  local_nodes: [Node(total_resources={"CPU": 4}, available_resources={"CPU": 3}, labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 1}, available_resources={"CPU": 1}, labels={"ray.io/vnode_id": "vnode2", "ray.io/vcluster_id": "vcluster1"})]
-  remote_nodes: {"raylet1": [Node(total_resources={"CPU": 4}, available_resources={"CPU": 3}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 1}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"})]}
+    local_nodes: [
+        Node(
+            total_resources={"CPU": 4},
+            available_resources={"CPU": 3},
+            labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"}
+        ),
+        Node(
+            total_resources={"CPU": 1},
+            available_resources={"CPU": 1},
+            labels={"ray.io/vnode_id": "vnode2", "ray.io/vcluster_id": "vcluster1"}
+        )
+    ]
+
+    remote_nodes: {"raylet1": [
+        Node(
+            total_resources={"CPU": 4},
+            available_resources={"CPU": 3},
+            labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}
+        ),
+        Node(
+            total_resources={"CPU": 1},
+            available_resources={"CPU": 0},
+            labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"}
+        )
+    ]}
 ```
 
 Next we submit another 1 CPU task. When raylet1 receives the lease request, there are still vnode1 and vnode2 that match the node label selectors but vnode1 has no available resources so raylet1 will spillback the lease request to raylet2 and raylet2 will choose vnode2 to run the task:
 
 ```
 Raylet1:
-  local_nodes: [Node(total_resources={"CPU": 4}, available_resources={"CPU": 3}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 1}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"})]
-  remote_nodes: {"raylet2": [Node(total_resources={"CPU": 4}, available_resources={"CPU": 3}, labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 1}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "vnode2", "ray.io/vcluster_id": "vcluster1"})]}
+    local_nodes: [
+        Node(
+            total_resources={"CPU": 4},
+            available_resources={"CPU": 3},
+            labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}
+        ),
+        Node(
+            total_resources={"CPU": 1},
+            available_resources={"CPU": 0},
+            labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"}
+        )
+    ]
+
+    remote_nodes: {"raylet2": [
+        Node(
+            total_resources={"CPU": 4},
+            available_resources={"CPU": 3},
+            labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"}
+        ),
+        Node(
+            total_resources={"CPU": 1},
+            available_resources={"CPU": 0},
+            labels={"ray.io/vnode_id": "vnode2", "ray.io/vcluster_id": "vcluster1"}
+        )
+    ]}
 
 Raylet2:
-  local_nodes: [Node(total_resources={"CPU": 4}, available_resources={"CPU": 3}, labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 1}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "vnode2", "ray.io/vcluster_id": "vcluster1"})]
-  remote_nodes: {"raylet1": [Node(total_resources={"CPU": 4}, available_resources={"CPU": 3}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 1}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"})]}
+    local_nodes: [
+        Node(
+            total_resources={"CPU": 4},
+            available_resources={"CPU": 3},
+            labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"}
+        ),
+        Node(
+            total_resources={"CPU": 1},
+            available_resources={"CPU": 0},
+            labels={"ray.io/vnode_id": "vnode2", "ray.io/vcluster_id": "vcluster1"}
+        )
+    ]
+
+    remote_nodes: {"raylet1": [
+        Node(
+            total_resources={"CPU": 4},
+            available_resources={"CPU": 3},
+            labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}
+        ),
+        Node(
+            total_resources={"CPU": 1},
+            available_resources={"CPU": 0},
+            labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"}
+        )
+    ]}
 ```
 
 If we submit another 1 CPU task, it will wait in the raylet task queue until one of the previous tasks finish.
@@ -387,12 +620,38 @@ Once the job finishes, the corresponding virtual cluster is destroyed and the re
 
 ```
 Raylet1:
-  local_nodes: [Node(total_resources={"CPU": 4}, available_resources={"CPU": 4}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"})]
-  remote_nodes: {"raylet2": [Node(total_resources={"CPU": 4}, available_resources={"CPU": 4}, labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"})]}
+    local_nodes: [
+        Node(
+            total_resources={"CPU": 4},
+            available_resources={"CPU": 4},
+            labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}
+        )
+    ]
+
+    remote_nodes: {"raylet2": [
+        Node(
+            total_resources={"CPU": 4},
+            available_resources={"CPU": 4},
+            labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"}
+        )
+    ]}
 
 Raylet2:
-  local_nodes: [Node(total_resources={"CPU": 4}, available_resources={"CPU": 4}, labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"})]
-  remote_nodes: {"raylet1": [Node(total_resources={"CPU": 4}, available_resources={"CPU": 4}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"})]}
+    local_nodes: [
+        Node(
+            total_resources={"CPU": 4},
+            available_resources={"CPU": 4},
+            labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"}
+        )
+    ]
+
+    remote_nodes: {"raylet1": [
+        Node(
+            total_resources={"CPU": 4},
+            available_resources={"CPU": 4},
+            labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}
+        )
+    ]}
 ```
 
 #### Autoscaling
@@ -403,50 +662,146 @@ Let's walk through an example and we assume every cluster has infinite max resou
 
 ```
 Raylet1:
-  local_nodes: [Node(total_resources={"CPU": 2}, available_resources={"CPU": 2}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"})]
-  remote_nodes: {}
+    local_nodes: [
+        Node(
+            total_resources={"CPU": 2},
+            available_resources={"CPU": 2},
+            labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}
+        )
+    ]
+
+    remote_nodes: {}
 ```
 
 A job with min 1 CPU is started.
 
 ```
 Raylet1:
-  local_nodes: [Node(total_resources={"CPU": 2}, available_resources={"CPU": 1}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 1}, available_resources={"CPU": 1}, labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"})]
-  remote_nodes: {}
+    local_nodes: [
+        Node(
+            total_resources={"CPU": 2},
+            available_resources={"CPU": 1},
+            labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}
+        ),
+        Node(
+            total_resources={"CPU": 1},
+            available_resources={"CPU": 1},
+            labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"}
+        )
+    ]
+
+    remote_nodes: {}
 ```
 
 A 1 CPU task is submitted.
 
 ```
 Raylet1:
-  local_nodes: [Node(total_resources={"CPU": 2}, available_resources={"CPU": 1}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 1}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"})]
-  remote_nodes: {}
+    local_nodes: [
+        Node(
+            total_resources={"CPU": 2},
+            available_resources={"CPU": 1},
+            labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}
+        ),
+        Node(
+            total_resources={"CPU": 1},
+            available_resources={"CPU": 0},
+            labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"}
+        )
+    ]
+
+    remote_nodes: {}
 ```
 
 Now another 1 CPU task is submitted. Since the virtual custer has no available resources, it will try to scale up. In this case, the parent cluster still has 1 available CPU so it can be borrowed immediately.
 
 ```
 Raylet1:
-  local_nodes: [Node(total_resources={"CPU": 2}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 2}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"})]
-  remote_nodes: {}
+    local_nodes: [
+        Node(
+            total_resources={"CPU": 2},
+            available_resources={"CPU": 0},
+            labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}
+        ),
+        Node(
+            total_resources={"CPU": 2},
+            available_resources={"CPU": 0},
+            labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"}
+        )
+    ]
+
+    remote_nodes: {}
 ```
 
 Then another 1 CPU task is submitted. Now even the root physical cluster has no available resources, autoscaler will add a new node and a new virtual node will be created out of it to satisfy the 1 CPU demand.
 
 ```
 Raylet1:
-  local_nodes: [Node(total_resources={"CPU": 2}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 2}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"})]
-  remote_nodes: {"raylet2": [Node(total_resources={"CPU": 2}, available_resources={"CPU": 1}, labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 1}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "vnode2", "ray.io/vcluster_id": "vcluster1"})]}
+    local_nodes: [
+        Node(
+            total_resources={"CPU": 2},
+            available_resources={"CPU": 0},
+            labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}
+        ),
+        Node(
+            total_resources={"CPU": 2},
+            available_resources={"CPU": 0},
+            labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"}
+        )
+    ]
+
+    remote_nodes: {"raylet2": [
+        Node(
+            total_resources={"CPU": 2},
+            available_resources={"CPU": 1},
+            labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"}
+        ),
+        Node(
+            total_resources={"CPU": 1},
+            available_resources={"CPU": 0},
+            labels={"ray.io/vnode_id": "vnode2", "ray.io/vcluster_id": "vcluster1"}
+        )
+    ]}
 
 Raylet2:
-  local_nodes: [Node(total_resources={"CPU": 2}, available_resources={"CPU": 1}, labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 1}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "vnode2", "ray.io/vcluster_id": "vcluster1"})]
-  remote_nodes: {"raylet1": [Node(total_resources={"CPU": 2}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}), Node(total_resources={"CPU": 2}, available_resources={"CPU": 0}, labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"})]}
+    local_nodes: [
+        Node(
+            total_resources={"CPU": 2},
+            available_resources={"CPU": 1},
+            labels={"ray.io/vnode_id": "raylet2", "ray.io/vcluster_id": "physical_cluster_id"}
+        ),
+        Node(
+            total_resources={"CPU": 1},
+            available_resources={"CPU": 0},
+            labels={"ray.io/vnode_id": "vnode2", "ray.io/vcluster_id": "vcluster1"}
+        )
+    ]
+
+    remote_nodes: {"raylet1": [
+        Node(
+            total_resources={"CPU": 2},
+            available_resources={"CPU": 0},
+            labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}
+        ),
+        Node(
+            total_resources={"CPU": 2},
+            available_resources={"CPU": 0},
+            labels={"ray.io/vnode_id": "vnode1", "ray.io/vcluster_id": "vcluster1"}
+        )
+    ]}
 ```
 
 Eventually when the job finishes, newly added nodes will be idle terminated.
 
 ```
 Raylet1:
-  local_nodes: [Node(total_resources={"CPU": 2}, available_resources={"CPU": 2}, labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"})]
-  remote_nodes: {}
+    local_nodes: [
+        Node(
+            total_resources={"CPU": 2},
+            available_resources={"CPU": 2},
+            labels={"ray.io/vnode_id": "raylet1", "ray.io/vcluster_id": "physical_cluster_id"}
+        )
+    ]
+
+    remote_nodes: {}
 ```
