@@ -1,21 +1,20 @@
 ## Summary
 ### General Motivation
 
-In the current design of Ray, the export methods of various states in the Ray cluster are inconsistent.
+In the current design of Ray, the way to export various states in the Ray cluster are inconsistent.
 For example, the state of the Actor is broadcast through GCS pubsub, and to obtain the state change of the node,
-it is necessary to query the RPC service (NodeInfoGcsService). For the jobs submitted through job submission,
+it is necessary to query rpc service (NodeInfoGcsService). For the jobs submitted through job submission,
 there is no way to expose the state. The high-level libraries on top of Ray also don't have a unified exposure method.
 E.g. RayServe and RayData respectively collect the states through their own StateActor and report to the Dashboard.
 
 It is very difficult to obtain these basic states outside the Ray cluster. If a unified export API can be defined,
-we can achieve the observable ability independent of the Ray cluster. 
-The most typical example is to implement the ability of the Ray history server.
+we can achieve the observable ability independent of the Ray cluster. The most typical scenario is to implement the Ray history server.
 
 #### Key requirements:
-- Need to expose all necessary Ray states for basic observability.
-- The status export should not increase the load on the Ray cluster.
-- Export data streamingly rather than fetch data from the ray cluster. To obtain the current status of the ray cluster at one time,
-  you need to use the state observability api.
+- Need to expose all necessary Ray states for basic observability, tasks/actor/jobs/nodes.
+- The states export should not increase the load on the Ray cluster.
+- Export states streamingly rather than fetch it from ray cluster. To obtain the current status of the ray cluster at one time,
+  you need to use [the state observability api](https://github.com/ray-project/enhancements/blob/main/reps/2022-04-21-state-observability-apis.md "the state observability api") . 
 - Certain states can be exported selectively.
 - Friendly to all types of users (especially cloud vendors), easy to deploy and use, without modifying Ray.
 
@@ -33,10 +32,9 @@ Yes, the states we want to export belong to Ray's internal components.
 ### Events
 `Event` represents the state change in the Ray cluster, which indicates that
 the state of a certain resource in the Ray Cluster has changed, such as the start
-and end of a job, the start and destruction of an Actor, etc. Event is structured data,
-and each resource corresponds to an Event type, and this Event includes fields that
-describe the change of this resource. They follow a generally consistent format,
-but the Event fields of different types can be customized. E.g.:
+and end of a job, the constuction and destruction of an Actor, etc. Event is structured data,
+and each resource corresponds to a specified event type. All types of events follow a generally consistent format,
+but the event fields of different types can be customized. E.g.:
 
 ```json
 {"event_type": "JOB", "job": {"submission_id": "raysubmit_WBMEB9nTaMKmrKrN", "job_info": {"status": "RUNNING", "entrypoint": "python3 my_script.py", "message": null, "error_type": null, "start_time": 1692004435106, "end_time": null, "metadata": null, "entrypoint_num_cpus": null, "entrypoint_num_gpus": null, "entrypoint_resources": null, "driver_agent_http_address": null, "driver_node_id": null}}}
@@ -45,15 +43,14 @@ but the Event fields of different types can be customized. E.g.:
 
 ```
 
-Aggregating all the Events according to time, we can obtain the historical state of the Ray Cluster,
+Aggregating all the Events by time dimension, we can obtain the historical state of the ray cluster,
 and the consumers of the events can aggregate the final state from a series of events.
 The loss of certain events will not cause the final state to be incorrect. For example,
 if the event of an actor's creation is lost, but the consumer can read the event of this actor's
-successful exit, then it can be known that the actor finally ran successfully.
+successful exit, then the consumer known that the actor finally ran successfully.
 
-Various components of Ray (such as GCS/Dashboard/raylet/worker) can all act as event sources to generate Events,
-but the event sources do not necessarily need to be concerned about the flow of Events,
-including how Events are stored, transmitted, and published.
+Various components of Ray (such as GCS/Dashboard/raylet/worker) can all act as event sources to generate events,
+but the event sources do not need to care about about how events are stored, transmitted, and published.
 
 ### Events to Export and How
 #### Events to Export
@@ -87,24 +84,24 @@ All datasets, the dag, and execution progress.
 
 #### How to export
 - Event generation
-We propose to use the file system-based export interface. The event source can just write the
+We propose to use the filesystem based export interface. The event source can just write the
 event into the file of this node and then return. The export of the event can be the responsibility of the agent on the node.
 
 
 - Event export
 In general, the pubsub mode is used and it has the ability to be pluggable.
 Various components that support pubsub can be used, such as GCS in the cluster, and external systems such as Kafka, etc.
-The agent monitors the event file generated by this node and publishes the event to the backend.
+The agent monitors the event file generated on this node and publishes events to the backend.
 
 
-There are the following several advantages:
+Advantages are:
 1. For the event sources (gcs/worker/raylet), the export interface is very lightweight and stable,
    and will not encounter abnormal errors such as network timeouts.
 2. It decouples the process of the event source generating events and the actual export (publishing to gcs or kafka).
 3. It is easy to control and configure. By configuring the agent to control whether to export,
    control the event types that need to be exported, and control the export speed.
-4. Using the pubsub mechanism, the event export is streaming, and the publisher and the subscriber
-   can choose to handle the events at their own speed or discard the events.
+4. Using the pubsub mechanism, the event export is streamingly, the publisher and subscriber
+   can handle events at their own speed or ignore the events.
 5. The mainstream pubsub system (kafka) supports repeated subscription and consumption, which is friendly to subscribers.
 
 <br>
@@ -113,19 +110,19 @@ There are the following several advantages:
 
 <br>
 
-The above exported solution is very flexible. Users with different needs can choose the deployment method that suits them.
-There are typically several types:
-1. For ordinary users, the Ray cluster scale and job scale are not large, and using the default GCS as pubsub is fine.
+The above exported solution is very flexible. Users with different needs can choose the most suitable deployment.
+1. For ordinary users, the ray cluster scale and job scale are limited, it's fine to use the default GCS pubsub.
 2. For users who have the ability and need for customized development, such as companies with a certain scale,
-   there will often be a relatively large Ray cluster scale and quantity, have their own infra infrastructure,
-   and when deploying Ray, it is necessary to adapt to their own pubsub, and only a small amount of 
-   modification to the agent is required. Use the raw data exported by Ray to integrate with their own system.
-3. For cloud vendors, use open-source Ray and need to provide stable observable capabilities, use Kafka.
+   there will often be a relatively large Ray cluster scale and quantity, have their own infra infrastructure.
+   When deploying Ray, it is necessary to adapt to the internal publish/subscribe system.
+   By using the exported solution we proposed, only a small amount of modification to the agent is required.
+3. For cloud vendors,  it is very important to use open-source components, and then Kafka is a very good choice.
+   
 
 ### Status quo
-At present, there is already an events mechanism in Ray. Its working mechanism is that the Ray components
-print structured logs (JSON) to the tmp_dir/log/events/ directory below, 
-and the event agent on each node monitors these files and reports the file content to the event head.
+At present, there is already an events mechanism implementation in Ray: components like gcs/raylet/workers
+print structured logs (JSON) to the tmp_dir/log/events/ directory, and the event agent on each node
+monitors these files and reports the file content to the event head. 
 This is also the source of the Events on the Overview page of the dashboard.
 
 <br>
