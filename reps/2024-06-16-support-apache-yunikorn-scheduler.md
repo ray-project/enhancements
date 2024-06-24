@@ -5,7 +5,7 @@
 The [Support batch scheduling and queueing](https://github.com/ray-project/kuberay/issues/213) allows Ray to integrate
 easily with non-default Kubernetes scheduler, such as [Volcano](https://volcano.sh/). This proposal aims to add support for
 another popular Kubernetes scheduler: [Apache YuniKorn](https://yunikorn.apache.org/). This provides Ray users with 
-adds another option to leverage the [scheduling features](https://yunikorn.apache.org/docs/next/get_started/core_features)
+another option to leverage the [scheduling features](https://yunikorn.apache.org/docs/next/get_started/core_features)
 YuniKorn offers.
 
 ## Existing state
