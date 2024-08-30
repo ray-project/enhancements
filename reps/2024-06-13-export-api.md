@@ -20,6 +20,8 @@ we can achieve the observable ability independent of the Ray cluster. The most t
   you need to use [the state observability api](https://github.com/ray-project/enhancements/blob/main/reps/2022-04-21-state-observability-apis.md "the state observability api") . 
 - Certain states can be exported respectively.
 - Friendly to all types of users (especially cloud vendors), easy to deploy and use, without modifying Ray.
+- It should be possible to disable the export API for security and performance.
+- The data should be exported from as close as possible to the source where it is generated. The export API should have minimal overhead and we should not need to unnecessarily move data to other nodes before it is exported.
 
 ### Should this change be within ray or outside?
 
