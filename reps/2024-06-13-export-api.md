@@ -15,7 +15,8 @@ we can achieve the observable ability independent of the Ray cluster. The most t
 
 #### Key requirements:
 - Need to expose all necessary ray states for basic observability, tasks/actor/jobs/nodes.
-- The states export should not increase the load of the ray cluster.
+- Light load may be added when we export states, but we should be able to limit this impact (eg: max data stored in memory, not blocking any control logic).
+  The export API should not put too much load on the Ray cluster.
 - Export states streamingly rather than fetching it directly from ray cluster. To obtain the current status of the ray cluster at one time,
   you need to use [the state observability api](https://github.com/ray-project/enhancements/blob/main/reps/2022-04-21-state-observability-apis.md "the state observability api") . 
 - Certain states can be exported respectively. RayCores (actors/tasks/nodes), RayData, and RayServe-related states can be selectively exported.
