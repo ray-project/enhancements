@@ -18,7 +18,8 @@ we can achieve the observable ability independent of the Ray cluster. The most t
 - The states export should not increase the load of the ray cluster.
 - Export states streamingly rather than fetching it directly from ray cluster. To obtain the current status of the ray cluster at one time,
   you need to use [the state observability api](https://github.com/ray-project/enhancements/blob/main/reps/2022-04-21-state-observability-apis.md "the state observability api") . 
-- Certain states can be exported respectively.
+- Certain states can be exported respectively. RayCores (actors/tasks/nodes), RayData, and RayServe-related states can be selectively exported.
+  For example, if a user is only interested in the state of RayServe and not in the state of RayCore, then the export of RayCore state can be disabled to reduce overhead.
 - Friendly to all types of users (especially cloud vendors), easy to deploy and use, without modifying Ray.
 - It should be possible to disable the export API for security and performance.
 - The data should be exported from as close as possible to the source where it is generated. The export API should have minimal overhead and we should not need to unnecessarily move data to other nodes before it is exported.
@@ -66,11 +67,11 @@ Tasks/Actors/Objects/Jobs/Nodes/Placement groups, including its meta data and cu
 
 |  Event            | Event Source          | When to export                                                                    | Format example(maybe a file link)|
 |  ----             | ----                  | ----                                                                              | ----                             |
-| Tasks             | CoreWorker and raylet | When coreworker adds task event to<br>ray::core::worker::TaskEventBuffer          |          |
-| Actors            | GCS                   | GcsPublisher::PublishActor<br>publish actor status through<br>GCS_ACTOR_CHANNEL   |          |
+| Tasks             | CoreWorker and raylet | When coreworker adds task event to<br>ray::core::worker::TaskEventBuffer          |  https://docs.google.com/document/d/1fMt9Rf7dDTKA6AP62hatr7ovChqng_hTt2WAuhCqWko/edit        |
+| Actors            | GCS                   | GcsPublisher::PublishActor<br>publish actor status through<br>GCS_ACTOR_CHANNEL   |  https://docs.google.com/document/d/1_7Z81KtmjA3IAEeZqEuxvw6ur5acyU-CrofQ6rFEmTg/edit        |
 | Objects           | CoreWorker and raylet | None                                                                              |          |
-| Jobs              | JobManager            | When JobInfoStorageClient.put_status called                                       |          |
-| Nodes             | GCS                   | GcsNodeManager::HandleXXXNode                                                     |          |
+| Jobs              | JobManager            | When JobInfoStorageClient.put_status called                                       |  https://docs.google.com/document/d/1upQRU-f8WgVH_NWBmeJyegyOSJwNDPPqnl1cCGpmiGo/edit?usp=sharing        |
+| Nodes             | GCS                   | GcsNodeManager::HandleXXXNode                                                     |  https://docs.google.com/document/d/1qjoF51h2oUN2sr_MtPnovbNFZYZrh3WLNR_P0HrUuOI/edit?usp=sharing        |
 | Placement groups  | GCS                   | GcsPlacementGroupManager::HandleXXXPlacementGroup                                 |          |
 
 
@@ -88,6 +89,9 @@ All datasets, the dag, and execution progress.
 |  ----             | ----                  | ----           | ----                               |
 | Datasets         | ray.data.internal.stats._StatsActor | _StatsActor's update function called.           | None         |
 
+Priorities:
+- Actor/Task/Job/Node states (P0)
+- Objects/PlacementGroups/Ray Serve/RayData states (P1)
 
 #### How to export
 - Generate event
