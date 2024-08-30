@@ -7,7 +7,10 @@ it is necessary to query rpc service (NodeInfoGcsService). For the jobs submitte
 there is no way to expose the state. The high-level libraries on top of Ray also don't have a unified export way.
 E.g. RayServe and RayData collect the states through their own StateActor and report to the Dashboard respectively.
 
-It is very difficult to obtain these ray basic states outside the Ray cluster. If a unified export API can be defined,
+It is very difficult to obtain these ray basic states outside the Ray cluster. This issue is reflected in two aspects:
+1. Scale of data exceeds current dashboard API limits.
+2. After the Ray cluster terminates, all status data is lost.
+If a unified export API can be defined,
 we can achieve the observable ability independent of the Ray cluster. The most typical scenario is to build the Ray history server.
 
 #### Key requirements:
