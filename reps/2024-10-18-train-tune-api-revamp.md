@@ -707,11 +707,99 @@ Today, job-level restoration is supported via the `<FrameworkTrainer>.restore(pa
 
 The new design avoids pickling any configurations, and uses the `RunConfig(storage_path, name)` as the unique identifier for a restorable run. If a previous run has written outputs and checkpoints to `{storage_path}/{name}`, then a new run started with the same configuration will “restore” from the state found at that directory. At the moment, the only stateful component is Ray Train’s checkpoint manager, which tracks the latest checkpoint.
 
-Here’s an example of what job-level restoration looks like before and after:
+Here’s an example of what job-level restoration looks like before and after, where the job is submitted with this `python main.py <UNIQUE_JOB_ID>` as the entrypoint:
 
-| Before | After |
-| :---- | :---- |
-| `main.py` `unique_run_name = "UNIQUE_TRAIN_JOB_ID" storage_path = "s3://my/bucket" def train_fn_per_worker(config):     checkpoint = ray.train.get_checkpoint()     ...  run_path = f"{storage_path}/{unique_run_name}" if TorchTrainer.can_restore(run_path):     # Certain configs get loaded from a pkl file,     # and other parameters need to be re-specified.     trainer = TorchTrainer.restore(         run_path,         train_loop_per_worker=train_fn_per_worker,         datasets={...},     ) else:      trainer = TorchTrainer(         train_fn_per_worker,         ...,         run_config=ray.train.RunConfig(             storage_path=storage_path,             name=unique_run_name,         ),     )  trainer.fit()`  Submit and retry jobs with `main.py` as the entrypoint. | `main.py` ``unique_run_name = "UNIQUE_TRAIN_JOB_ID" storage_path = "s3://my/bucket" def train_fn_per_worker(config):     checkpoint = ray.train.get_checkpoint()     ...  trainer = TorchTrainer(     train_fn_per_worker,     ...,     run_config=ray.train.RunConfig(         storage_path=storage_path,         name=unique_run_name,     ), ) # If `{storage_path}/{unique_run_name}` already contains a previous run's output, populate the latest checkpoint, which can be retrieved via `ray.train.get_checkpoint`. trainer.fit()``  Submit and retry jobs with `main.py` as the entrypoint. |
+<table>
+<!-- Table Headers -->
+  <tr>
+    <th>Before</th>
+    <th>After</th>
+  </tr>
+  <tr>
+<td>
+
+```python
+# main.py
+
+def train_fn_per_worker(config):
+    checkpoint = ray.train.get_checkpoint()
+
+    ...
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("run_id", type=str)
+    args = parser.parse_args()
+
+    unique_run_name = args.run_id  # some UNIQUE job id
+    storage_path = "s3://my/bucket"
+
+    run_path = f"{storage_path}/{unique_run_name}"
+
+    if TorchTrainer.can_restore(run_path):
+        # Certain configs get loaded from a pkl file,
+        # and other parameters need to be re-specified.
+        trainer = TorchTrainer.restore(
+            run_path,
+            train_loop_per_worker=train_fn_per_worker,
+            datasets={...},
+        )
+    else:
+
+        trainer = TorchTrainer(
+            train_fn_per_worker,
+            ...,
+            run_config=ray.train.RunConfig(
+                storage_path=storage_path,
+                name=unique_run_name,
+            ),
+        )
+
+    trainer.fit()
+```
+
+</td>
+<td>
+
+```python
+# main.py
+
+def train_fn_per_worker(config):
+    checkpoint = ray.train.get_checkpoint()
+
+    ...
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("run_id", type=str)
+    args = parser.parse_args()
+
+    unique_run_name = args.run_id  # some UNIQUE job id
+    storage_path = "s3://my/bucket"
+
+    trainer = TorchTrainer(
+        train_fn_per_worker,
+        ...,
+        run_config=ray.train.RunConfig(
+            storage_path=storage_path,
+            name=unique_run_name,
+        ),
+    )
+    # If `{storage_path}/{unique_run_name}` already contains a previous run's output,
+    # populate the latest checkpoint, which can be retrieved via `ray.train.get_checkpoint`.
+    trainer.fit()
+
+```
+
+</td>
+  </tr>
+
+</table>
 
 ⚠️New training runs should be assigned a unique `name`. We recommend generating this unique name as a uuid before submitting the job. Then, upon any driver failures, a job retry would re-initialize the run with the same `name`, which will load the latest checkpoint information from persistent storage.
 
@@ -735,7 +823,7 @@ trainer = TorchTrainer(
 
 Ray Tune for hyperparameter search over distributed training runs is still supported in a slightly modified but more intuitive way.
 
-The Tune \+ Train integration in Train v1 looks like this:
+The Tune \+ Train integration in today's Ray Train looks like this:
 
 ```py
 trainer = TorchTrainer(train_fn_per_worker, scaling_config=..., run_config=...)
@@ -815,29 +903,89 @@ Here’s a diagram of what running Train and Tune together looks like before and
 
 We acknowledge that these kinds of API changes are very taxing on our users and we paid special attention that most of the migration can be done easily as a simple text substitution without needing large changes for existing code bases. Features that require larger amounts of code change are intended to move toward being simpler and more transparent for the user. Clear API migration error messages will also be raised to assist in this process.
 
-* The new version of Ray Train will be usable (but off by default) via an environment variable feature flag starting on \<X date / release\>.
-* The new version will be ON by default with an environment variable to disable it starting on \<X date / release\>
-* The old version will be deleted, and users will be forced to migrate by \<X date / release 3.0?\>.
+* The new version of Ray Train will be usable (but off by default) via an environment variable feature flag starting on *TBD*.
+* The new version will be ON by default with an environment variable to disable it starting on *TBD*.
+* The old version will be deleted, and users will be forced to migrate by *TBD*.
 
 ## Migration examples
 
 ### Tune only usage
 
-| Before | After |
-| :---- | :---- |
-|  `def trainable(config):     ray.train.report(..., checkpoint=ray.train.Checkpoint(...)) tuner = Tuner(     trainable,     run_config=ray.train.RunConfig(         checkpoint_config=ray.train.CheckpointConfig(...),         failure_config=ray.train.FailureConfig(...),     ) ) result_grid = tuner.fit() result: ray.train.Result = result_grid[0]`  |  `def trainable(config):     ray.tune.report(..., checkpoint=ray.tune.Checkpoint(...)) tuner = Tuner(     trainable,     run_config=ray.tune.RunConfig(         checkpoint_config=ray.tune.CheckpointConfig(...),         failure_config=ray.tune.FailureConfig(...),     ) ) result_grid = tuner.fit() result: ray.tune.Result = result_grid[0]`  |
+```diff
+def trainable(config):
+-   ray.train.report(..., checkpoint=ray.train.Checkpoint(...))
++   ray.tune.report(..., checkpoint=ray.tune.Checkpoint(...))
+
+
+tuner = Tuner(
+    trainable,
+    run_config=ray.train.RunConfig(
+-       checkpoint_config=ray.train.CheckpointConfig(...),
++       checkpoint_config=ray.tune.CheckpointConfig(...),
+-       failure_config=ray.train.FailureConfig(...),
++       failure_config=ray.tune.FailureConfig(...),
+    )
+)
+result_grid = tuner.fit()
+
+-result: ray.train.Result = result_grid[0]
++result: ray.tune.Result = result_grid[0]
+```
 
 ### Train only usage
 
-| Before | After |
-| :---- | :---- |
-|  `def train_fn_per_worker(config):     ray.train.report(..., checkpoint=ray.train.Checkpoint(...)) trainer = TorchTrainer(     train_fn_per_worker,     run_config=ray.train.RunConfig(         checkpoint_config=ray.train.CheckpointConfig(...),         failure_config=ray.train.FailureConfig(...),         log_to_file=True,         callbacks=[JsonLoggerCallback()],     ), ) result_grid = tuner.fit() result: ray.train.Result = result_grid[0]`  |  `def train_fn_per_worker(config):     ray.train.report(..., checkpoint=ray.train.Checkpoint(...)) trainer = TorchTrainer(     train_fn_per_worker,     run_config=ray.train.RunConfig(         checkpoint_config=ray.train.CheckpointConfig(...),         failure_config=ray.train.FailureConfig(...),         log_to_file=True,         callbacks=[ray.tune.logger.JsonLoggerCallback()],     ), ) result_grid = tuner.fit() result: ray.train.Result = result_grid[0]`  |
+```diff
+def train_fn_per_worker(config):
+    ray.train.report(..., checkpoint=ray.train.Checkpoint(...))
+
+trainer = TorchTrainer(
+    train_fn_per_worker,
+    run_config=ray.train.RunConfig(
+        checkpoint_config=ray.train.CheckpointConfig(...),
+        failure_config=ray.train.FailureConfig(...),
+-       log_to_file=True,
+-       callbacks=[JsonLoggerCallback()],
+    ),
+)
+result_grid = tuner.fit()
+
+result: ray.train.Result = result_grid[0]
+```
 
 ### Tune \+ Train usage
 
-| Before | After |
-| :---- | :---- |
-|  `trainer = TorchTrainer(train_fn_per_worker) tuner = Tuner(     trainer,     run_config=ray.train.RunConfig(         checkpoint_config=ray.train.CheckpointConfig(...),         failure_config=ray.train.FailureConfig(...),     ) ) result_grid = tuner.fit() result: ray.train.Result = result_grid[0]`  |  `def tune_fn(config):     trainer = TorchTrainer(         # The Trainer and Tuner now have separate run configs.         train_fn_per_worker, run_config=ray.train.RunConfig(...),     )     trainer.fit()  tuner = Tuner(     tune_fn,     run_config=ray.tune.RunConfig(         # this is now at the level of the         # Train driver script fault tolerance.         # Then, Train fault tolerance should take over         # inside the script.         failure_config=ray.tune.FailureConfig(...),     ) ) result_grid = tuner.fit() result: ray.tune.Result = result_grid[0]`  |
+```diff
++def tune_fn(config: dict):
+    trainer = TorchTrainer(
+        train_fn_per_worker,
+        scaling_config=ray.train.ScalingConfig(
+            num_workers=config["num_workers"], use_gpu=True,
+        )
++       run_config=ray.train.RunConfig(...),
+    )
++   result = trainer.fit()
+
+
+NUM_WORKERS = 4
+TOTAL_GPUS = 8
+
+tuner = Tuner(
+-   trainer,
+-   param_space={"scaling_config": ray.train.ScalingConfig(num_workers=NUM_WORKERS)},
++   tune_fn,
++   param_space={"num_workers": NUM_WORKERS},
+    run_config=ray.train.RunConfig(
++       # These configs are now at the level of the Train driver script fault tolerance.
++       # Ray Train's worker level fault tolerance handles recoveries at the layer
++       # of the `tune_fn`.
+-       checkpoint_config=ray.train.CheckpointConfig(...),
+-       failure_config=ray.train.FailureConfig(...),
+    ),
++   # Manually throttle the number of concurrent train runs.
++   tune_config=ray.tune.TuneConfig(max_concurrent_trials=TOTAL_GPUS // NUM_WORKERS),
+)
+tuner.fit()
+```
 
 # Test Plan and Acceptance Criteria
 
