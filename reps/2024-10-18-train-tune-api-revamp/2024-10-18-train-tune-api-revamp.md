@@ -283,8 +283,7 @@ These configs are already not supported for most Trainers, and the upcoming `XGB
 <td>
 
 ```diff
--context: TrainContext = ray.train.get_context()
-+context: TuneContext = ray.tune.get_context()
+context: TrainContext = ray.train.get_context()
 
 context.get_world_size()
 context.get_local_world_size()
@@ -297,7 +296,6 @@ context.get_node_rank()
 -context.get_trial_resources()
 context.get_experiment_name()
 context.get_storage()
-
 ```
 
 </td>
@@ -419,7 +417,8 @@ Same as above.
 <td>
 
 ```diff
-context: TrainContext = ray.train.get_context()
+-context: TrainContext = ray.train.get_context()
++context: TuneContext = ray.tune.get_context()
 
 -context.get_world_size()
 -context.get_local_world_size()
@@ -801,9 +800,9 @@ if __name__ == "__main__":
 
 </table>
 
-⚠️New training runs should be assigned a unique `name`. We recommend generating this unique name as a uuid before submitting the job. Then, upon any driver failures, a job retry would re-initialize the run with the same `name`, which will load the latest checkpoint information from persistent storage.
+⚠️ New training runs should be assigned a unique `name`. We recommend generating this unique name as a uuid before submitting the job. Then, upon any driver failures, a job retry would re-initialize the run with the same `name`, which will load the latest checkpoint information from persistent storage.
 
-`❌ Trainer(resume_from_checkpoint)` was a common source of confusion and will be deprecated. `resume_from_checkpoint` is meant to provide a starting checkpoint for a new run, rather than restore all state from the previous run. See the following example for a more intuitive way to accomplish the same thing:
+❌ `Trainer(resume_from_checkpoint)` was a common source of confusion and will be deprecated. `resume_from_checkpoint` is meant to provide a starting checkpoint for a new run, rather than restore all state from the previous run. See the following example for a more intuitive way to accomplish the same thing:
 
 ```py
 def train_fn_per_worker(config: dict):
