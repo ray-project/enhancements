@@ -896,7 +896,7 @@ Here’s a diagram of what running Train and Tune together looks like before and
 
 | Before | After |
 | ----- | :---- |
-| ![][image3] | ![][image4] |
+| ![](train_tune_interop_before.png) | ![](train_tune_interop_after.png) |
 
 # Deprecation and Migration Plan
 
