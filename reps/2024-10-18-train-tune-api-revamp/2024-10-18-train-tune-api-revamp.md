@@ -110,7 +110,7 @@ The goal of these changes is to improve:
 * **Extensibility** by introducing more modular execution components that can be more easily customized.
 * **Interoperability** between Ray Tune and Ray Train so that using both together is more natural and still provides separation between the two libraries.
 
-## API Changes {#api-changes}
+## API Changes
 
 | Change Type | Description |
 | :---- | :---- |
@@ -346,7 +346,7 @@ From the perspective of a **Tune user**, here is the full list of API changes.
 </td>
 <td>
 
-The input to the Tuner is now restricted to Trainable types, instead of allowing the `Trainer` type as a special case. See [here](#hyperparameter-optimization-\(ray-tune-+-ray-train\)) for an example.
+The input to the Tuner is now restricted to Trainable types, instead of allowing the `Trainer` type as a special case. See [here](#hyperparameter-optimization) for an example.
 
 </td>
   </tr>
@@ -373,7 +373,7 @@ ray.tune.Tuner(
 </td>
 <td>
 
-These APIs will be duplicated in order to decouple the libraries. The Ray Train counterparts will still exist but may diverge as the libraries continue to be developed.
+These API imports will be moved in order to decouple the libraries.
 
 </td>
   </tr>
@@ -462,7 +462,7 @@ Same as above.
 
 </table>
 
-## Ray Train Architecture Overview {#ray-train-architecture-overview}
+## Ray Train Architecture Overview
 
 ### Controller
 
@@ -535,7 +535,7 @@ Ray Data is still the recommended way of doing distributed data loading and prep
 
 **Ray Dataset ingestion does not require any code changes.**
 
-### Persistent Storage and Run Outputs {#persistent-storage-and-run-outputs}
+### Persistent Storage and Run Outputs
 
 Ray Train continues to rely on external persistent storage such as cloud storage or a shared file system for fault tolerance and writing outputs from multiple distributed workers.
 
@@ -607,7 +607,7 @@ result.best_checkpoints
 
 </table>
 
-#### Persisting Training Artifacts {#persisting-training-artifacts}
+#### Persisting Training Artifacts
 
 ❌ [Artifact syncing](https://docs.ray.io/en/latest/train/user-guides/persistent-storage.html#persisting-training-artifacts) will be deprecated. For some context, Ray Train inherited Ray Tune’s “working directory” abstraction, which tries to maintain consistency between the local working directory of a trial with the corresponding directory in remote storage.
 
@@ -631,7 +631,7 @@ def train_fn_per_worker(config):
 
 Note that this feature was already disabled by default.
 
-### Saving and Loading Checkpoints {#saving-and-loading-checkpoints}
+### Saving and Loading Checkpoints
 
 **Checkpoint saving and loading does not require any code changes.**
 
@@ -691,7 +691,7 @@ class MetricAggregationCallback(WorkerGroupCallback):
             print(rank_0_result.metrics)
 ```
 
-### Job-level Restoration {#job-level-restoration}
+### Job-level Restoration
 
 Today, job-level restoration is supported via the `<FrameworkTrainer>.restore(path_or_uri)` API. In V2, job-level restoration will still be possible with a slightly modified driver script, which solves a few pain points encountered by users:
 
@@ -818,7 +818,7 @@ trainer = TorchTrainer(
 )
 ```
 
-### Hyperparameter Optimization (Ray Tune + Ray Train) {#hyperparameter-optimization}
+### Hyperparameter Optimization
 
 Ray Tune for hyperparameter search over distributed training runs is still supported in a slightly modified but more intuitive way.
 
