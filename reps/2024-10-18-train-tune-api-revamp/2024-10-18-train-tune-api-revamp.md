@@ -129,6 +129,7 @@ From the perspective of a **Train user**, here is the full list of API changes.
     <th>Change Type</th>
     <th>Diff</th>
     <th>Notes</th>
+    <th>API Stability</th>
   </tr>
   <tr>
 <td>🚧</td>
@@ -147,6 +148,11 @@ From the perspective of a **Train user**, here is the full list of API changes.
 See [here](#job-level-restoration) for information on Ray Train v2 job-level restoration.
 
 </td>
+<td>
+
+`Alpha`
+
+</td>
   </tr>
   <tr>
 <td>🚧</td>
@@ -163,6 +169,11 @@ See [here](#job-level-restoration) for information on Ray Train v2 job-level res
 Ray Tune callbacks used to be passed into Trainers, which was awkward to use, since all of the callback hooks were based on Tune events such as the “beginning of the tuning loop step.” The hooks also didn’t expose very relevant parameters. All of the callback hooks passed the Tune `Trial` object to the user, which is a developer API which doesn’t contain any Train specific information.
 
 Take a look at [the architecture overview](#ray-train-architecture-overview) for a preview of the new Ray Train callbacks, which have more fitting hooks and improved flexibility.
+
+</td>
+<td>
+
+`DeveloperAPI`
 
 </td>
   </tr>
@@ -187,6 +198,11 @@ Take a look at [the architecture overview](#ray-train-architecture-overview) for
 Worker errors will be accessible via `result.error` for the user to handle, rather than always raising a wrapper `TrainingFailedError`.
 
 </td>
+<td>
+
+`Beta`
+
+</td>
   </tr>
 
   <tr>
@@ -201,6 +217,11 @@ Worker errors will be accessible via `result.error` for the user to handle, rath
 <td>
 
 The `SyncConfig` primarily configured Ray Tune’s artifact syncing behavior, which will no longer be supported in Ray Train. See [this section](#persisting-training-artifacts) for an alternative you can migrate to. A MLFlow or Wandb artifact registry is the recommended alternative.
+
+</td>
+<td>
+
+`Stable`
 
 </td>
   </tr>
@@ -235,6 +256,14 @@ ray.train.RunConfig(
 4. Logs from workers are already dumped via Ray worker logs and can be viewed in the Ray Dashboard.
 
 </td>
+<td>
+
+1. `Stable`
+2. `DeveloperAPI`
+3. `Stable`
+4. `DeveloperAPI`
+
+</td>
   </tr>
 
   <tr>
@@ -252,6 +281,11 @@ ray.train.FailureConfig(
 <td>
 
 This config only made sense in the context of multiple trials when running with Tune.
+
+</td>
+<td>
+
+`Stable`
 
 </td>
   </tr>
@@ -274,6 +308,11 @@ ray.train.CheckpointConfig(
 <td>
 
 These configs are already not supported for most Trainers, and the upcoming `XGBoostTrainer` and `LightGBMTrainer` API updates will make these parameters fully unused.
+
+</td>
+<td>
+
+`Stable`, but setting these would raise an error in most cases.
 
 </td>
   </tr>
@@ -304,6 +343,11 @@ context.get_storage()
 Same as above. All of the Tune "trial" related context will be removed.
 
 </td>
+<td>
+
+`Beta`
+
+</td>
   </tr>
 
   <tr>
@@ -320,6 +364,11 @@ Same as above. All of the Tune "trial" related context will be removed.
 See [this section](#saving-and-loading-checkpoints) for more information.
 
 </td>
+<td>
+
+`Stable`, but there are no backwards incompatible changes.
+
+</td>
   </tr>
 
 </table>
@@ -334,6 +383,7 @@ From the perspective of a **Tune user**, here is the full list of API changes.
     <th>Change Type</th>
     <th>Diff</th>
     <th>Notes</th>
+    <th>API Stability</th>
   </tr>
   <tr>
 <td>🚧</td>
@@ -343,10 +393,16 @@ From the perspective of a **Tune user**, here is the full list of API changes.
 -Tuner(trainable: Union[ray.tune.Trainable, ray.train.BaseTrainer] = TorchTrainer(...))
 +Tuner(trainable: ray.tune.Trainable = train_driver_fn)
 ```
+
 </td>
 <td>
 
 The input to the Tuner is now restricted to Trainable types, instead of allowing the `Trainer` type as a special case. See [here](#hyperparameter-optimization) for an example.
+
+</td>
+<td>
+
+`Beta`
 
 </td>
   </tr>
@@ -376,6 +432,11 @@ ray.tune.Tuner(
 These API imports will be moved in order to decouple the libraries.
 
 </td>
+<td>
+
+`Stable`
+
+</td>
   </tr>
 
   <tr>
@@ -391,6 +452,11 @@ These API imports will be moved in order to decouple the libraries.
 <td>
 
 Same as above.
+
+</td>
+<td>
+
+`Stable`
 
 </td>
   </tr>
@@ -440,6 +506,11 @@ Same as above. All of the multi-worker distributed training context information
 do not apply to Tune trials and will be removed.
 
 </td>
+<td>
+
+`Beta`
+
+</td>
   </tr>
 
   <tr>
@@ -456,6 +527,11 @@ result_grid = tuner.fit()
 <td>
 
 Same as above.
+
+</td>
+<td>
+
+`Stable`, but there are no backwards incompatible changes for Tune usage.
 
 </td>
   </tr>
@@ -901,6 +977,10 @@ Here’s a diagram of what running Train and Tune together looks like before and
 # Deprecation and Migration Plan
 
 We acknowledge that these kinds of API changes are very taxing on our users and we paid special attention that most of the migration can be done easily as a simple text substitution without needing large changes for existing code bases. Features that require larger amounts of code change are intended to move toward being simpler and more transparent for the user. Clear API migration error messages will also be raised to assist in this process.
+
+We will follow [Ray's API policy](https://docs.ray.io/en/latest/ray-contribute/api-policy.html).
+Note that this REP only makes changes to APIs that are `Beta` or below.
+See the [API changes table](#api-changes), which labels the current stability of the changed APIs.
 
 * The new version of Ray Train will be usable (but off by default) via an environment variable feature flag starting on *TBD*.
 * The new version will be ON by default with an environment variable to disable it starting on *TBD*.
