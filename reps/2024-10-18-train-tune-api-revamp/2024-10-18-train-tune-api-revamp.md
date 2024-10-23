@@ -12,7 +12,7 @@ Ray Tune and Ray Train have been tightly coupled since Ray 2.0, when Ray Tune be
 
 Ray Train execution invokes Tune’s execution logic under the hood, which leads to this layered system:
 
-![][image1]
+![Ray Train's dependency on Ray Tune](train_tune_dependency.png)
 
 The original intention behind this was to increase the interoperability of the two libraries, but the dependency of Ray Train on Ray Tune has led to many usability and stability issues, and it has stalled feature development.
 
@@ -97,12 +97,12 @@ This change is part of the main ray project, touching the Ray Train and Ray Tune
 This proposal contains two main changes:
 
 1. Decouple the public Ray Train and Ray Tune interfaces. See the [full list of API changes.](#api-changes)
+2. Introduce a new Ray Train execution engine that is independent of Ray Tune. See the [architecture overview.](#ray-train-architecture-overview)
 
 | Before | After |
 | ----- | :---- |
-| ![][image1] | ![][image2] |
+| ![](train_tune_dependency.png) | ![](train_tune_decoupled.png) |
 
-2. Introduce a new Ray Train execution engine that is independent of Ray Tune. See the [architecture overview.](#ray-train-architecture-overview)
 
 The goal of these changes is to improve:
 
