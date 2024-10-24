@@ -236,9 +236,15 @@ ray.train.RunConfig(
     storage_filesystem: Optional[pyarrow.fs.FileSystem],
     failure_config: Optional[ray.train.FailureConfig],
     checkpoint_config: Optional[ray.train.CheckpointConfig],
--   verbose: Optional[Union[int, "AirVerbosity", "Verbosity"]],  # 1
--   progress_reporter: Optional[ray.tune.progress_reporter.ProgressReporter],  # 2
--   stop: Optional[Union[Mapping, ray.tune.Stopper, Callable[[str, Mapping], bool]]],  # 3
+-   verbose: Optional[
+-       Union[int, "AirVerbosity", "Verbosity"]
+-   ],  # 1
+-   progress_reporter: Optional[
+-       ray.tune.progress_reporter.ProgressReporter
+-   ],  # 2
+-   stop: Optional[
+-       Union[Mapping, ray.tune.Stopper]
+-   ],  # 3
 -   log_to_file: Union[bool, str, Tuple[str, str]],  # 4
 -   sync_config: Optional[ray.train.SyncConfig],    # See above.
 -   callbacks: Optional[List[ray.tune.Callback]],   # See above.
@@ -317,6 +323,27 @@ These configs are already not supported for most Trainers, and the upcoming `XGB
   </tr>
 
   <tr>
+<td>❌</td>
+<td>
+
+```diff
+-<Framework>Trainer(resume_from_checkpoint)
+```
+
+</td>
+<td>
+
+See [here](#resume_from_checkpoint) for why this is being removed, with a simple example of achieving the same behavior.
+
+</td>
+<td>
+
+`Beta`
+
+</td>
+  </tr>
+
+  <tr>
 <td>🔀</td>
 <td>
 
@@ -389,7 +416,11 @@ From the perspective of a **Tune user**, here is the full list of API changes.
 <td>
 
 ```diff
--Tuner(trainable: Union[ray.tune.Trainable, ray.train.BaseTrainer] = TorchTrainer(...))
+-Tuner(
+-   trainable: Union[
+-       ray.tune.Trainable, ray.train.BaseTrainer
+-   ] = TorchTrainer(...)
+-)
 +Tuner(trainable: ray.tune.Trainable = train_driver_fn)
 ```
 
@@ -473,6 +504,33 @@ Same as above.
 <td>
 
 Same as above.
+
+</td>
+<td>
+
+`Stable`
+
+</td>
+  </tr>
+
+  <tr>
+<td>🔀</td>
+<td>
+
+```diff
+-ray.train.Checkpoint
++ray.tune.Checkpoint
+```
+
+</td>
+<td>
+
+Same as above.
+
+</td>
+<td>
+
+`Beta`
 
 </td>
   </tr>
@@ -876,6 +934,8 @@ if __name__ == "__main__":
 </table>
 
 ⚠️ New training runs should be assigned a unique `name`. We recommend generating this unique name as a uuid before submitting the job. Then, upon any driver failures, a job retry would re-initialize the run with the same `name`, which will load the latest checkpoint information from persistent storage.
+
+#### `resume_from_checkpoint`
 
 ❌ `Trainer(resume_from_checkpoint)` was a common source of confusion and will be deprecated. `resume_from_checkpoint` is meant to provide a starting checkpoint for a new run, rather than restore all state from the previous run. See the following example for a more intuitive way to accomplish the same thing:
 
