@@ -165,7 +165,6 @@ See [here](#job-level-restoration) for information on Ray Train v2 job-level res
 </td>
 <td>
 
-
 Ray Tune callbacks used to be passed into Trainers, which was awkward to use, since all of the callback hooks were based on Tune events such as the “beginning of the tuning loop step.” The hooks also didn’t expose very relevant parameters. All of the callback hooks passed the Tune `Trial` object to the user, which is a developer API which doesn’t contain any Train specific information.
 
 Take a look at [the architecture overview](#ray-train-architecture-overview) for a preview of the new Ray Train callbacks, which have more fitting hooks and improved flexibility.
@@ -258,9 +257,9 @@ ray.train.RunConfig(
 </td>
 <td>
 
-1. `Stable`
+1. `Stable`, but this enabled (experimental) features from Tune.
 2. `DeveloperAPI`
-3. `Stable`
+3. `Stable`, but this enabled features from Tune.
 4. `DeveloperAPI`
 
 </td>
@@ -979,12 +978,19 @@ Here’s a diagram of what running Train and Tune together looks like before and
 We acknowledge that these kinds of API changes are very taxing on our users and we paid special attention that most of the migration can be done easily as a simple text substitution without needing large changes for existing code bases. Features that require larger amounts of code change are intended to move toward being simpler and more transparent for the user. Clear API migration error messages will also be raised to assist in this process.
 
 We will follow [Ray's API policy](https://docs.ray.io/en/latest/ray-contribute/api-policy.html).
-Note that this REP only makes changes to APIs that are `Beta` or below.
+Note that this REP mostly makes changes to APIs that are `Beta` and below, but there are some
+APIs marked as `Stable` that are also modified. The scope of the `Stable` API modifications
+mostly include features from Ray Tune that do not map well to Ray Train usage.
 See the [API changes table](#api-changes), which labels the current stability of the changed APIs.
 
-* The new version of Ray Train will be usable (but off by default) via an environment variable feature flag starting on *TBD*.
-* The new version will be ON by default with an environment variable to disable it starting on *TBD*.
-* The old version will be deleted, and users will be forced to migrate by *TBD*.
+Due to the modification of `Stable` APIs, we will have a longer migration period of **6 months: November 1, 2024 - May 1, 2025**.
+
+| Target Date | Migration Description |
+| ----------- | --------------------- |
+| November 1, 2024 | New version of Ray Train with the proposed changes will be available by setting an environment variable `RAY_TRAIN_V2_ENABLED=1`. API deprecation messages that aid in upgrading will be added to the old versions of the APIs. Note that feature development on the old version will be stopped. |
+| May 1, 2025 | Feature flag will be enabled by default, which forces users to migrate, but falling back is still an option with `RAY_TRAIN_V2_ENABLED=0`. |
+| TBD | Old code path is deleted. |
+
 
 ## Migration examples
 
