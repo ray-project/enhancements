@@ -224,8 +224,8 @@ ray.train.RunConfig(
 -       Union[Mapping, ray.tune.Stopper]
 -   ],  # 3
 -   log_to_file: Union[bool, str, Tuple[str, str]],  # 4
--   sync_config: Optional[ray.train.SyncConfig],    # See above.
--   callbacks: Optional[List[ray.tune.Callback]],   # See above.
+-   sync_config: Optional[ray.train.SyncConfig],
+-   callbacks: Optional[List[ray.tune.Callback]],
 +   callbacks: Optional[List[ray.train.Callback]],
 )
 ```
