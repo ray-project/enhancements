@@ -167,39 +167,14 @@ See [here](#job-level-restoration) for information on Ray Train v2 job-level res
 
 Ray Tune callbacks used to be passed into Trainers, which was awkward to use, since all of the callback hooks were based on Tune events such as the “beginning of the tuning loop step.” The hooks also didn’t expose very relevant parameters. All of the callback hooks passed the Tune `Trial` object to the user, which is a developer API which doesn’t contain any Train specific information.
 
-Take a look at [the architecture overview](#ray-train-architecture-overview) for a preview of the new Ray Train callbacks, which have more fitting hooks and improved flexibility.
+Take a look at [the architecture overview](#ray-train-architecture-overview) for a preview of the new Ray Train callbacks, which have more fitting hooks and improved flexibility. Note that these are still `DeveloperAPI`s subject to change between releases.
+
+If you heavily depend on Ray Tune callbacks, you can still access them by using running Train as a single Tune trial. See [this section](#tune-callbacks) for an example.
 
 </td>
 <td>
 
 `DeveloperAPI`
-
-</td>
-  </tr>
-
-  <tr>
-<td>🚧</td>
-<td>
-
-```diff
--try:
--    result = trainer.fit()
--except TrainingFailedError as error:
--    ...
-+result = trainer.fit()
-+error = result.error
-+if error:
-+    raise YourCustomException from error
-```
-</td>
-<td>
-
-Worker errors will be accessible via `result.error` for the user to handle, rather than always raising a wrapper `TrainingFailedError`.
-
-</td>
-<td>
-
-`Beta`
 
 </td>
   </tr>
@@ -260,6 +235,8 @@ ray.train.RunConfig(
 3. Early stopping can be configured within your own training loop easily, and it is already provided out of the box by many libraries (ex: [Lightning](https://lightning.ai/docs/pytorch/stable/common/early_stopping.html)).
 4. Logs from workers are already dumped via Ray worker logs and can be viewed in the Ray Dashboard.
 
+If you heavily depend on any of these features, you can still access them by using running Train as a single Tune trial. See [this section](#tune-callbacks) for an example.
+
 </td>
 <td>
 
@@ -286,6 +263,7 @@ ray.train.FailureConfig(
 <td>
 
 This config only made sense in the context of multiple trials when running with Tune.
+In that case, it's enables failing the entire job when one of many trials errors.
 
 </td>
 <td>
@@ -1051,7 +1029,6 @@ Due to the modification of `Stable` APIs, we will have a longer migration period
 | May 1, 2025 | Feature flag will be enabled by default, which forces users to migrate, but falling back is still an option with `RAY_TRAIN_V2_ENABLED=0`. |
 | TBD | Old code path is deleted. |
 
-
 ## Migration examples
 
 ### Tune only usage
@@ -1100,9 +1077,14 @@ result: ray.train.Result = result_grid[0]
 ### Tune \+ Train usage
 
 ```diff
+def train_fn_per_worker(config: dict):
+    lr = config["lr"]
+
+
 +def tune_fn(config: dict):
     trainer = TorchTrainer(
         train_fn_per_worker,
++       train_loop_config=config["train_loop_config"],
         scaling_config=ray.train.ScalingConfig(
             num_workers=config["num_workers"], use_gpu=True,
         )
@@ -1116,18 +1098,52 @@ TOTAL_GPUS = 8
 
 tuner = Tuner(
 -   trainer,
--   param_space={"scaling_config": ray.train.ScalingConfig(num_workers=NUM_WORKERS)},
 +   tune_fn,
-+   param_space={"num_workers": NUM_WORKERS},
-    run_config=ray.train.RunConfig(
+    param_space={
+-       "scaling_config": ray.train.ScalingConfig(num_workers=NUM_WORKERS),
++       "num_workers": NUM_WORKERS,
+        "train_loop_config": {"lr": ray.tune.grid_search([1e-3, 5e-5])},
+    },
+-   run_config=ray.train.RunConfig(
++   run_config=ray.tune.RunConfig(
 +       # These configs are now at the level of the Train driver script fault tolerance.
 +       # Ray Train's worker level fault tolerance handles recoveries at the layer
 +       # of the `tune_fn`.
--       checkpoint_config=ray.train.CheckpointConfig(...),
 -       failure_config=ray.train.FailureConfig(...),
+-       # There's no need to handle checkpoints in Tune -- leave it to Train.
+-       checkpoint_config=ray.train.CheckpointConfig(...),
     ),
-+   # Manually throttle the number of concurrent train runs.
-+   tune_config=ray.tune.TuneConfig(max_concurrent_trials=TOTAL_GPUS // NUM_WORKERS),
++   # Throttle the number of concurrent Train runs to prevent resource contention.
++   tune_config=ray.tune.TuneConfig(
++       max_concurrent_trials=TOTAL_GPUS // NUM_WORKERS_PER_TRIAL
++   ),
+)
+tuner.fit()
+```
+
+### Tune Callbacks
+
+This example shows the usage of Tune callbacks with single Ray Train trial.
+
+```python
+from ray.tune.logger import TBXLoggerCallback
+from ray.train import TuneReportCallback
+
+def tune_fn(config: dict):
+    trainer = TorchTrainer(
+        train_fn_per_worker,
+        scaling_config=ray.train.ScalingConfig(num_workers=4),
+        # Propagate `ray.train.report` from Train workers to Tune.
+        run_config=ray.train.RunConfig(callbacks=[TuneReportCallback()]),
+    )
+    result = trainer.fit()
+
+tuner = Tuner(
+    tune_fn,
+    run_config=ray.tune.RunConfig(
+        # Enable Tune callbacks here.
+        callbacks=[TBXLoggerCallback()],
+    ),
 )
 tuner.fit()
 ```
