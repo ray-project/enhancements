@@ -139,9 +139,12 @@ From the perspective of a **Train user**, here is the full list of API changes.
 -<Framework>Trainer.restore(path_or_uri)
 +<Framework>Trainer(
 +    ...,
-+    run_config=RunConfig(name=<existing_run_name>, storage_path=...)
++    run_config=RunConfig(
++        name=<existing_run_name>, storage_path=...
++    )
 + )
 ```
+
 </td>
 <td>
 
@@ -359,7 +362,10 @@ Same as above. All of the Tune "trial" related context will be removed.
 <td>
 
 ```diff
-+ray.train.report(..., checkpoint_dir_name=f"checkpoint_{epoch=}")
+ray.train.report(
+    ...,
++   checkpoint_dir_name=f"{epoch=}",
+)
 ```
 
 </td>
