@@ -2,7 +2,7 @@
 
 # Summary
 
-We introduce a slimmed, more extensible version of Ray Train that is fully decoupled from the Ray Tune library.
+We introduce a slimmed version of Ray Train that is fully decoupled from the Ray Tune library and provides usability and stability improvements.
 
 For a TL;DR of the change list, see [this section](#api-changes).
 
