@@ -129,7 +129,6 @@ From the perspective of a **Train user**, here is the full list of API changes.
     <th>Change Type</th>
     <th>Diff</th>
     <th>Notes</th>
-    <th>API Stability</th>
   </tr>
   <tr>
 <td>🚧</td>
@@ -151,11 +150,6 @@ From the perspective of a **Train user**, here is the full list of API changes.
 See [here](#job-level-restoration) for information on Ray Train v2 job-level restoration.
 
 </td>
-<td>
-
-`Alpha`
-
-</td>
   </tr>
   <tr>
 <td>🚧</td>
@@ -175,11 +169,6 @@ Take a look at [the architecture overview](#ray-train-architecture-overview) for
 If you heavily depend on Ray Tune callbacks, you can still access them by using running Train as a single Tune trial. See [this section](#tune-callbacks) for an example.
 
 </td>
-<td>
-
-`DeveloperAPI`
-
-</td>
   </tr>
 
   <tr>
@@ -194,11 +183,6 @@ If you heavily depend on Ray Tune callbacks, you can still access them by using 
 <td>
 
 The `SyncConfig` primarily configured Ray Tune’s artifact syncing behavior, which will no longer be supported in Ray Train. See [this section](#persisting-training-artifacts) for an alternative you can migrate to. A MLFlow or Wandb artifact registry is the recommended alternative.
-
-</td>
-<td>
-
-`Stable`
 
 </td>
   </tr>
@@ -241,14 +225,6 @@ ray.train.RunConfig(
 If you heavily depend on any of these features, you can still access them by using running Train as a single Tune trial. See [this section](#tune-callbacks) for an example.
 
 </td>
-<td>
-
-1. `Stable`, but this enabled (experimental) features from Tune.
-2. `DeveloperAPI`
-3. `Stable`, but this enabled features from Tune.
-4. `DeveloperAPI`
-
-</td>
   </tr>
 
   <tr>
@@ -267,11 +243,6 @@ ray.train.FailureConfig(
 
 This config only made sense in the context of multiple trials when running with Tune.
 In that case, it's enables failing the entire job when one of many trials errors.
-
-</td>
-<td>
-
-`Stable`
 
 </td>
   </tr>
@@ -296,11 +267,6 @@ ray.train.CheckpointConfig(
 These configs are already not supported for most Trainers, and the upcoming `XGBoostTrainer` and `LightGBMTrainer` API updates will make these parameters fully unused.
 
 </td>
-<td>
-
-`Stable`, but setting these would raise an error in most cases.
-
-</td>
   </tr>
 
   <tr>
@@ -315,11 +281,6 @@ These configs are already not supported for most Trainers, and the upcoming `XGB
 <td>
 
 See [here](#resume_from_checkpoint) for why this is being removed, with a simple example of achieving the same behavior.
-
-</td>
-<td>
-
-`Beta`
 
 </td>
   </tr>
@@ -350,11 +311,6 @@ context.get_storage()
 Same as above. All of the Tune "trial" related context will be removed.
 
 </td>
-<td>
-
-`Beta`
-
-</td>
   </tr>
 
   <tr>
@@ -374,11 +330,6 @@ ray.train.report(
 See [this section](#saving-and-loading-checkpoints) for more information.
 
 </td>
-<td>
-
-`Stable`, but there are no backwards incompatible changes.
-
-</td>
   </tr>
 
 </table>
@@ -393,7 +344,6 @@ From the perspective of a **Tune user**, here is the full list of API changes.
     <th>Change Type</th>
     <th>Diff</th>
     <th>Notes</th>
-    <th>API Stability</th>
   </tr>
   <tr>
 <td>🚧</td>
@@ -412,11 +362,6 @@ From the perspective of a **Tune user**, here is the full list of API changes.
 <td>
 
 The input to the Tuner is now restricted to Trainable types, instead of allowing the `Trainer` type as a special case. See [here](#hyperparameter-optimization) for an example.
-
-</td>
-<td>
-
-`Beta`
 
 </td>
   </tr>
@@ -446,11 +391,6 @@ ray.tune.Tuner(
 These API imports will be moved in order to decouple the libraries.
 
 </td>
-<td>
-
-`Stable`
-
-</td>
   </tr>
 
   <tr>
@@ -466,11 +406,6 @@ These API imports will be moved in order to decouple the libraries.
 <td>
 
 Same as above.
-
-</td>
-<td>
-
-`Stable`
 
 </td>
   </tr>
@@ -490,11 +425,6 @@ Same as above.
 Same as above.
 
 </td>
-<td>
-
-`Stable`
-
-</td>
   </tr>
 
   <tr>
@@ -510,11 +440,6 @@ Same as above.
 <td>
 
 Same as above.
-
-</td>
-<td>
-
-`Beta`
 
 </td>
   </tr>
@@ -547,11 +472,6 @@ Same as above. All of the multi-worker distributed training context information
 do not apply to Tune trials and will be removed.
 
 </td>
-<td>
-
-`Beta`
-
-</td>
   </tr>
 
   <tr>
@@ -568,11 +488,6 @@ result_grid = tuner.fit()
 <td>
 
 Same as above.
-
-</td>
-<td>
-
-`Stable`, but there are no backwards incompatible changes for Tune usage.
 
 </td>
   </tr>
@@ -1025,14 +940,13 @@ We will follow [Ray's API policy](https://docs.ray.io/en/latest/ray-contribute/a
 Note that this REP mostly makes changes to APIs that are `Beta` and below, but there are some
 APIs marked as `Stable` that are also modified. The scope of the `Stable` API modifications
 mostly include features from Ray Tune that do not map well to Ray Train usage.
-See the [API changes table](#api-changes), which labels the current stability of the changed APIs.
 
-Due to the modification of `Stable` APIs, we will have a longer migration period of **6 months: November 1, 2024 - May 1, 2025**.
+Due to the modification of `Stable` APIs, we will have a longer migration period of **6 months** for all changes listed in this REP.
 
 | Target Date | Migration Description |
 | ----------- | --------------------- |
-| November 1, 2024 | New version of Ray Train with the proposed changes will be available by setting an environment variable `RAY_TRAIN_V2_ENABLED=1`. API deprecation messages that aid in upgrading will be added to the old versions of the APIs. Note that feature development on the old version will be stopped. |
-| May 1, 2025 | Feature flag will be enabled by default, which forces users to migrate, but falling back is still an option with `RAY_TRAIN_V2_ENABLED=0`. |
+| XX/XX/XXXX | New version of Ray Train with the proposed changes will be available by setting an environment variable `RAY_TRAIN_V2_ENABLED=1`. API deprecation messages that aid in upgrading will be added to the old versions of the APIs. Note that feature development on the old version will be stopped. |
+| XX/XX/XXXX + 6 months | Feature flag will be enabled by default, which forces users to migrate, but falling back is still an option with `RAY_TRAIN_V2_ENABLED=0`. |
 | TBD | Old code path is deleted. |
 
 ## Migration examples
