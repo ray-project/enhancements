@@ -233,6 +233,36 @@ If you heavily depend on any of these features, you can still access them by usi
 <td>
 
 ```diff
+ray.train.ScalingConfig(
+    num_workers: int,
+    use_gpu: bool,
+    resources_per_worker: Dict,
+    accelerator_type: Optional[str],
+    placement_strategy: str,
+-   trainer_resources: Optional[Dict],
+)
+```
+
+</td>
+<td>
+
+`trainer_resources` was previously used to specify the resources of the
+`ray.tune.Trainable` actor that launched the Ray Train driver.
+
+This defaulted to 1 CPU, which users often needed to manually override
+with `trainer_resources={"CPU": 0}`. The proposed behavior is to default
+to scheduling the Ray Train driver with 0 resources on the node
+that calls `trainer.fit`. There's no need for this to be customized,
+so we are removing the API to avoid confusion between this and `resources_per_worker`.
+
+</td>
+  </tr>
+
+  <tr>
+<td>❌</td>
+<td>
+
+```diff
 ray.train.FailureConfig(
     max_failures: int,
 -   fail_fast: Union[bool, str],
