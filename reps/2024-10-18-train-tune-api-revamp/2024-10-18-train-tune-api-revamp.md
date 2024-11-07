@@ -136,6 +136,7 @@ From the perspective of a **Train user**, here is the full list of API changes.
 
 ```diff
 -<Framework>Trainer.restore(path_or_uri)
+-<Framework>Trainer.can_restore(path_or_uri)
 +<Framework>Trainer(
 +    ...,
 +    run_config=RunConfig(
