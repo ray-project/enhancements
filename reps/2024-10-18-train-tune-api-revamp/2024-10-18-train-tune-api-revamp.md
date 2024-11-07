@@ -722,6 +722,26 @@ def train_fn_per_worker(config):
             )
 ```
 
+🔀 The default checkpoint directory naming scheme is changed.
+
+The default checkpoint name is now set to a timestamp instead of an incrementing index.
+Note that you can still achieve the incrementing index by specifying a
+custom `checkpoint_dir_name` as shown above.
+
+```text
+# Before
+checkpoint_000000
+checkpoint_000001
+checkpoint_000002
+...
+
+# After
+checkpoint_2024-06-25_11-41-38.161013
+checkpoint_2024-06-25_11-41-40.216405
+checkpoint_2024-06-25_11-41-42.244831
+...
+```
+
 ### Console Output
 
 ✅ When using Train by itself, there will now be fewer spammy, irrelevant logs coming from Tune. Here are a few common spam logs from Tune that will no longer clutter your console output:
