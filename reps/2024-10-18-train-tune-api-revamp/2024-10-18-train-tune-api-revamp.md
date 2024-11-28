@@ -305,13 +305,31 @@ These configs are already not supported for most Trainers, and the upcoming `XGB
 <td>
 
 ```diff
--<Framework>Trainer(resume_from_checkpoint)
+-<Framework>Trainer(resume_from_checkpoint: Optional[Checkpoint])
 ```
 
 </td>
 <td>
 
 See [here](#resume_from_checkpoint) for why this is being removed, with a simple example of achieving the same behavior.
+
+</td>
+  </tr>
+
+ <tr>
+<td>❌</td>
+<td>
+
+```diff
+-<Framework>Trainer(metadata: Dict)
+```
+
+</td>
+<td>
+
+This field was an experimental API introduced by [this REP](https://github.com/ray-project/enhancements/blob/main/reps/2023-06-06-simplify-sync.md), with the main purpose of allowing users to save data preprocessor state (ex: statistics computed over the entire dataset for normalization).
+
+Instead of saving this information by passing it as `metadata`, users can save it separately before training, or attach it explicitly as part of checkpoint state.
 
 </td>
   </tr>
@@ -755,7 +773,9 @@ checkpoint_2024-06-25_11-41-42.244831
 
 ### Metric Logging and Inspecting Results
 
-Ray Tune implements some experiment tracking functionality like custom metric reporting. This new design of Ray Train aims to remove The recommendation for metric tracking is to report metrics directly from the workers to experiment tracking tools such as MLFlow or WandB. See this [user guide](https://docs.ray.io/en/latest/train/user-guides/experiment-tracking.html) for examples.
+Ray Tune implements some experiment tracking functionality like custom metric reporting. This new design of Ray Train aims to make this set of inherited experiment tracking features as slim as possible. Instead of allowing arbitrary metric tracking, Ray Train only tracks checkpoints and their attached metrics for the purpose of fault tolerance.
+
+The recommendation for metric tracking is to report metrics directly from the workers to experiment tracking tools such as MLFlow or WandB. See this [user guide](https://docs.ray.io/en/latest/train/user-guides/experiment-tracking.html) for examples.
 
 ❌ Default metrics such as `time_this_iter_s` and `training_iteration` will no longer be automatically reported.
 
@@ -1118,6 +1138,13 @@ tuner = Tuner(
 )
 tuner.fit()
 ```
+
+# Frequently Asked Questions
+
+* Are there any changes to RLlib?
+    * No RLlib APIs will be modified by this change. RLlib uses Ray Tune as a launcher, which will require a few module import changes (ex: `ray.train.RunConfig` -> `ray.tune.RunConfig`).
+* What is the timeline of these changes?
+    * See [this section](#deprecation-and-migration-plan).
 
 # Test Plan and Acceptance Criteria
 
