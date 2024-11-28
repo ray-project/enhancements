@@ -545,6 +545,8 @@ Same as above.
 
 ## Ray Train Architecture Overview
 
+![Train V2 Architecture](train_architecture.png)
+
 ### Controller
 
 The **Controller** is the central orchestrator that manages the distributed execution of training jobs. Its main responsibilities include:
