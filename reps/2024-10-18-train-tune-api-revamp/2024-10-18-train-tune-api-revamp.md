@@ -995,6 +995,8 @@ tuner = Tuner(
         "train_loop_config": {"lr": tune.grid_search([1e-3, 3e-4])},
     },
     run_config=ray.tune.RunConfig(...),
+    # Limit the number of Train drivers that we try to spawn at once.
+    tune_config=ray.tune.TuneConfig(max_concurrent_trials=2),
 )
 results = tuner.fit()
 ```
@@ -1004,6 +1006,43 @@ Here’s a diagram of what running Train and Tune together looks like before and
 | Before | After |
 | ----- | :---- |
 | ![](train_tune_interop_before.png) | ![](train_tune_interop_after.png) |
+
+#### How will Placement Groups be managed between Train and Tune?
+
+One major change in the Ray Train + Tune integration is that Ray Tune will no longer be
+responsible for reserving the placement group for both the Tune Trainable and the
+Ray Train worker group resources.
+
+Previously, Ray Train's `ScalingConfig` would be converted to a Tune `PlacementGroupFactory`,
+which allowed Tune to have a global view of the resources required by each trial.
+
+* For example, if the cluster has 4 GPUs and 4 CPUs and each Train run uses 2 workers with 1 GPU each,
+then Tune will only launch 2 trials at a time, reserving 2 placement groups looking like this: `[{"CPU": 1}, {"GPU": 1}, {"GPU": 1}]`.
+
+Now, Ray Tune just acts as a lightweight launcher which only keeps track of its own Trainable resources.
+The Ray Train driver will create and acquire its own placement group. Since Ray Train still
+uses placement groups under the hood, we can still avoid deadlock situations. Here's an example:
+
+* Same situation as before (cluster = 4 GPUs, 4 CPUs, each Trainable needs 1 CPU, and each Train worker needs 1 GPU).
+* Tune is only aware of requesting CPUs for the launcher Trainables. Since there are 4 CPUs, Ray Tune launches 4 trials.
+* Within each trial, `trainer.fit()` will attempt to acquire 2 GPUs. Only 2 trials will actually be unblocked to start training.
+* Once the first two trials finish, the GPU resources will be freed up, and the placement group acquisitions will allow the remaining Train runs to be started.
+
+This example highlights some caveats of this approach:
+
+1. Concurrency limiting of spawning Ray Train launchers must be done by the user via `TuneConfig(max_concurrent_trials)`, rather than automatically by Ray Tune. Even though the CPU concurrency limit was 4, the GPU concurrency limit made it so that only 2 trials could run at a time.
+    * Note that when using a Tune search algorithm, setting the maximum number of concurrent trials is already the recommendation to prevent too many trials being spawned with "exploratory" hyperparameter configs.
+2. In the case where `max_concurrent_trials` is *not set*, training will still eventually finish. However, having a queue of `trainer.fit()` calls that are intentionally starved of resources may need to be handled differently compared to a single Train run that cannot acquire the necessary resources. In the case of a single run, it could make more sense to have an eventual timeout, whereas the Tune use case would not want a timeout.
+
+On the other hand, there are a few advantages that outweigh the (non-blocking) issues mentioned above:
+
+1. Resource management is also decoupled from Tune trial concepts.
+    * Ray Train resource usage is now more flexible (ex: for elastic training, etc.) without needing to interface with any Tune components. There's no more need to report the fixed resource usage of a Trial and all its children up front.
+    * This has a twofold benefit of also helping us tackle the Ray Data resource scheduling problem. Currently, Ray Data execution already happens outside the Ray Tune placement group, and multiple datasets executing concurrently is not supported very robustly. Ray Data's resource usage is also much more flexible compared to Train due to Data workers being more independent. Doubling down on specifying resources at the Ray Tune trial level will be restrictive in the long term. Instead, we may want to eventually introduce a separate `ResourceCoordinator` component that individual Ray Train runs and Ray Datasets talk to.
+2. Conceptually, the responsibilities at each layer are clearer now. Ray Tune is just responsible for coming up with hyperparameter configs and launching the Train drivers. Then, it hands things off to Ray Train / Ray Data.
+
+<!-- #### TODO: How does fault tolerance work at the 2 levels? -->
+
 
 # Deprecation and Migration Plan
 
