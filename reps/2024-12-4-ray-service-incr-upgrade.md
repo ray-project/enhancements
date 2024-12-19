@@ -27,7 +27,7 @@ max_surge_percent  (int [0, 100])
 - max_surge_percent represents the maximum allowed percentage increase in capacity during a scaling operation. It limits how much the new total capacity can exceed the original target capacity. 
     - The formula is: target_capacity_old + target_capacity_new <= (100% + max_surge_percent)
 
-After adding the above field to the Ray Serve chema, these APIs will be added to the KubeRay CR spec and can be specified by the user as follows:
+After adding the above field to the Ray Serve schema, these APIs will be added to the KubeRay CR spec and can be specified by the user as follows:
 
 ```sh
 type RayServiceUpgradeSpec struct {
@@ -46,18 +46,18 @@ The RayService spec would then look as follows:
 ```sh
 // RayServiceSpec defines the desired state of RayService
 type RayServiceSpec struct {
- // UpgradeStrategy represents the strategy used when upgrading the RayService. Currently supports `NewCluster` and `None`
+  // UpgradeStrategy represents the strategy used when upgrading the RayService. Currently supports `NewCluster` and `None`
   UpgradeStrategy *RayServiceUpgradeStrategy `json:"upgradeStrategy,omitempty"`
   // UpgradeSpec defines the scaling policy used when upgrading the RayService with `NewCluster` strategy.
-	UpgradeSpec *RayServiceUpgradeSpec `json:"UpgradeSpec,omitempty"`
-
-	// Defines the applications and deployments to deploy, should be a YAML multi-line scalar string.
-	ServeConfigV2  string         `json:"serveConfigV2,omitempty"`
-	RayClusterSpec RayClusterSpec `json:"rayClusterConfig,omitempty"`
+  UpgradeSpec *RayServiceUpgradeSpec `json:"UpgradeSpec,omitempty"`
+  // Defines the applications and deployments to deploy, should be a YAML multi-line scalar string.
+  ServeConfigV2  string         `json:"serveConfigV2,omitempty"`
+  RayClusterSpec RayClusterSpec `json:"rayClusterConfig,omitempty"`
   ...
 }
 ```
 
+Example RayService manifest:
 ```sh
 apiVersion: ray.io/v1
 kind: RayService
@@ -96,7 +96,7 @@ Manual Upgrade:
    The KubeRay controller validates whether there is a conflict in these values (i.e. the new total `target_capacity` (old + new) must be less than or equal to 100% + `max_surge_percent`).
 3. The KubeRay controller creates a Gateway and Routes for the RayService instance, if this is not possible, the controller defaults to a blue/green upgrade strategy.
 2. KubeRay creates a new, upgraded RayCluster with `target_capacity` (i.e. with # replicas = `target_capacity`/100 * `total_replicas`).
-3. The KubeRay controller switches `target_capacity` * 100% of the requests to the new RayCluster once it is ready.
+3. The KubeRay controller switches `target_capacity` percent of the requests to the new RayCluster once it is ready.
 4. KubeRay scales down the old RayCluster according to the `target capacity` and `max_surge_percent`.
 5. Users then increase the `target_capacity` and repeat the above steps until the `target_capacity` reaches 1.
 
