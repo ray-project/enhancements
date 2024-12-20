@@ -31,8 +31,8 @@ After adding the above field to the Ray Serve schema, these APIs will be added t
 
 ```sh
 type RayServiceUpgradeSpec struct {
-  // Type represents the strategy used when upgrading the RayService. Currently supports `NewCluster` and `None`
-  Type *RayServiceUpgradeStrategy `json:"upgradeStrategy,omitempty"`
+  // Type represents the strategy used when upgrading the RayService. Currently supports `NewCluster` and `None`.
+  Type *RayServiceUpgradeStrategy `json:"type,omitempty"`
   // The target capacity percentage of the upgraded RayCluster.
   // Defaults to 100% target capacity.
   // +kubebuilder:default:=100
@@ -48,8 +48,8 @@ The RayService spec would then look as follows:
 ```sh
 // RayServiceSpec defines the desired state of RayService
 type RayServiceSpec struct {
-  // UpgradeSpec defines the scaling policy used when upgrading the RayService with `NewCluster` strategy.
-  UpgradeSpec *RayServiceUpgradeSpec `json:"UpgradeSpec,omitempty"`
+  // UpgradeSpec defines the scaling policy used when upgrading the RayService.
+  UpgradeSpec *RayServiceUpgradeSpec `json:"upgradeSpec,omitempty"`
   // Defines the applications and deployments to deploy, should be a YAML multi-line scalar string.
   ServeConfigV2  string         `json:"serveConfigV2,omitempty"`
   RayClusterSpec RayClusterSpec `json:"rayClusterConfig,omitempty"`
