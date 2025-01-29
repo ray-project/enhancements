@@ -31,7 +31,7 @@ max_surge_percent  (int [0, 100])
 
 After adding the above field to the Ray Serve schema, these APIs will be added to the KubeRay CR spec and can be specified by the user as follows:
 
-A new `type` called `IncrementalCluster` will be introduced for this change to specify an upgrade strategy with `TargetCapacity` or `MaxSurgePercent` specified that enables an incremental upgrade:
+A new `type` called `IncrementalCluster` will be introduced for this change to specify an upgrade strategy with `TargetCapacity` or `MaxSurgePercent` set that enables an incremental upgrade:
 
 ```
 type RayServiceUpgradeType string
@@ -39,8 +39,8 @@ type RayServiceUpgradeType string
 const (
 	// During upgrade, NewCluster strategy will create new upgraded cluster and switch to it when it becomes ready
 	NewCluster RayServiceUpgradeType = "NewCluster"
-  // During upgrade, IncrementalCluster strategy will create an additional, upgraded cluster with `target_capacity`
-  // and route requests to both the old cluster and new cluster with Gateway.
+	// During upgrade, IncrementalCluster strategy will create an additional, upgraded cluster with `target_capacity`
+	// and route requests to both the old cluster and new cluster with Gateway.
 	IncrementalCluster RayServiceUpgradeType = "IncrementalCluster"
 	// No new cluster will be created while the strategy is set to None
 	None RayServiceUpgradeType = "None"
