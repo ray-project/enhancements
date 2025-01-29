@@ -4,7 +4,9 @@
 
 Currently, during a zero-downtime upgrade on a RayService, the KubeRay operator temporarily creates a pending RayCluster and waits for it to become ready. Once ready, it switches all traffic to the new cluster and then terminates the old one. That is, both RayCluster custom resources require 100% computing resources. However, most users do not have access to such extensive resources, particularly in the case of LLM use cases where many users [lack sufficient high-end GPUs](https://github.com/ray-project/kuberay/issues/1476).
 
-It'd be useful to support an API to incrementally upgrade the RayService, scaling a new RayCluster to handle only a % capacity of the total traffic to the RayService in order to avoid delays in the upgrade process due to resource constraints. In order to enable this, we propose the following APIs and integration with [Gateway](https://github.com/kubernetes-sigs/gateway-api).
+It'd be useful to support an API to incrementally upgrade the RayService, scaling a new RayCluster to handle only a % capacity of the total traffic to the RayService in order to avoid delays in the upgrade process due to resource constraints. By scaling the upgraded cluster incrementally, while the old cluster is scaled down by the same factor, Ray can enable a smoother traffic migration to the new service. In the case where a user deploys an upgraded RayService with a high load of requests, an incremental upgrade allows autoscaling on the new cluster to begin sooner on the new cluster, reducing the overall latency required for the service to handle the higher load.
+
+In order to enable this, we propose the following APIs and integration with [Gateway](https://github.com/kubernetes-sigs/gateway-api).
 
 
 ### Should this change be within `ray` or outside?
@@ -29,10 +31,28 @@ max_surge_percent  (int [0, 100])
 
 After adding the above field to the Ray Serve schema, these APIs will be added to the KubeRay CR spec and can be specified by the user as follows:
 
+A new `type` called `IncrementalCluster` will be introduced for this change to specify an upgrade strategy with `TargetCapacity` or `MaxSurgePercent` specified that enables an incremental upgrade:
+
+```
+type RayServiceUpgradeType string
+
+const (
+	// During upgrade, NewCluster strategy will create new upgraded cluster and switch to it when it becomes ready
+	NewCluster RayServiceUpgradeType = "NewCluster"
+  // During upgrade, IncrementalCluster strategy will create an additional, upgraded cluster with `target_capacity`
+  // and route requests to both the old cluster and new cluster with Gateway.
+	IncrementalCluster RayServiceUpgradeType = "IncrementalCluster"
+	// No new cluster will be created while the strategy is set to None
+	None RayServiceUpgradeType = "None"
+)
+```
+
+Additionally, the new API fields would be added to the `RayServiceUpgradeStrategy`:
 ```sh
-type RayServiceUpgradeSpec struct {
-  // Type represents the strategy used when upgrading the RayService. Currently supports `NewCluster` and `None`.
-  Type *RayServiceUpgradeStrategy `json:"type,omitempty"`
+type RayServiceUpgradeStrategy struct {
+  // Type represents the strategy used when upgrading the RayService.
+  // Currently supports `NewCluster`, `IncrementalCluster`, and `None`.
+  Type *RayServiceUpgradeType `json:"type,omitempty"`
   // The target capacity percentage of the upgraded RayCluster.
   // Defaults to 100% target capacity.
   // +kubebuilder:default:=100
@@ -48,11 +68,11 @@ The RayService spec would then look as follows:
 ```sh
 // RayServiceSpec defines the desired state of RayService
 type RayServiceSpec struct {
-  // UpgradeSpec defines the scaling policy used when upgrading the RayService.
-  UpgradeSpec *RayServiceUpgradeSpec `json:"upgradeSpec,omitempty"`
+  // UpgradeStrategy defines the scaling policy used when upgrading the RayService.
+  UpgradeStrategy *RayServiceUpgradeStrategy `json:"upgradeStrategy,omitempty"`
   // Defines the applications and deployments to deploy, should be a YAML multi-line scalar string.
-  ServeConfigV2  string         `json:"serveConfigV2,omitempty"`
-  RayClusterSpec RayClusterSpec `json:"rayClusterConfig,omitempty"`
+  ServeConfigV2   string         `json:"serveConfigV2,omitempty"`
+  RayClusterSpec  RayClusterSpec `json:"rayClusterConfig,omitempty"`
   ...
 }
 ```
