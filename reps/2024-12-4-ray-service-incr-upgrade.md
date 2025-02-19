@@ -114,6 +114,19 @@ Gateway APIs:
 |  v1.HTTPRoute | Provides a way to route HTTP requests | GA (v0.5+) | v1.24+ |
 |  v1.GRPCRoute | Specifies routing behavior of gRPC requests from a Gateway listener to an API object | GA (v1.1+) | v1.25+ |
 
+
+The responsibilities for managing the Gateway API resources associated with a RayService incremental upgrade are as follows:
+- K8s cluster admin:
+  - Gateway controller - supported controllers would be those with stable support for `HTTPRoute` and `GRPcRoute`
+  - GatewayClass - defines the controller to use
+  - Gateway CRDs
+
+- RayService controller:
+  - Gateway - created per RayService and defines the listeners and routes to use
+  - HTTPRoute - defines how HTTP traffic is routed to the two RayCluster endpoints
+  - GRPcRoute - defines how GRPc traffic is routed to the two RayCluster endpoints
+
+
 ### Example Upgrade Process
 
 1. K8s cluster admin installs Gateway CRDs and Gateway controller that is compatible with their infrastructure backend.
