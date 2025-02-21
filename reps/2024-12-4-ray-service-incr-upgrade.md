@@ -4,7 +4,7 @@
 
 Currently, during a zero-downtime upgrade on a RayService, the KubeRay operator temporarily creates a pending RayCluster and waits for it to become ready. Once ready, it switches all traffic to the new cluster and then terminates the old one. That is, both RayCluster custom resources require 100% computing resources. However, most users do not have access to such extensive resources, particularly in the case of LLM use cases where many users [lack sufficient high-end GPUs](https://github.com/ray-project/kuberay/issues/1476).
 
-It'd be useful to support an API to incrementally upgrade the RayService, scaling a new RayCluster to handle only a % capacity of the total traffic to the RayService in order to avoid delays in the upgrade process due to resource constraints. By scaling the upgraded cluster incrementally, while the old cluster is scaled down by the same factor, Ray can enable a smoother traffic migration to the new service. In the case where a user deploys an upgraded RayService with a high load of requests, an incremental upgrade allows autoscaling on to begin sooner on the new cluster, reducing the overall latency required for the service to handle the higher load.
+It'd be useful to support an API to incrementally upgrade the RayService, scaling a new RayCluster to handle only a % capacity of the total traffic to the RayService in order to avoid delays in the upgrade process due to resource constraints. By scaling the upgraded cluster incrementally, while the old cluster is scaled down by the same factor, Ray can enable a smoother traffic migration to the new service. In the case where a user deploys an upgraded RayService with a high load of requests, an incremental upgrade allows autoscaling to begin sooner on the new cluster, reducing the overall latency required for the service to handle the higher load.
 
 In order to enable this feature, we propose the following APIs and integration with [Gateway](https://github.com/kubernetes-sigs/gateway-api).
 
@@ -30,13 +30,13 @@ step_size (int32 [0, 100])
 - Required value if `IncrementalCluster` type is set
 
 interval (int32 [0, ...])
-- `interval` represents the number of seconds for the controller to wait between increasing the percentage of traffic routed to the upgraded RayCluster by `stepSize` percent.
+- `interval` represents the number of seconds for the controller to wait between increasing the percentage of traffic routed to the upgraded RayCluster by `step_size` percent.
 - Required value if `IncrementalCluster` type is set
 
 upgrade_start_timeout_s (int32 [0, ...])
 - `upgrade_start_timeout_s` defines the number of seconds for the controller to wait for Serve deployments on the upgraded cluster to be ready before continuing with the upgrade. This optional field would be useful for when there are a large number of deployments that frequently update, making it unlikely for all deployments to report ready at one time.
 
-After adding the above field to the Ray Serve schema, these APIs will be added to the KubeRay CR spec and can be specified by the user as follows:
+After adding the above fields to the Ray Serve schema, these APIs will be added to the KubeRay CR spec and can be specified by the user as follows:
 
 A new `type` called `IncrementalCluster` will be introduced for this change to specify an upgrade strategy with `StepSize` and `Interval` set that enables an incremental upgrade:
 
@@ -142,7 +142,7 @@ The responsibilities for managing the Gateway API resources associated with a Ra
 
 2. A user creates a RayService with a `RayServiceUpgradeType` of `IncrementalCluster`.
 
-3. The KubeRay controller validates the values of `targetCapacity`, `stepSize`, and `interval` and then checks whether the Gateway CRDs and controller exists using the Kubernetes python client. If the controller doesn't exist, defaults to a blue/green deployment, since incremental upgrade requires for the standard Gateway APIs to be available.
+3. The KubeRay controller validates the values of `targetCapacity`, `stepSize`, and `interval` and then checks whether the Gateway CRDs and controller exists using the Kubernetes python client. If the controller doesn't exist, defaults to a blue/green deployment, since incremental upgrade requires that the standard Gateway APIs be available.
 
 4. KubeRay controller checks the [Serve config files](https://docs.ray.io/en/releases-2.7.0/serve/production-guide/config.html#serve-config-files-serve-build) and creates a Gateway. Specifically, the controller validates the `http_options.port` and `grpc_options.port` to use for the respective listeners. If `grpc_servicer_functions` are missing, the GRPc listener can be ommitted.
 
@@ -257,7 +257,7 @@ The incremental upgrade proposal requires only standard Gateway APIs (`HTTPRoute
 ### Limitations and Assumptions
 
 There are certain assumptions the KubeRay controller will make that users must follow or traffic being split has the possibility of being dropped. These include:
-- If the K8s Cluster admin does not have sufficient node resources (i.e. at the cloud provider level) to schedule the new cluster on, it's possible for the upgrade to hang while it waits for `target_capacity` serve replicas to be scheduled on the upgraded RyaCluster. Autoscaling settings such as `upscalingMode` and `idleTimeoutSeconds` which control how quickly the RayClusters are scaled, will enable the user to control the gradual migration of the incremental ugprade and minimize the possibility of increased latency during an upgrade.
+- If the K8s Cluster admin does not have sufficient node resources (i.e. at the cloud provider level) to schedule the new cluster on, it's possible for the upgrade to hang while it waits for `target_capacity` serve replicas to be scheduled on the upgraded RayCluster. Autoscaling settings such as `upscalingMode` and `idleTimeoutSeconds` which control how quickly the RayClusters are scaled, will enable the user to control the gradual migration of the incremental upgrade and minimize the possibility of increased latency during an upgrade.
 - The KubeRay controller will assume that the presence of a Gateway controller and required CRDs are sufficient to enable an upgrade. The KubeRay controller will make no guarantees to support all Gateway controller instances (i.e. those in alpha status, etc.).
 
  
