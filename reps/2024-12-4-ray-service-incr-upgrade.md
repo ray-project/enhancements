@@ -29,7 +29,7 @@ step_size (int32 [0, 100])
 - `step_size` represents the percentage of traffic to transfer to the upgraded cluster every `interval` seconds. `step_size` is therefore the increase in the `HTTPRoute` and `GRPcRoute` weight associated with the upgraded cluster endpoint. The percentage of traffic routed to the upgraded RayCluster will increase by `step_size` until `target_capacity` is reached. At the same time, the percent of traffic routed to the old RayCluster will decrease by `step_size` every `interval` seconds.
 - Required value if `IncrementalCluster` type is set
 
-interval (int32 [0, ...])
+interval_s (int32 [0, ...])
 - `interval` represents the number of seconds for the controller to wait between increasing the percentage of traffic routed to the upgraded RayCluster by `step_size` percent.
 - Required value if `IncrementalCluster` type is set
 
