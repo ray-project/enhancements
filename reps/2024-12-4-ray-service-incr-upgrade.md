@@ -23,22 +23,25 @@ Within Ray. For better code maintenance.
 
 #### RayService spec
 
-max_surge_percent (int32 [0, 100])
-- Definition: The maximum allowed percentage increase in capacity during a scaling operation. It limits how much the new total capacity can exceed the original target capacity. This field defines the "next state" for the upgraded RayCluster. Every `interval_s` seconds, the upgraded RayCluster should increase its `target_capacity` by 100% + `max_surge_percent` - old RayCluster `target_capacity`.
-- `max_surge_percent` must adhere to `target_capacity_old` + `target_capacity_new` <= (100% + `max_surge_percent`)
+MaxSurgePercent (*int32 [0, 100])
+- Definition: The maximum allowed percentage increase in capacity during a scaling operation. It limits how much the new total capacity can exceed the original target capacity. This field defines the "next state" for the upgraded RayCluster. Each iteration that `target_capacity` percent of total traffic is routed to the upgraded RayCluster, the upgraded RayCluster should increase its `target_capacity` by 100% + `MaxSurgePercent` - old RayCluster `target_capacity`.
+- `MaxSurgePercent` must adhere to (old RayCluster `target_capacity` + new RayCluster `target_capacity`) <= (100% + `MaxSurgePercent`)
 - Defaults to 100, which is the same as a blue/green deployment strategy
 
-step_size_percent (int32 [0, 100])
-- `step_size_percent` represents the percentage of traffic to transfer to the upgraded cluster every `interval_s` seconds. `step_size_percent` is therefore the increase in the route weight associated with the upgraded cluster endpoint. The percentage of traffic routed to the upgraded RayCluster will increase by `step_size_percent` until the upgrade is complete. At the same time, the percent of traffic routed to the old RayCluster will decrease by `step_size_percent` every `interval_s` seconds.
+StepSizePercent (*int32 [0, 100])
+- `StepSizePercent` represents the percentage of traffic to transfer to the upgraded cluster every `IntervalSeconds` seconds. `StepSizePercent` is therefore the increase in the route weight associated with the upgraded cluster endpoint. The percentage of traffic routed to the upgraded RayCluster will increase by `step_sizeStepSizePercent_percent` until equal to `target_capacity` of the upgraded RayCluster. At the same time, the percent of traffic routed to the old RayCluster will decrease by `StepSizePercent` every `IntervalSeconds` seconds.
 - Required value if `IncrementalUpgrade` type is set
 
-interval_s (int32 [0, ...])
-- `interval_s` represents the number of seconds for the controller to wait between increasing the percentage of traffic routed to the upgraded RayCluster by `step_size_percent` percent.
+IntervalSeconds (*int32 [0, ...])
+- `IntervalSeconds` represents the number of seconds for the controller to wait between increasing the percentage of traffic routed to the upgraded RayCluster by `StepSizePercent` percent.
 - Required value if `IncrementalUpgrade` type is set
+
+GatewayClassName (string)
+- `GatewayClassName` represents the name of the Gateway Class installed in the cluster by the K8s cluster admin.
 
 After adding the above fields to the Ray Serve schema, these APIs will be added to the KubeRay CR spec and can be specified by the user as follows:
 
-A new `type` called `IncrementalUpgrade` will be introduced for this change to specify an upgrade strategy with `step_size_percent` and `interval_s` set that enables an incremental upgrade:
+A new `Type` called `IncrementalUpgrade` will be introduced for this change to specify an upgrade strategy with `MaxSurgePercent`, `StepSizePercent`, `Interval` set that enables an incremental upgrade:
 
 ```
 type RayServiceUpgradeType string
@@ -104,17 +107,23 @@ spec:
 The Ray Serve schema currently has the field `target_capacity` with the following definition:
 
 [target_capacity](https://github.com/ray-project/ray/blob/2ae9aa7e3b198ca3dbe5d65f8077e38d537dbe11/python/ray/serve/schema.py#L38) (int32 [0, 100]) - [Implemented in Ray 2.9](https://github.com/ray-project/ray/commit/86e0bc938989e28ada38faf25b75f717f5c81ed3)
-- Definition: The percentage of traffic routed to the RayService the upgraded cluster is expected to handle.
+- Definition: The percentage of traffic routed to the RayService the upgraded cluster is expected to accept after the upgrade.
 
-The above field can be exposed through the RayService status:
+We can also introduce a new field named `TrafficRoutedPercent` with the following definition:
+
+TrafficRoutedPercent (int32 [0, 100])
+- Definition: `TrafficRoutedPercent` is the percentage of traffic that the RayService is currently accepting. During an incremental upgrade, the percentage of traffic routed to the active RayService will be gradually migrated to the pending RayService.
+
+The above fields can be exposed through the RayService status:
 ```sh
 type RayServiceStatus struct {
     ...
     TargetCapacity *int32 `json:"targetCapacity,omitempty"`
+    TrafficRoutedPercent *int32 `json:"trafficRoutedPercent,omitempty"`
 }
 ```
 
-The controller can then access the `target_capacity` for the old RayCluster and upgraded RayCluster through the `ActiveServiceStatus` and `PendingServiceStatus` respectively of the `RayServiceStatuses` in the RayService CR.
+The controller can then access the `TargetCapacity` and `TrafficRoutedPercent` for the old RayCluster and upgraded RayCluster through the `ActiveServiceStatus` and `PendingServiceStatus` respectively of the `RayServiceStatuses` in the RayService CR.
 
 
 #### Key requirements:
@@ -228,15 +237,11 @@ backendRefs:
     port: serve_container_port
 ```
 
-9. Once the upgraded RayCluster is ready (see related issue to allow users to define when Serve apps are "Ready": https://github.com/ray-project/ray/issues/50883), the KubeRay controller will increment the weight of the upgraded RayCluster `backendRef` by `stepSizePercent`, while decreasing the weight of the old RayCluster `backendRef` by `stepSizePercent` and then wait `intervalSeconds`. The controller should loop incrementing the traffic until the `weight` associated with the upgraded cluster is equal to `target_capacity_new`. Gateway API will route the specified `weight` percentage of traffic to the old and new RayClusters accordingly.
+9. Once the upgraded RayCluster is ready (see related issue to allow users to define when Serve apps are "Ready": https://github.com/ray-project/ray/issues/50883), the KubeRay controller will increment the weight of the upgraded RayCluster `backendRef` by `stepSizePercent`, while decreasing the weight of the old RayCluster `backendRef` by `stepSizePercent` and then wait `intervalSeconds`. The controller should loop incrementing the traffic until the `weight` associated with the upgraded cluster is equal to its `target_capacity`. Gateway API will route the specified `weight` percentage of traffic to the old and new RayClusters accordingly.
 
-10. Once the upgraded cluster is accepting the additonal `maxSurgePercent` capacity of requests, the controller can scale down the old RayCluster by decreasing `target_capacity_old` by `maxSurgePercent` and allowing the Ray autoscaler to reduce the size of the original cluster.
+10. Once the upgraded cluster is accepting the additonal `maxSurgePercent` capacity of requests, the controller can scale down the old RayCluster by decreasing `target_capacity` by `maxSurgePercent` and allowing the Ray autoscaler to reduce the size of the original cluster. In the last iteration, the new `target_capacity` should be increased to 100% and the old RayCluster `target_capacity` should be decreased to 0%.
 
-11. The controller will loop, increasing the `target_capacity` of the new RayCluster by `maxSurgePercent`, waiting for the Serve apps to become ready, and then performing steps 9 and 10. Once `target_capacity_new` of the new RayCluster is equal to 100%, the upgrade is complete and the KubeRay controller can remove the created routes and delete the old RayCluster object. The Gateway object can be retained for future updates.
-
-To support a manual upgrade path in the future, we could add the following step:
-
-12. If `target_capacity` set in the RayService CR is less than 100%, the user can manually continue the upgrade by specifying a higher `target_capacity`, repeating the process above from step 7 (editing the desired replicas of the upgraded RayCluster rather than creating it) and allowing the upgraded RayCluster to scale up further to handle `target_capacity` percent of the total requests to the RayService.
+11. The controller will loop, increasing the `target_capacity` of the new RayCluster by `maxSurgePercent`, waiting for the Serve apps to become ready, and then performing steps 9 and 10. Once `target_capacity` of the new RayCluster is equal to 100%, the upgrade is complete and the KubeRay controller can delete the old RayCluster object and remove its `backendRef` from the routes. The Gateway API objects can be retained for future updates.
 
 
 ### Rollback Support
