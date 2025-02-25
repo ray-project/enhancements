@@ -155,7 +155,7 @@ The responsibilities for managing the Gateway API resources associated with a Ra
 
 3. The KubeRay controller validates the values of `maxSurgePercent`, `stepSizePercent`, and `intervalSeconds`.
 
-4. KubeRay controller checks the Serve related fields (`containerPort`, etc.) of the RayService spec and creates a Gateway object. If the controller errors when attempting to create the Gateway objects (i.e. missing CRDs, Gateway controller, etc.), it defaults to a blue/green deployment strategy and continues.
+4. KubeRay controller checks the Serve related fields (`containerPort`, etc.) of the RayService spec and creates a Gateway object.
 
 Example Gateway:
 ```sh
