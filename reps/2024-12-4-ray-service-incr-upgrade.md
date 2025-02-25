@@ -29,7 +29,7 @@ MaxSurgePercent (*int32 [0, 100])
 - Defaults to 100, which is the same as a blue/green deployment strategy
 
 StepSizePercent (*int32 [0, 100])
-- `StepSizePercent` represents the percentage of traffic to transfer to the upgraded cluster every `IntervalSeconds` seconds. `StepSizePercent` is therefore the increase in the route weight associated with the upgraded cluster endpoint. The percentage of traffic routed to the upgraded RayCluster will increase by `step_sizeStepSizePercent_percent` until equal to `target_capacity` of the upgraded RayCluster. At the same time, the percent of traffic routed to the old RayCluster will decrease by `StepSizePercent` every `IntervalSeconds` seconds.
+- `StepSizePercent` represents the percentage of traffic to transfer to the upgraded cluster every `IntervalSeconds` seconds. `StepSizePercent` is therefore the increase in the route weight associated with the upgraded cluster endpoint. The percentage of traffic routed to the upgraded RayCluster will increase by `StepSizePercent` until equal to `target_capacity` of the upgraded RayCluster. At the same time, the percent of traffic routed to the old RayCluster will decrease by `StepSizePercent` every `IntervalSeconds` seconds.
 - Required value if `IncrementalUpgrade` type is set
 
 IntervalSeconds (*int32 [0, ...])
