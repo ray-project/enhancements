@@ -233,7 +233,7 @@ backendRefs:
     port: serve_container_port
 ```
 
-9. Once the upgraded RayCluster is ready, the KubeRay controller will increment the weight of the upgraded RayCluster `backendRef` by `stepSizePercent`, while decreasing the weight of the old RayCluster `backendRef` by `stepSizePercent` and then wait `intervalSeconds`. The controller should loop incrementing the traffic until the `weight` associated with the upgraded cluster is equal to `target_capacity_new`. Gateway API will route the specified `weight` percentage of traffic to the old and new RayClusters accordingly.
+9. Once the upgraded RayCluster is ready (see related issue to allow users to define when Serve apps are "Ready": https://github.com/ray-project/ray/issues/50883), the KubeRay controller will increment the weight of the upgraded RayCluster `backendRef` by `stepSizePercent`, while decreasing the weight of the old RayCluster `backendRef` by `stepSizePercent` and then wait `intervalSeconds`. The controller should loop incrementing the traffic until the `weight` associated with the upgraded cluster is equal to `target_capacity_new`. Gateway API will route the specified `weight` percentage of traffic to the old and new RayClusters accordingly.
 
 10. Once the upgraded cluster is accepting the additonal `maxSurgePercent` capacity of requests, the controller can scale down the old RayCluster by decreasing `target_capacity_old` by `maxSurgePercent` and allowing the Ray autoscaler to reduce the size of the original cluster.
 
