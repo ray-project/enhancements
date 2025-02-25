@@ -21,10 +21,7 @@ Within Ray. For better code maintenance.
 
 ### Proposed API
 
-[target_capacity](https://github.com/ray-project/ray/blob/2ae9aa7e3b198ca3dbe5d65f8077e38d537dbe11/python/ray/serve/schema.py#L38) (int32 [0, 100]) - [Implemented in Ray 2.9](https://github.com/ray-project/ray/commit/86e0bc938989e28ada38faf25b75f717f5c81ed3)
-- Definition: The percentage of traffic routed to the RayService the upgraded cluster is expected to handle.
-- Defaults to 100
-- This field will not be added to the RayService CR yet, since we will start with support for automatic upgrades only, but can be added in later to support manually triggering each upgrade step. The RayService CRD should still expose `target_capacity_old` and `target_capacity_new` (not set by the user) fields in the RayService status to enable the controller to scale the respective RayClusters during each upgrade iteration.
+#### RayService spec
 
 max_surge_percent (int32 [0, 100])
 - Definition: The maximum allowed percentage increase in capacity during a scaling operation. It limits how much the new total capacity can exceed the original target capacity. This field defines the "next state" for the upgraded RayCluster. Every `interval_s` seconds, the upgraded RayCluster should increase its `target_capacity` by 100% + `max_surge_percent` - old RayCluster `target_capacity`.
@@ -84,27 +81,6 @@ type IncrementalUpgradeOptions struct {
 }
 ```
 
-We will start only supporting automatic upgrades, but to support manual upgrades we can eventually add a `target_capacity` field to the RayService spec:
-```sh
-  // The target capacity percentage of the upgraded RayCluster.
-  // Defaults to 100% target capacity.
-  // +kubebuilder:default:=100
-  TargetCapacity *int32 `json:"targetCapacity,omitempty"`
-```
-
-The RayService spec would then look as follows:
-```sh
-// RayServiceSpec defines the desired state of RayService
-type RayServiceSpec struct {
-  // UpgradeStrategy defines the scaling policy used when upgrading the RayService.
-  UpgradeStrategy *RayServiceUpgradeStrategy `json:"upgradeStrategy,omitempty"`
-  // Defines the applications and deployments to deploy, should be a YAML multi-line scalar string.
-  ServeConfigV2   string         `json:"serveConfigV2,omitempty"`
-  RayClusterSpec  RayClusterSpec `json:"rayClusterConfig,omitempty"`
-  ...
-}
-```
-
 Example RayService manifest:
 ```sh
 apiVersion: ray.io/v1
@@ -113,14 +89,34 @@ metadata:
   name: example-rayservice
 spec:
   upgradeStrategy:
-    gatewayClassName: "cluster-gateway" // Created by K8s cluster admin
     type: "IncrementalUpgrade"
-    maxSurgePercent: 20  // the upgraded cluster will increase target_capacity by 20% each iteration
-    stepSizePercent: 5  // represents 5% traffic to swap each interval seconds
-    intervalSeconds: 10 // represents 10 second migration interval
+    incrementalUpgradeOptions:
+      maxSurgePercent: 20  // the upgraded cluster will increase target_capacity by 20% each iteration
+      stepSizePercent: 5  // represents 5% traffic to swap each interval seconds
+      intervalSeconds: 10 // represents 10 second migration interval
+      gatewayClassName: "cluster-gateway" // Created by K8s cluster admin
   serveConfigV2: |
     ...
 ```
+
+#### RayService status
+
+The Ray Serve schema currently has the field `target_capacity` with the following definition:
+
+[target_capacity](https://github.com/ray-project/ray/blob/2ae9aa7e3b198ca3dbe5d65f8077e38d537dbe11/python/ray/serve/schema.py#L38) (int32 [0, 100]) - [Implemented in Ray 2.9](https://github.com/ray-project/ray/commit/86e0bc938989e28ada38faf25b75f717f5c81ed3)
+- Definition: The percentage of traffic routed to the RayService the upgraded cluster is expected to handle.
+- This field will not be added to the RayService CR yet, since we will start with support for automatic upgrades only, but could potentially be added in later to support manually triggering each upgrade step.
+
+The above field can be exposed through the RayService status:
+```sh
+type RayServiceStatus struct {
+    ...
+    TargetCapacity *int32 `json:"targetCapacity,omitempty"`
+}
+```
+
+The controller can then access the `target_capacity` for the old RayCluster and upgraded RayCluster through the `ActiveServiceStatus` and `PendingServiceStatus` respectively of the `RayServiceStatuses` in the RayService CR.
+
 
 #### Key requirements:
 - If users want to use the original blue/green deployment, RayService should work regardless of whether the K8s cluster has Gateway-related CRDs
