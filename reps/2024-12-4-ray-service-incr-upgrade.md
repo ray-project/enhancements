@@ -105,7 +105,6 @@ The Ray Serve schema currently has the field `target_capacity` with the followin
 
 [target_capacity](https://github.com/ray-project/ray/blob/2ae9aa7e3b198ca3dbe5d65f8077e38d537dbe11/python/ray/serve/schema.py#L38) (int32 [0, 100]) - [Implemented in Ray 2.9](https://github.com/ray-project/ray/commit/86e0bc938989e28ada38faf25b75f717f5c81ed3)
 - Definition: The percentage of traffic routed to the RayService the upgraded cluster is expected to handle.
-- This field will not be added to the RayService CR yet, since we will start with support for automatic upgrades only, but could potentially be added in later to support manually triggering each upgrade step.
 
 The above field can be exposed through the RayService status:
 ```sh
