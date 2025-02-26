@@ -241,7 +241,7 @@ backendRefs:
 
 10. Once the upgraded cluster is accepting the additonal `MaxSurgePercent` capacity of requests (up to 100%), the controller can scale down the old RayCluster by decreasing `TargetCapacity` by `MaxSurgePercent` and allowing the Ray autoscaler to reduce the size of the original cluster. In the last iteration, the new `TargetCapacity` should be increased to a maximum of 100% and the old RayCluster `TargetCapacity` should be decreased to 0%.
 
-11. The controller will loop, increasing the `TargetCapacity` of the new RayCluster by `MaxSurgePercent`, waiting for the Serve apps to become ready, and then performing steps 9 and 10. Once `TargetCapacity` of the new RayCluster is equal to 100%, the upgrade is complete and the KubeRay controller can delete the old RayCluster object and remove its `backendRef` from the routes. The Gateway API objects can be retained for future updates.
+11. The controller will loop, increasing the `TargetCapacity` of the new RayCluster by `MaxSurgePercent`, waiting for the Serve apps to become ready, and then performing steps 9 and 10. Once `TargetCapacity` and `TrafficRoutedPercent` of the new RayCluster are both equal to 100%, the upgrade is complete and the KubeRay controller can delete the old RayCluster object and remove its `backendRef` from the routes. The Gateway API objects can be retained for future updates.
 
 
 ### Rollback Support
