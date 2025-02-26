@@ -58,7 +58,7 @@ const (
 ```
 
 Additionally, the new API fields would be added to the `RayServiceUpgradeStrategy`:
-```sh
+```go
 type RayServiceUpgradeStrategy struct {
   // Type represents the strategy used when upgrading the RayService.
   // Currently supports `NewCluster`, `IncrementalUpgrade`, and `None`.
