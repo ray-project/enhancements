@@ -69,7 +69,7 @@ type RayServiceUpgradeStrategy struct {
 ```
 
 The behavior of the Incremental Upgrade can be configured through the following options:
-```sh
+```go
 type IncrementalUpgradeOptions struct {
   // The capacity of serve requests the upgraded cluster should scale to handle each interval.
   // Defaults to 100%.
