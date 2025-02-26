@@ -43,7 +43,7 @@ After adding the above fields to the Ray Serve schema, these APIs will be added 
 
 A new `Type` called `IncrementalUpgrade` will be introduced for this change to specify an upgrade strategy with `MaxSurgePercent`, `StepSizePercent`, `Interval` set that enables an incremental upgrade:
 
-```
+```go
 type RayServiceUpgradeType string
 
 const (
