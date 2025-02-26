@@ -180,7 +180,7 @@ spec:
     port: serve_container_port // set in RayService spec, defaults to 8000
 ```
 
-5. The KubeRay controller requires the Ray autoscaler (resource level) to be enabled in order to support a gradual traffic migration that scales the upgraded cluster by `stepSizePercent` traffic routed through Gateway. We could validate that autoscaling is enabled in the previous step and accept/reject the RayService CR accordingly. Alternatively, the controller could flip the `enableInTreeAutoscaling` flag to enable node resource autoscaling and add some default values.
+5. The KubeRay controller requires the Ray autoscaler (resource level) to be enabled in order to support a gradual traffic migration that scales the upgraded cluster by `stepSizePercent` traffic routed through Gateway. We could validate that autoscaling is enabled in the previous step and accept/reject the RayService CR accordingly.
 
 6. When a RayService with `IncrementalUpgrade` type is created, the KubeRay controller creates an `HTTPRoute` with settings according to the serve config. The `weight` associated with the upgraded cluster endpoint should start at 0.
 
