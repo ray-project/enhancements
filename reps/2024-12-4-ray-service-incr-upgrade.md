@@ -24,12 +24,12 @@ Within Ray. For better code maintenance.
 #### RayService spec
 
 MaxSurgePercent (*int32 [0, 100])
-- Definition: The maximum allowed percentage increase in capacity during a scaling operation. It limits how much the new total capacity can exceed the original target capacity. This field defines the "next state" for the upgraded RayCluster. Each iteration that `target_capacity` percent of total traffic is routed to the upgraded RayCluster, the upgraded RayCluster should increase its `target_capacity` by 100% + `MaxSurgePercent` - old RayCluster `target_capacity`.
-- `MaxSurgePercent` must adhere to (old RayCluster `target_capacity` + new RayCluster `target_capacity`) <= (100% + `MaxSurgePercent`)
+- Definition: The maximum allowed percentage increase in capacity during a scaling operation. It limits how much the new total capacity can exceed the original target capacity. This field defines the "next state" for the upgraded RayCluster. Each iteration that `TargetCapacity` percent of total traffic is routed to the upgraded RayCluster, the upgraded RayCluster should increase its `TargetCapacity` by 100% + `MaxSurgePercent` - old RayCluster `TargetCapacity`.
+- `MaxSurgePercent` must adhere to (old RayCluster `TargetCapacity` + new RayCluster `TargetCapacity`) <= (100% + `MaxSurgePercent`)
 - Defaults to 100, which is the same as a blue/green deployment strategy
 
 StepSizePercent (*int32 [0, 100])
-- `StepSizePercent` represents the percentage of traffic to transfer to the upgraded cluster every `IntervalSeconds` seconds. `StepSizePercent` is therefore the increase in the route weight associated with the upgraded cluster endpoint. The percentage of traffic routed to the upgraded RayCluster will increase by `StepSizePercent` until equal to `target_capacity` of the upgraded RayCluster. At the same time, the percent of traffic routed to the old RayCluster will decrease by `StepSizePercent` every `IntervalSeconds` seconds.
+- `StepSizePercent` represents the percentage of traffic to transfer to the upgraded cluster every `IntervalSeconds` seconds. `StepSizePercent` is therefore the increase in the route weight associated with the upgraded cluster endpoint. The percentage of traffic routed to the upgraded RayCluster will increase by `StepSizePercent` until equal to `TargetCapacity` of the upgraded RayCluster. At the same time, the percent of traffic routed to the old RayCluster will decrease by `StepSizePercent` every `IntervalSeconds` seconds.
 - Required value if `IncrementalUpgrade` type is set
 
 IntervalSeconds (*int32 [0, ...])
@@ -94,7 +94,7 @@ spec:
   upgradeStrategy:
     type: "IncrementalUpgrade"
     incrementalUpgradeOptions:
-      maxSurgePercent: 20  // the upgraded cluster will increase target_capacity by 20% each iteration
+      maxSurgePercent: 20  // the upgraded cluster will increase TargetCapacity by 20% each iteration
       stepSizePercent: 5  // represents 5% traffic to swap each interval seconds
       intervalSeconds: 10 // represents 10 second migration interval
       gatewayClassName: "cluster-gateway" // Created by K8s cluster admin
@@ -162,7 +162,7 @@ The responsibilities for managing the Gateway API resources associated with a Ra
 
 2. A user creates a RayService with a `RayServiceUpgradeType` of `IncrementalUpgrade`.
 
-3. The KubeRay controller validates the values of `maxSurgePercent`, `stepSizePercent`, and `intervalSeconds`.
+3. The KubeRay controller validates the values of `MaxSurgePercent`, `StepSizePercent`, and `IntervalSeconds`.
 
 4. KubeRay controller checks the Serve related fields (`containerPort`, etc.) of the RayService spec and creates a Gateway object.
 
@@ -180,7 +180,7 @@ spec:
     port: serve_container_port // set in RayService spec, defaults to 8000
 ```
 
-5. The KubeRay controller requires the Ray autoscaler (resource level) to be enabled in order to support a gradual traffic migration that scales the upgraded cluster by `stepSizePercent` traffic routed through Gateway. We could validate that autoscaling is enabled in the previous step and accept/reject the RayService CR accordingly.
+5. The KubeRay controller requires the Ray autoscaler (resource level) to be enabled in order to support a gradual traffic migration that scales the upgraded cluster by `StepSizePercent` traffic routed through Gateway. We could validate that autoscaling is enabled in the previous step and accept/reject the RayService CR accordingly.
 
 6. When a RayService with `IncrementalUpgrade` type is created, the KubeRay controller creates an `HTTPRoute` with settings according to the serve config. The `weight` associated with the upgraded cluster endpoint should start at 0.
 
@@ -226,7 +226,7 @@ spec:
           port: serve_container_port // defaults to 9000
 ```
 
-7. When an upgrade is initiated, KubeRay creates the upgraded RayCluster with the Ray autoscaler enabled and `target_capacity` set to 100% + `max_surge_percent` - old RayCluster `target_capacity`. The Ray autoscaler will scale up the appropriate number of worker group replicas until the Serve replicas on the upgraded cluster are scheduled and 'Ready'.
+7. When an upgrade is initiated, KubeRay creates the upgraded RayCluster with the Ray autoscaler enabled and `TargetCapacity` set to 100% + `MaxSurgePercent` - old RayCluster `TargetCapacity`. The Ray autoscaler will scale up the appropriate number of worker group replicas until the Serve replicas on the upgraded cluster are scheduled and 'Ready'.
 
 8. The controller should update the routes to prepare to switch traffic to the upgrading RayCluster using a `backendRef`:
 ```sh
@@ -237,11 +237,11 @@ backendRefs:
     port: serve_container_port
 ```
 
-9. Once the upgraded RayCluster is ready (see related issue to allow users to define when Serve apps are "Ready": https://github.com/ray-project/ray/issues/50883), the KubeRay controller will increment the weight of the upgraded RayCluster `backendRef` by `stepSizePercent`, while decreasing the weight of the old RayCluster `backendRef` by `stepSizePercent` and then wait `intervalSeconds`. The controller should loop incrementing the traffic until the `weight` associated with the upgraded cluster is equal to its `target_capacity`. Gateway API will route the specified `weight` percentage of traffic to the old and new RayClusters accordingly.
+9. Once the upgraded RayCluster is ready (see related issue to allow users to define when Serve apps are "Ready": https://github.com/ray-project/ray/issues/50883), the KubeRay controller will increment the weight of the upgraded RayCluster `backendRef` by `StepSizePercent`, while decreasing the weight of the old RayCluster `backendRef` by `StepSizePercent` and then wait `IntervalSeconds`. The controller should loop incrementing the traffic until the `weight` associated with the upgraded cluster is equal to its `TargetCapacity`. Gateway API will route the specified `weight` percentage of traffic to the old and new RayClusters accordingly.
 
-10. Once the upgraded cluster is accepting the additonal `maxSurgePercent` capacity of requests (up to 100%), the controller can scale down the old RayCluster by decreasing `target_capacity` by `maxSurgePercent` and allowing the Ray autoscaler to reduce the size of the original cluster. In the last iteration, the new `target_capacity` should be increased to a maximum of 100% and the old RayCluster `target_capacity` should be decreased to 0%.
+10. Once the upgraded cluster is accepting the additonal `MaxSurgePercent` capacity of requests (up to 100%), the controller can scale down the old RayCluster by decreasing `TargetCapacity` by `MaxSurgePercent` and allowing the Ray autoscaler to reduce the size of the original cluster. In the last iteration, the new `TargetCapacity` should be increased to a maximum of 100% and the old RayCluster `TargetCapacity` should be decreased to 0%.
 
-11. The controller will loop, increasing the `target_capacity` of the new RayCluster by `maxSurgePercent`, waiting for the Serve apps to become ready, and then performing steps 9 and 10. Once `target_capacity` of the new RayCluster is equal to 100%, the upgrade is complete and the KubeRay controller can delete the old RayCluster object and remove its `backendRef` from the routes. The Gateway API objects can be retained for future updates.
+11. The controller will loop, increasing the `TargetCapacity` of the new RayCluster by `MaxSurgePercent`, waiting for the Serve apps to become ready, and then performing steps 9 and 10. Once `TargetCapacity` of the new RayCluster is equal to 100%, the upgrade is complete and the KubeRay controller can delete the old RayCluster object and remove its `backendRef` from the routes. The Gateway API objects can be retained for future updates.
 
 
 ### Rollback Support
@@ -250,7 +250,7 @@ A key requirement for RayService incremental upgrade is to support rollback if t
 
 1. The KubeRay controller checks whether the goal state has changed. If the state hasn't changed (i.e it still matches the upgraded cluster), continue the upgrade.
 
-2. If the goal state has changed and matches the original RayCluster, perform a rollback by scaling the original RayCluster to 100% `target_capacity` and then switching 100% of traffic to the original cluster. The upgraded cluster can then be cleaned up.
+2. If the goal state has changed and matches the original RayCluster, perform a rollback by scaling the original RayCluster to 100% `TargetCapacity` and then switching 100% of traffic to the original cluster. The upgraded cluster can then be cleaned up.
 
 3. If the goal state doesn't match either the original cluster or upgraded cluster, the controller should perform the rollback as defined in step #2 and then continue the upgrade as defined by the current goal state from the original cluster.
 
@@ -273,7 +273,7 @@ The incremental upgrade proposal requires only standard Gateway APIs (`HTTPRoute
 ### Limitations and Assumptions
 
 There are certain assumptions the KubeRay controller will make that users must follow or traffic being split has the possibility of being dropped. These include:
-- If the K8s Cluster admin does not have sufficient node resources (i.e. at the cloud provider level) to schedule the new cluster on, it's possible for the upgrade to hang while it waits for `target_capacity` serve replicas to be scheduled on the upgraded RayCluster. Autoscaling settings such as `upscalingMode` and `idleTimeoutSeconds` which control how quickly the RayClusters are scaled, will enable the user to control the gradual migration of the incremental upgrade and minimize the possibility of increased latency during an upgrade.
+- If the K8s Cluster admin does not have sufficient node resources (i.e. at the cloud provider level) to schedule the new cluster on, it's possible for the upgrade to hang while it waits for `TargetCapacity` serve replicas to be scheduled on the upgraded RayCluster. Autoscaling settings such as `UpscalingMode` and `IdleTimeoutSeconds` which control how quickly the RayClusters are scaled, will enable the user to control the gradual migration of the incremental upgrade and minimize the possibility of increased latency during an upgrade.
 - The KubeRay controller will assume that the presence of a Gateway controller and required CRDs are sufficient to enable an upgrade. The KubeRay controller will make no guarantees to support all Gateway controller instances (i.e. those in alpha status, etc.).
 
  
