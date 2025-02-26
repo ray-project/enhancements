@@ -182,7 +182,7 @@ spec:
 
 5. The KubeRay controller requires the Ray autoscaler (resource level) to be enabled in order to support a gradual traffic migration that scales the upgraded cluster by `StepSizePercent` traffic routed through Gateway. We could validate that autoscaling is enabled in the previous step and accept/reject the RayService CR accordingly.
 
-6. When a RayService with `IncrementalUpgrade` type is created, the KubeRay controller creates an `HTTPRoute` with settings according to the serve config. The `weight` associated with the upgraded cluster endpoint should start at 0.
+6. When a RayService with `IncrementalUpgrade` type is created, the KubeRay controller creates an `HTTPRoute` with settings according to the serve config. At creation, the `HTTPRoute` points to only the old RayCluster with `weight = 100`. This means that 100% of the traffic is routed to the old RayCluster at the start of the upgrade.
 
 Example `HTTPRoute`:
 ```sh
@@ -228,7 +228,7 @@ spec:
 
 7. When an upgrade is initiated, KubeRay creates the upgraded RayCluster with the Ray autoscaler enabled and `TargetCapacity` set to 100% + `MaxSurgePercent` - old RayCluster `TargetCapacity`. The Ray autoscaler will scale up the appropriate number of worker group replicas until the Serve replicas on the upgraded cluster are scheduled and 'Ready'.
 
-8. The controller should update the routes to prepare to switch traffic to the upgrading RayCluster using a `backendRef`:
+8. The controller should update the `HTTPRoute` to prepare to switch traffic to the upgrading RayCluster using a `backendRef`. The controller should add a `backendRef` to the upgraded RayCluster Serve `containerPort` so that the `HTTPRoute` now points to the old RayCluster with `weight = 100` and new RayCluster with `weight = 0`:
 ```sh
 backendRefs:
 ...
@@ -237,11 +237,13 @@ backendRefs:
     port: serve_container_port
 ```
 
-9. Once the upgraded RayCluster is ready (see related issue to allow users to define when Serve apps are "Ready": https://github.com/ray-project/ray/issues/50883), the KubeRay controller will increment the weight of the upgraded RayCluster `backendRef` by `StepSizePercent`, while decreasing the weight of the old RayCluster `backendRef` by `StepSizePercent` and then wait `IntervalSeconds`. The controller should loop incrementing the traffic until the `weight` associated with the upgraded cluster is equal to its `TargetCapacity`. Gateway API will route the specified `weight` percentage of traffic to the old and new RayClusters accordingly.
+At the start of the upgrade, 100% of the traffic is routed to the old RayCluster.
+
+9. Once the upgraded RayCluster is ready (see related issue to allow users to define when Serve apps are "Ready": https://github.com/ray-project/ray/issues/50883), the KubeRay controller will increment the weight of the upgraded RayCluster `backendRef` by `StepSizePercent`, decrease the weight of the old RayCluster `backendRef` by `StepSizePercent`, and then wait `IntervalSeconds`. The controller should loop incrementing the traffic until the `weight` associated with the upgraded cluster is equal to its `TargetCapacity`. Gateway API will route the specified `weight` percentage of traffic to the old and new RayClusters accordingly.
 
 10. Once the upgraded cluster is accepting the additonal `MaxSurgePercent` capacity of requests (up to 100%), the controller can scale down the old RayCluster by decreasing `TargetCapacity` by `MaxSurgePercent` and allowing the Ray autoscaler to reduce the size of the original cluster. In the last iteration, the new `TargetCapacity` should be increased to a maximum of 100% and the old RayCluster `TargetCapacity` should be decreased to 0%.
 
-11. The controller will loop, increasing the `TargetCapacity` of the new RayCluster by `MaxSurgePercent`, waiting for the Serve apps to become ready, and then performing steps 9 and 10. Once `TargetCapacity` and `TrafficRoutedPercent` of the new RayCluster are both equal to 100%, the upgrade is complete and the KubeRay controller can delete the old RayCluster object and remove its `backendRef` from the routes. The Gateway API objects can be retained for future updates.
+11. The controller will loop, increasing the `TargetCapacity` of the new RayCluster by `MaxSurgePercent`, waiting for the Serve apps to become ready, and then performing steps 9 and 10. When `TargetCapacity` and `TrafficRoutedPercent` of the new RayCluster are both equal to 100%, the upgrade is complete and the KubeRay controller can delete the old RayCluster object. The controller should now update the `HTTPRoute` object to no longer point to the old RayCluster (removing its `backendRef`), since 100% of the traffic is being routed to the upgraded RayCluster. The Gateway API objects can be retained for future updates.
 
 
 ### Rollback Support
