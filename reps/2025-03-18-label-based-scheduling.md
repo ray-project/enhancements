@@ -135,9 +135,9 @@ ray start --labels "key1=val1,key2=val2"
 ray.init(labels="key1=val1,key2=val2")
 ```
 
-We will also support sourcing labels from a file using bash for `ray start` only:
+We will also support sourcing labels from a file using bash for `ray start` only. This command will read labels in YAML format to support passing down Pod labels into the Raylet using downward API. The labels passed in from file should be composable with those specified by `--labels`.
 ```sh
-ray start --labels $(cat labels.txt)
+ray start --labels-from-file $(cat labels.txt)
 ```
 
 To then schedule based on these labels, we will support passing a `label_selector` argument to the `@ray.remote` decorator. Adding this API here, rather than as a task/actor `scheduling_strategy`, will enable users to utilize label selectors in addition to other scheduling strategies.
