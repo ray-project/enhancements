@@ -23,6 +23,9 @@ Ray currently supports passing labels to a node through `ray start` with the `--
 To pass labels to a Ray node:
 ```sh
 ray start --head --labels='{"ray.io/accelerator-type": "A100", "region": "us"}'
+
+# or with ray init
+ray.init(labels='{"ray.io/accelerator-type": "A100", "region": "us"}')
 ```
 
 To access node labels:
