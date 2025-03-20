@@ -1,7 +1,7 @@
 ## Summary
 ### General Motivation
 
-This REP summarizes the current state of the node label scheduling feature enhancement and the remaining work to fully support scheduling using label selectors in Ray.
+This REP summarizes the current state of the node label scheduling feature enhancement and the remaining work to fully support scheduling using label selectors in Ray. This REP supersedes the previous [node affinity feature enhancement REP](https://github.com/ryanaoleary/enhancements/blob/main/reps/2023-02-03-node-affinity-feature-enhancements.md).
 
 ### Should this change be within `ray` or outside?
 
@@ -134,7 +134,7 @@ We will also support sourcing labels from a file using bash:
 ray start --labels $(cat labels.txt)
 ```
 
-To then schedule based on these labels, we will support passing a `label_selector` argument to the `@ray.remote` decorator.
+To then schedule based on these labels, we will support passing a `label_selector` argument to the `@ray.remote` decorator. Adding this API here, rather than as a task/actor `scheduling_strategy`, will enable users to utilize label selectors in addition to other scheduling strategies.
 ```python
 @ray.remote(label_selector={"ray.io/accelerator-type": "nvidia-h100"})
 class Actor:
