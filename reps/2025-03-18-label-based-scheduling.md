@@ -18,16 +18,16 @@ The change should be within Ray since it's a direct enhancement to the Ray sched
 
 ### Current implementation state
 
-Ray currently supports passing labels to a node through `ray start` with the `--labels` flag in Python, parsing labels from a json string with `parse_node_labels_json`, and associates a list of labels with a Node through the `_labels` field. Node information, including labels, are saved in the `GcsNodeInfo` data struct when a node is added. Ray also supports setting default labels on node add, but currently only sets `ray.io/node-id`.
+Ray currently supports passing labels to a node through `ray start` with the `--labels` flag in Python, parsing labels from a json string with `parse_node_labels_json`, and associates a list of labels with a remote function through the `_labels` field in task/actor options. Node information, including labels, are saved in the `GcsNodeInfo` data struct when a node is added. Ray also supports setting default labels on node add, but currently only sets `ray.io/node-id`.
 
 To pass labels to a Ray node:
 ```sh
-ray start --head --labels='{"gpu_type": "A100", "region": "us"}'
+ray start --head --labels='{"ray.io/accelerator-type": "A100", "region": "us"}'
 ```
 
 To access node labels:
 ```python
-ray.nodes()[0]["Labels"] == {"gpu_type": "A100", "region": "us"}
+ray.nodes()[0]["Labels"] == {"ray.io/accelerator-type": "A100", "region": "us"}
 ```
 
 To schedule nodes based on these labels, users specify `scheduling_strategy=NodeLabelSchedulingStrategy` as follows:
@@ -42,9 +42,9 @@ With both hard and soft constraints:
 MyActor.options(
     actor = MyActor.options(
         scheduling_strategy=NodeLabelSchedulingStrategy(
-            {"gpu_type": NotIn("A100", "T100"), "other_key": DoesNotExist()}
-            hard={"gpu_type": DoesNotExist()},
-            soft={"gpu_type": In("A100")},
+            {"ray.io/accelerator-type": NotIn("A100", "T100"), "other_key": DoesNotExist()}
+            hard={"ray.io/accelerator-type": DoesNotExist()},
+            soft={"ray.io/accelerator-type": In("A100")},
         )
     )
 ).remote()
@@ -146,7 +146,7 @@ def my_task():
     pass
 ```
 
-To schedule placement groups based on labels we will implement support for applying label selectors to placement groups on a per-bundle level. This would require adding a `bundle_label_selector` to the `ray.util.placement_group` constructor.
+To schedule placement groups based on labels we will implement support for applying label selectors to placement groups on a per-bundle level. This would require adding a `bundle_label_selector` to the `ray.util.placement_group` constructor. The items in `bundle_label_selector` map 1:1 with the items in `bundles`.
 ```python
 # Same labels on all bundles
 ray.util.placement_group(
@@ -172,6 +172,26 @@ Finally, we will implement a `fallback_strategy` API to support soft constraints
     ],
 )
 ```
+
+For placement groups:
+```python
+# Prefer 2 H100s, fall back to 4 A100s, then fall back to 8 V100s:
+ray.util.placement_group(
+    bundles=[{"GPU": 1} * 2],
+    bundle_label_selector=[{"ray.io/accelerator-type": "nvidia-h100"}] * 2,
+    fallback_strategy=[
+        {
+            "bundles": [{"GPU": 1}] * 4,
+            "bundle_label_selector": [{"ray.io/accelerator-type": "nvidia-h100"}] * 4
+        },
+        {
+            "bundles": [{"GPU": 1}] * 8,
+            "bundle_label_selector": [{"ray.io/accelerator-type": "nvidia_v100"}] * 8
+        },
+    ],
+)
+```
+
 
 ### Label selector requirements
 This API is based on [K8s labels and selectors](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/). Labels are key-value pairs which conform to the same format and restrictions as [Kubernetes](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set), with both the key and value required to be 63 characters or less, beginning and ending with an alphanumeric character ([a-z0-9A-Z]) with dashes (-), underscores (_), dots (.), and alphanumerics between.
