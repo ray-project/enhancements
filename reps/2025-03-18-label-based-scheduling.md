@@ -127,12 +127,15 @@ In order to implement full label based scheduling as described in the [public pr
 
 ### API Design
 
-To pass labels to a Ray node, we will amend the `--labels` argument to `ray start` to accept a string list of key-value pairs. Currently the labels argument accepts a json struct.
+To pass labels to a Ray node, we will amend the `--labels` argument to `ray start` and `ray init` to accept a string list of key-value pairs. Currently the labels argument accepts a json struct.
 ```sh
 ray start --labels "key1=val1,key2=val2"
+
+# or
+ray.init(labels="key1=val1,key2=val2")
 ```
 
-We will also support sourcing labels from a file using bash:
+We will also support sourcing labels from a file using bash for `ray start` only:
 ```sh
 ray start --labels $(cat labels.txt)
 ```
