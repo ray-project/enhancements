@@ -221,7 +221,7 @@ Overview of Ray scheduler steps during label based scheduling:
 1. Ray gets a request to schedule an actor or task based on some resources and labels.
 2. Ray filters the feasible nodes by those that satisfy the resource request. A feasible node is one with sufficient total resources to satisfy the request, although those resources may not currently be available.  
 3. Ray hard matches nodes that satisfy the resource request with those that satisfy the label selector and expression.
-4. If no nodes match and a `fallback_strategy` is provided, filter by the provided fallback label selector and return the list of candidate nodes.
+4. If no nodes match and a `fallback_strategy` is provided, filter by the provided fallback label selectors one-by-one until there is a match and return the list of candidate nodes.
 5. Ray returns the best schedulable node from the list of available (or feasible if no nodes are available) that satisfy the expressions in steps 3 and/or 4.
 
 Remaining steps to implement the label based scheduling feature: https://github.com/ray-project/ray/issues/51564
