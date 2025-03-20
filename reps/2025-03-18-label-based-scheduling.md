@@ -218,7 +218,7 @@ These labels will be automatically populated based on the Kubernetes label or fr
 A portion of the internal implementation to save node labels, match based on label conditions, and support node labels in the core Python worker already exists. The primary changes required are to update the current APIs to those described above, move the logic from the `NodeLabelSchedulingStrategy` directly to the [cluster resource scheduler](https://github.com/ray-project/ray/blob/07cdfec1fd9b63559cb1d47b5197ef5318f4d43e/src/ray/raylet/scheduling/cluster_resource_scheduler.cc#L149), and implement support for autoscaling.
 
 Overview of Ray scheduler steps during label based scheduling:
-1. Ray gets a request to schedule nodes based on some resources and labels.
+1. Ray gets a request to schedule an actor or task based on some resources and labels.
 2. Ray filters the feasible nodes by those that satisfy the resource request. A feasible node is one with sufficient total resources to satisfy the request, although those resources may not currently be available.  
 3. Ray hard matches nodes that satisfy the resource request with those that satisfy the label selector and expression.
 4. If no nodes match and a `fallback_strategy` is provided, filter by the provided fallback label selector and return the list of candidate nodes.
