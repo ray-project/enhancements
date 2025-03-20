@@ -1,7 +1,7 @@
 ## Summary
 ### General Motivation
 
-This REP summarizes the current state of the node label scheduling feature enhancement and the remaining work to fully support label based scheduling for Tasks and Actors in Ray.
+This REP summarizes the current state of the node label scheduling feature enhancement and the remaining work to fully support scheduling using label selectors in Ray.
 
 ### Should this change be within `ray` or outside?
 
