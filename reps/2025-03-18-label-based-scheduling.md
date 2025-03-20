@@ -151,7 +151,7 @@ To schedule placement groups based on labels we will implement support for apply
 # Same labels on all bundles
 ray.util.placement_group(
     bundles=[{"GPU": 1}, {"GPU": 1}],
-    bundle_label_selector=[{"ray.io/availability-zone": "us-west4-a"} * 2],
+    bundle_label_selector=[{"ray.io/availability-zone": "us-west4-a"}] * 2,
 )
 
 # Different bundles require different labels
