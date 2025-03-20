@@ -184,21 +184,8 @@ Overview of Ray scheduler steps during label based scheduling:
 4. If no nodes match and a `fallback_strategy` is provided, filter by the provided fallback label selector and return the list of candidate nodes.
 5. Ray returns the best schedulable node from the list of available (or feasible if no nodes are available) that satisfy the expressions in steps 3 and/or 4.
 
-Remaining steps to implement the label based scheduling feature:
-- [ ] (P1) Update `--labels` argument to take either a list of strings or read from file and expose this API publicly
-- [ ] (P1) Add `label_selector` API to `@ray.remote` decorator to schedule tasks/actors
-- [ ] (P1) Add `bundle_label_selector` to the `ray.util.placement_group` constructor to apply a set of `label_selector`s to placement group bundles
-- [x] (P1) Ray saves label info associated with a node in `GcsNodeInfo` - already implemented
-- [ ] (P1) Update `ClusterResourceScheduler::GetBestSchedulableNode` to enforce `label_selector` conditions when returning list of candidate nodes. This will eventually replace `SchedulingOptions::NodeLabelScheduling(scheduling_strategy)`.
-- [ ] (P1) Populate list of default labels automatically, currently only supports `ray.io/node-id`
-- [ ] (P1) Adapt Ray V2 Autoscaler to parse labels from K8s Pod Spec and generate a `--labels` arg to `rayStartParams`
-- [ ] (P1) Update Autoscaler data model to pass label information by adding a labels field to the `ResourceRequest` message
-- [ ] (P1) Update Autoscaler bin packing logic to directly consider label matching
-- [ ] (P2) Determine whitelist of K8s labels to always pass to Ray nodes
-- [ ] (P2) Implement `fallback_strategy` API to match available/feasible nodes by the provided conditions if `label_selector` returns 0 matches
-- [ ] (P2) Update documentation/examples to use updated `label_selector` API
-- [ ] (P2) Update library usage of `NodeLabelSchedulingStrategy` with `label_selector` API
-- [ ] (P2) Add labels argument to `request_resource()` SDK function used by Ray libraries
+Remaining steps to implement the label based scheduling feature: https://github.com/ray-project/ray/issues/51564
+
 
 ### Autoscaler adaptation
 Label based scheduling support should be added to the Ray V2 Autoscaler, only supporting the Kubernetes stack at first. Once the VM stack is also migrated to the V2 autoscaler, we can extend label based scheduling support. In order to inform scaling decisions based on user provided label selectors to Ray tasks/actors, it's necessary to propogate label information at runtime to the autoscaler and GCS. The required changes to the Ray Autoscaler V2 APIs and data model are described above in the implementation plan.
