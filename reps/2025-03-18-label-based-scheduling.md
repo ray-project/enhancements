@@ -157,7 +157,7 @@ ray.util.placement_group(
 # Different bundles requiring different labels
 ray.util.placement_group(
     bundles=[{"CPU": 1}] + [{"GPU": 1}] * 2,
-    bundle_label_selector=[{"ray.io/market_type": "spot"}] + [{"ray.io/accelerator-type": "nvidia-h100"} * 2]
+    bundle_label_selector=[{"ray.io/market_type": "spot"}] + [{"ray.io/accelerator-type": "nvidia-h100"}] * 2
 )
 ```
 
