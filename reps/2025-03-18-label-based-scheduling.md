@@ -173,6 +173,46 @@ Finally, we will implement a `fallback_strategy` API to support soft constraints
 )
 ```
 
+### Label selector requirements
+This API is based on [K8s labels and selectors](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/). Labels are key-value pairs which conform to the same format and restrictions as [Kubernetes](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set), with both the key and value required to be 63 characters or less, beginning and ending with an alphanumeric character ([a-z0-9A-Z]) with dashes (-), underscores (_), dots (.), and alphanumerics between.
+
+Operators replace the label value and define the desired condition of each label. Operators are case insensitive and will support a string-based operator syntax. The initial list of supported operators is as follows:
+- Equal: label equals exactly one value
+    - `{“key”: “value”}`
+
+- Not Equal: label equals anything but one value
+    - `{“key”: “!value”}`
+
+- In: label matches one of the provided values
+    - `{“key”: “in(val1,val2)”}`
+
+- Not In: label matches none of the provided values
+    - `{“key”: “!in(val1,val2)”}`
+
+To be added later if needed:
+- Exists: label exists on the node
+    - `{“key”: “exists()”}`
+
+- Does Not Exist: label does not exist on the node
+    - `{“key”: “!exists()”}`
+
+
+### Default labels
+The initial set of supported default labels will be:
+- `ray.io/node-id`
+    - this label is already supported
+- `ray.io/accelerator-type`
+    - Set to "” on CPU-only machines.
+    - Supports existing accelerator type strings.
+- `ray.io/market-type`
+    - spot or on-demand
+- `ray.io/node-group`
+    - head or worker group name set by autoscaler
+- `ray.io/availability-zone`
+
+These labels will be automatically populated based on the Kubernetes label or from information such as the GCE metadata when necessary.
+
+
 ### Implementation plan
 
 A portion of the internal implementation to save node labels, match based on label conditions, and support node labels in the core Python worker already exists. The primary changes required are to update the current APIs to those described above, move the logic from the `NodeLabelSchedulingStrategy` directly to the [cluster resource scheduler](https://github.com/ray-project/ray/blob/07cdfec1fd9b63559cb1d47b5197ef5318f4d43e/src/ray/raylet/scheduling/cluster_resource_scheduler.cc#L149), and implement support for autoscaling.
