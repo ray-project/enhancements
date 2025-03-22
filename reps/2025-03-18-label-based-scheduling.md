@@ -18,7 +18,7 @@ The change should be within Ray since it's a direct enhancement to the Ray sched
 
 ### Current implementation state
 
-Ray currently supports passing labels to a node through `ray start` with the `--labels` flag in Python, parsing labels from a json string with `parse_node_labels_json`, and associates a list of labels with a remote function through the `_labels` field in task/actor options. Node information, including labels, are saved in the `GcsNodeInfo` data struct when a node is added. Ray also supports setting default labels on node add, but currently only sets `ray.io/node-id`.
+Ray currently supports passing labels to a node through `ray start` with the `--labels` flag in Python and parsing labels from a json string with `parse_node_labels_json`. Node information, including labels, are saved in the `GcsNodeInfo` data struct when a node is added. Ray also supports setting default labels on node add, but currently only sets `ray.io/node-id`.
 
 To pass labels to a Ray node:
 ```sh
@@ -122,7 +122,7 @@ NodeLabelSchedulingPolicy::IsNodeMatchLabelExpression(
 ```
 
 ### Brief idea
-In order to implement full label based scheduling as described in the [public proposal](https://docs.google.com/document/d/1DKhPuZERlLbsU4TIQZZ6POCsm1pVMBgN_yn5r0OmaDI), there are several required changes to the existing API and internal implementation in Ray core. Since most of the core functionality for adding, storing, and retrieving node labels is already implemented, the primary changes proposed here are to update the APIs, support autoscaling, and directly schedule nodes based on label selectors when provided, rather than passing a separate scheduling policy.
+In order to implement full label based scheduling as described in the [public proposal](https://docs.google.com/document/d/1DKhPuZERlLbsU4TIQZZ6POCsm1pVMBgN_yn5r0OmaDI), there are several required changes to the existing API and internal implementation in Ray core. Since most of the core functionality for adding, storing, and retrieving node labels is already implemented, the primary changes proposed here are to update the APIs, support autoscaling, and directly schedule nodes based on label selectors passed to Ray tasks/actors, rather than requiring a separate scheduling policy.
 
 
 ### API Design
