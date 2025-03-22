@@ -152,6 +152,15 @@ def my_task():
     pass
 ```
 
+Or in the Ray task/actor options:
+```python
+actor_1 = Actor.options(
+    num_gpus=1,
+    resources={"custom_resource": 1},
+    label_selector={"ray.io/accelerator-type": "nvidia-h100"},
+).remote()
+```
+
 To schedule placement groups based on labels we will implement support for applying label selectors to placement groups on a per-bundle level. This would require adding a `bundle_label_selector` to the `ray.util.placement_group` constructor. The items in `bundle_label_selector` map 1:1 with the items in `bundles`.
 ```python
 # Same labels on all bundles
