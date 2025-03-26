@@ -130,12 +130,14 @@ In order to implement full label based scheduling as described in the [public pr
 To pass labels to a Ray node, we will amend the `--labels` argument to `ray start` and `ray init` to accept a string list of key-value pairs. Currently the labels argument accepts a json struct.
 ```sh
 ray start --labels "key1=val1,key2=val2"
-
-# or
-ray.init(labels="key1=val1,key2=val2")
 ```
 
-We will also support sourcing labels from a file using bash for `ray start` only. This command will read labels in YAML format to support passing down Pod labels into the Raylet using downward API. The labels passed in from file should be composable with those specified by `--labels`.
+Or with `ray init`:
+```python
+ray.init(labels={"key1": "val1", "key2": "val2"})
+```
+
+We will also support sourcing labels from a file using bash for `ray start` only. This command will read labels in YAML format to support passing down Pod labels into the Raylet using downward API. The labels passed in from file should be composable with those specified by `--labels`, with the value in `--labels` taking precedence if there is a conflict.
 ```sh
 ray start --labels-file $(cat labels.txt)
 ```
