@@ -24,9 +24,6 @@ Ray currently supports passing labels to a node through `ray start` with the `--
 To pass labels to a Ray node:
 ```sh
 ray start --head --labels='{"ray.io/accelerator-type": "A100", "region": "us"}'
-
-# or with ray init
-ray.init(labels='{"ray.io/accelerator-type": "A100", "region": "us"}')
 ```
 
 To access node labels:
@@ -128,17 +125,12 @@ In order to implement full label based scheduling as described in the [public pr
 
 ### API Design
 
-To pass labels to a Ray node, we will amend the `--labels` argument to `ray start` and `ray init` to accept a string list of key-value pairs. Currently the labels argument accepts a json struct.
+To pass labels to a Ray node, we will amend the `--labels` argument to `ray start` to accept a string list of key-value pairs. Currently the labels argument accepts a json struct.
 ```sh
 ray start --labels "key1=val1,key2=val2"
 ```
 
-Or with `ray init`:
-```python
-ray.init(labels={"key1": "val1", "key2": "val2"})
-```
-
-We will also support sourcing labels from a file using bash for `ray start` only. This command will read labels in YAML format to support passing down Pod labels into the Raylet using downward API. The labels passed in from file should be composable with those specified by `--labels`, with the value in `--labels` taking precedence if there is a conflict.
+We will also support sourcing labels from a file using bash for `ray start`. This command will read labels in YAML format to support passing down Pod labels into the Raylet using downward API. The labels passed in from file should be composable with those specified by `--labels`, with the value in `--labels` taking precedence if there is a conflict.
 ```sh
 ray start --labels-file $(cat labels.txt)
 ```
@@ -163,6 +155,8 @@ actor_1 = Actor.options(
     label_selector={"ray.io/accelerator-type": "nvidia-h100"},
 ).remote()
 ```
+
+The `label_selector` requirement will be ignored for scheduling when running on a local Ray cluster. A warning indicating this behavior will be logged in this case.
 
 To schedule placement groups based on labels we will implement support for applying label selectors to placement groups on a per-bundle level. This would require adding a `bundle_label_selector` to the `ray.util.placement_group` constructor. The items in `bundle_label_selector` map 1:1 with the items in `bundles`.
 ```python
