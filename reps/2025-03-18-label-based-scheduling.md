@@ -130,9 +130,9 @@ To pass labels to a Ray node, we will amend the `--labels` argument to `ray star
 ray start --labels "key1=val1,key2=val2"
 ```
 
-We will also support sourcing labels from a file using bash for `ray start`. This command will read labels in YAML format to support passing down Pod labels into the Raylet using downward API. The labels passed in from file should be composable with those specified by `--labels`, with the value in `--labels` taking precedence if there is a conflict.
+We will also support reading labels from a file passed to `ray start`. This command will read labels in YAML format to support passing down Pod labels into the Raylet using downward API. The labels passed in from file should be composable with those specified by `--labels`, with the value in `--labels` taking precedence if there is a conflict.
 ```sh
-ray start --labels-file $(cat labels.txt)
+ray start --labels-file /path/to/labels.yaml
 ```
 
 To then schedule based on these labels, we will support passing a `label_selector` argument to the `@ray.remote` decorator. Adding this API here, rather than as a task/actor `scheduling_strategy`, will enable users to utilize label selectors in addition to other scheduling strategies.
