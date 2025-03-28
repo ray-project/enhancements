@@ -10,6 +10,7 @@ The change should be within Ray since it's a direct enhancement to the Ray sched
 ## Stewardship
 ### Required Reviewers
 @MengjinYan
+@andrewsykim
 
 ### Shepherd of the Proposal (should be a senior committer)
 @edoakes
