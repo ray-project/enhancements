@@ -44,12 +44,16 @@ To enable Kubernetes-based authentication and authorization, Ray will introduce 
 
 ### Authentication and Authorization Flow
 
-Upon receiving a request containing a token, Ray will first validate the token by calling the `TokenReview` API. An example `TokenReview` request is shown below:
+Upon receiving a request containing a token, Ray will validate tokens by first calling the TokenReview API.
+All TokenReview requests from Ray must specify the `ray.io` audience to prevent various forms of token misuse.
+Below is an example a TokenReview request:
 
 ```yaml
 apiVersion: authentication.k8s.io/v1
 kind: TokenReview
 spec:
+  audiences:
+  - ray.io
   token: a0AXooCgfzVabfasadftbNJ_4hl5556344534fZU0GsDlj...
 ```
 
@@ -85,7 +89,10 @@ spec:
     namespace: my-team
 ```
 
-The `SubjectAccessReview` ensures that only authenticated users with RBAC permission to perform the custom verb `ray-user` on the `RayCluster` are authorized. Granting access to this resource is managed by the `RayCluster` owner or the Kubernetes cluster administrator using standard Kubernetes RBAC APIs (ClusterRole, Role, RoleBinding, etc.). The name and namespace of the Ray cluster, used in the `SubjectAccessReview` request, will be populated in the `RAY_CLUSTER_NAME` and `RAY_CLUSTER_NAMESPACE` environment variables configured by KubeRay.
+The `SubjectAccessReview` ensures that only authenticated users who are also granted RBAC access to the RayCluster with custom verbs like
+`ray:read-user` and `ray:write-user` are allowed. How a user is granted access to this resource is up to the owner of the RayCluster or the cluster
+admin of the Kubernetes cluster using standard Kubernetes RBAC APIs (ClusterRole, Role, RoleBinding, etc). The name and namespace of the Ray cluster
+used in the SubjectAccessReview request will be stored in environment variables `RAY_CLUSTER_NAME` and `RAY_CLUSTER_NAMESPACE` configured by KubeRay.
 
 Below is a sequence diagram illustrating the entire authentication and authorization flow:
 
@@ -93,11 +100,51 @@ Below is a sequence diagram illustrating the entire authentication and authoriza
 
 ### Raylet Identity with Kubernetes Service Accounts
 
-By default, the Raylet's identity is bound to the service account token mounted in the Pod. When the Raylet starts with `RAY_AUTH_MODE` set to `k8s`, it checks the default service account token path: `/var/run/kubernetes.io/serviceaccount/token`. Users can override this behavior by setting `RAY_AUTH_TOKEN_PATH` or `RAY_AUTH_TOKEN`.
+By default, the identity of the Raylet will be bound to the Service Account token of the Pod.
+However, the Raylet will not use the default token in `/var/run/kubernetes.io/serviceaccount/token`.
+Instead, a dedicated token in path `/var/run/ray.io/serviceaccount/token` will be mounted using
+[serviceAccountToken projected volumes](https://kubernetes.io/docs/concepts/storage/projected-volumes/#serviceaccounttoken)
+with a token audience dedicated for Ray. Below is an example of how this would be configured through KubeRay:
+
+```yaml
+spec:
+  containers:
+  - name: ray-head
+    ...
+    ...
+    volumeMounts:
+    - name: ray-token
+      mountPath: "/var/run/ray.io/service-account"
+      readOnly: true
+  serviceAccountName: default
+  volumes:
+  - name: ray-token
+    projected:
+      sources:
+      - serviceAccountToken:
+          audience: ray.io
+          expirationSeconds: 3600
+          path: token
+```
+
+### Integration with External IAM
+
+Most managed Kubernetes platforms provide integrations with external IAM systems. For example, on GKE, Google Cloud IAM and Kubernetes RBAC are
+integrated to authorize users to perform actions. Google Cloud users can be referenced in Kubernetes RBAC objects to define and assign permissions.
+
+When Ray is enabled to use Kubernetes for authn/authz, it will also enable Ray users to use their external identities to connect to their clusters.
+For example, on GKE you can set `RAY_AUTH_TOKEN` to a token from gcloud as long as it specifies the intended audience:
+
+```bash
+$ export RAY_AUTH_TOKEN=$(gcloud auth print-identity-token --audiences=ray.io --impersonate-service-account="my-account@example.iam.gserviceaccount.com")
+
+$ ray job submit ...
+```
 
 ### Token caching in Ray
 
-Ray will cache authenticated tokens with a default TTL of 5 minutes to avoid querying the Kubernetes API for every request. Depending on user feedback, we may make the cache TTL configurable in the future.
+Ray will cache authenticated tokens with a default TTL of 5 minutes to avoid querying the Kubernetes API for every request.
+Depending on user feedback, we may make the cache TTL configurable in the future.
 
 ### KubeRay enhancements
 
@@ -125,7 +172,7 @@ metadata:
 rules:
 - apiGroups: ["ray.io"]
   resources: ["rayclusters"]
-  verbs: ["ray-user"]   # custom verb
+  verbs: ["ray:read", "ray:write"]   # custom verb
 ```
 
 The KubeRay Helm chart will also contain a ClusterRoleBinding for the service account used by the KubeRay operator:
@@ -148,10 +195,6 @@ roleRef:
 This ClusterRoleBinding grants the KubeRay operator access to every `RayCluster`. This access is required for `RayJob` and `RayService` custom resources, as KubeRay needs authenticated access to Ray clusters to submit jobs and manage Serve applications.
 
 ## (Optional) Follow-on Work
-
-### Finer-grained access control with additional RBAC verbs
-
-In the future, we may introduce additional custom RBAC verbs for finer-grained access control over Ray clusters. Examples include `ray-reader`, `ray-writer`, and `ray-admin`.
 
 ### Configurable cache TTL for tokens
 
