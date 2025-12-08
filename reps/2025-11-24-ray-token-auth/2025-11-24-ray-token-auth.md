@@ -4,7 +4,7 @@
 
 Ray v2.52.0 introduced support for token authentication, enabling Ray to enforce the use of a single, statically generated token in the authorization header for all requests to the Ray Dashboard, GCS server, and other control-plane services.
 
-This feature was developed and shipped quickly as a mitigation for a critical vulnerability (CVE-2025-62593) and did not go through a formal design review. This document provides a retrospective of the design and architecture of token authentication in Ray, focusing on how configuration, token loading, propagation, and verification work across C++, Python, and the dashboard. We conclude with a brief overview of the Kubernetes integration and related enhancements that build on this foundation.
+This feature was developed and shipped quickly as a mitigation for a critical vulnerability (`CVE-2025-62593`) and did not go through a formal design review. This document provides a retrospective of the design and architecture of token authentication in Ray, focusing on how configuration, token loading, propagation, and verification work across C++, Python, and the dashboard. We conclude with a brief overview of the Kubernetes integration and related enhancements that build on this foundation.
 
 ## Should this change be within `ray` or outside?
 
@@ -45,7 +45,7 @@ Ray’s authentication behavior is controlled by a configuration option surfaced
 Once token auth is enabled, Ray looks for the token in the following order (highest to lowest precedence):
 
 1.  **RAY_AUTH_TOKEN** (env)
-    If set and non-empty, the value of **RAY_AUTH_TOKEN** is used directly as the token string. This is the preferred option for secure deployments where tokens are injected as environment variables by a secret manager or orchestration system.
+    If set and non-empty, the value of **RAY_AUTH_TOKEN** is used directly as the token string.
 2.  **RAY_AUTH_TOKEN_PATH** (env pointing to file)
     If **RAY_AUTH_TOKEN_PATH** is set, Ray reads the token from that file. If the file cannot be read or is empty, Ray treats this as a fatal misconfiguration and aborts rather than silently falling back.
 3.  Default token file path
@@ -73,7 +73,7 @@ HTTP servers similarly expect one of:
 
 #### C++ Clients and Servers
 
-On the C++ side, token attachment to outgoing RPCs uses gRPC’s interceptor API. The client interceptor is defined in:
+On the C++ side, token attachment to outgoing RPCs is automated using gRPC’s interceptor API. The client interceptor is defined in:
 
 * [src/ray/rpc/authentication/token_auth_client_interceptor.h](https://github.com/ray-project/ray/blob/15393edbe72f5079279d3a0e46b72adc7496cdfc/src/ray/rpc/authentication/token_auth_client_interceptor.h#L27-L28)
 
@@ -89,14 +89,14 @@ Because all gRPC services inherit from the same base call implementation, the va
 
 Most Python components use Cython bindings over the C++ clients, so they automatically inherit the same token behavior as described above without additional Python-level code.
 
-For components that still construct gRPC clients or servers directly in Python, Ray introduces explicit interceptors (both sync and async) that add and validate authentication metadata:
+For components that still construct gRPC clients or servers directly in Python, We introduced explicit interceptors (both sync and async) that add and validate authentication metadata:
 
-* Client interceptors: https://github.com/ray-project/ray/blob/5e71d58badbfdcfc002826398c3e02469065cc71/python/ray/_private/authentication/grpc_authentication_client_interceptor.py#L38-L39
-* Server interceptors: https://github.com/ray-project/ray/blob/5e71d58badbfdcfc002826398c3e02469065cc71/python/ray/_private/authentication/grpc_authentication_server_interceptor.py#L47
+* Client interceptors: https://github.com/ray-project/ray/blob/5e71d58badbfdcfc002826398c3e02469065cc71/python/ray/_private/authentication/grpc_authentication_client_interceptor.py
+* Server interceptors: https://github.com/ray-project/ray/blob/5e71d58badbfdcfc002826398c3e02469065cc71/python/ray/_private/authentication/grpc_authentication_server_interceptor.py
 
 All Python gRPC clients and servers are expected to be created using helper utilities from:
 
-* [python/ray/_private/grpc_utils.py](https://github.com/ray-project/ray/blob/5e71d58badbfdcfc002826398c3e02469065cc71/python/ray/_private/grpc_utils.py#L10-L11)
+* [python/ray/_private/grpc_utils.py](https://github.com/ray-project/ray/blob/5e71d58badbfdcfc002826398c3e02469065cc71/python/ray/_private/grpc_utils.py)
 
 These helpers automatically attach the correct client/server interceptors when token auth is enabled. The convention is to always go through the shared utilities so that auth is consistently enforced, never constructing raw gRPC channels or servers directly.
 
@@ -105,18 +105,17 @@ These helpers automatically attach the correct client/server interceptors when t
 For HTTP services, token authentication is implemented using aiohttp middleware:
 
 * `python/ray/_private/authentication/http_token_authentication.py` (middleware + helpers)
-* Middleware is added from dashboard head / `runtime_env_agent` and other HTTP services.
 
-The middleware must be explicitly added to each server’s middleware list (e.g., dashboard head and `runtime_env_agent`). Once configured, it:
+The middleware must be explicitly added to each server’s middleware list (e.g., `dashboard_head` service and `runtime_env_agent` service). Once configured, it:
 
-* Extracts the token from `Authorization`, `X-Ray-Authorization`, or `ray-authentication-token` cookie.
+* Extracts the token from `Authorization` header or `X-Ray-Authorization` header, or `ray-authentication-token` cookie.
 * Validates the token and:
     * Returns **401 Unauthorized** for missing token.
     * Returns **403 Forbidden** for invalid token.
 
 Client-side, HTTP callers can use a common helper to attach headers:
 
-* `get_auth_headers_if_auth_enabled()` [https://github.com/ray-project/ray/blob/5afe5cb93d7b29a9e6b0e2c766190fc58a85bf72/python/ray/_private/authentication/http_token_authentication.py#L85](https://www.google.com/url?q=https://github.com/ray-project/ray/blob/5afe5cb93d7b29a9e6b0e2c766190fc58a85bf72/python/ray/_private/authentication/http_token_authentication.py%23L85&sa=D&source=editors&ust=1764972438479492&usg=AOvVaw3uIoskXhpX_9GuthkR5woX)
+* `get_auth_headers_if_auth_enabled()` [https://github.com/ray-project/ray/blob/5afe5cb93d7b29a9e6b0e2c766190fc58a85bf72/python/ray/_private/authentication/http_token_authentication.py](https://github.com/ray-project/ray/blob/master/python/ray/_private/authentication/http_token_authentication.py#L85)
 
 This helper computes `Authorization: Bearer <token>` if token auth is enabled and merges it with any user-supplied headers. For HTTP, middleware and header injection are not automatically wired up for new services; they must be added manually.
 
@@ -125,12 +124,13 @@ This helper computes `Authorization: Bearer <token>` if token auth is enabled an
 When a Ray cluster is started with `RAY_AUTH_MODE=token`, accessing the dashboard triggers an authentication flow in the UI:
 
 1.  The user first sees a dialog prompting them to enter the authentication token.
-2.  Once the user submits the token, the frontend sends a `POST` request to the dashboard head’s `/api/authenticate` endpoint with `Authorization: Bearer <token>`.
-3.  The dashboard head validates the token using the same core validation logic used elsewhere.
+2.  Once the user submits the token, the frontend sends a `POST` request to the dashboard head’s `/api/authenticate` endpoint with `Authorization: Bearer <token>` header.
+3.  The dashboard head validates the token.
 4.  If validation succeeds, the server responds with **200 OK** and instructs the browser to set a cookie:
     * Name: `ray-authentication-token`
     * Value: `<token>`
     * Attributes: `HttpOnly`, `SameSite=Strict`, (and `Secure` when running over HTTPS).
+    * max_age: 30days (cookie is cleared after 30 days)
 
 From this point on, subsequent dashboard UI API calls automatically include the cookie and thus satisfy the middleware’s authentication checks.
 
