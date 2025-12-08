@@ -4,7 +4,9 @@
 
 Ray v2.52.0 introduced support for token authentication, enabling Ray to enforce the use of a single, statically generated token in the authorization header for all requests to the Ray Dashboard, GCS server, and other control-plane services.
 
-This feature was developed and shipped quickly as a mitigation for a critical vulnerability (`CVE-2025-62593`) and did not go through a formal design review. This document provides a retrospective of the design and architecture of token authentication in Ray, focusing on how configuration, token loading, propagation, and verification work across C++, Python, and the dashboard. We conclude with a brief overview of the Kubernetes integration and related enhancements that build on this foundation.
+This document outlines the design and architecture of token authentication in Ray, focusing on how configuration, token loading, propagation, and verification work across C++, Python, and the dashboard.
+
+We also provide an overview of the integration with Kubernetes native authentication and related enhancements.
 
 ## Should this change be within `ray` or outside?
 
@@ -53,7 +55,8 @@ Once token auth is enabled, Ray looks for the token in the following order (high
     * `~/.ray/auth_token` on POSIX systems
     * `%USERPROFILE%\.ray\auth_token` on Windows
     * `/var/run/kubernetes.io/serviceaccount/token` (only when **RAY_ENABLE_K8S_TOKEN_AUTH** is set)
-    For local clusters started with `ray.init()` and auth enabled, Ray will auto-generate a new token (using `secrets.token_hex(32)` in Python) and persist it at this default path if no token exists.
+
+For local clusters started with `ray.init()` and auth enabled, Ray will automatically generate a new token and persist it at this default path if no token exists.
 
 Whitespace is stripped when reading the token from files to avoid issues from trailing newlines.
 
@@ -69,7 +72,7 @@ HTTP servers similarly expect one of:
 
 1.  `Authorization: Bearer <token>` – used by Ray CLI and other internal HTTP clients.
 2.  Cookie `ray-authentication-token=<token>` – used by the browser-based dashboard.
-3.  `X-Ray-Authorization: Bearer <token>` – used by KubeRay and environments where the standard `Authorization` header is not preserved.
+3.  `X-Ray-Authorization: Bearer <token>` – used by KubeRay and other environments where the standard `Authorization` header cannot be used because it may be stripped automatically by a proxy in front of the cluster.
 
 #### C++ Clients and Servers
 
@@ -323,3 +326,7 @@ This `ClusterRoleBinding` grants KubeRay operator access to every RayCluster. Th
 ### Configurable cache TTL for tokens
 
 We may explore optimizations for token caching and provide an option for users to configure the token cache TTL.
+
+### Deeper integration with Kubernetes RBAC system.
+
+Kubernetes provides a rich RBAC system that allows scoping down permissions where needed. For example, a given role may be able to list or read a resource but not updated it. In the future, we may integrate more deeply with this system in order to implement fine-grained access control to a Ray cluster.
