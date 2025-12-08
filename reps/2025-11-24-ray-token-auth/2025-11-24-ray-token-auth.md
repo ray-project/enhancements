@@ -327,6 +327,6 @@ This `ClusterRoleBinding` grants KubeRay operator access to every RayCluster. Th
 
 We may explore optimizations for token caching and provide an option for users to configure the token cache TTL.
 
-### Deeper integration with Kubernetes RBAC system.
+### Fine-grained access control on Kubernetes
 
-Kubernetes provides a rich RBAC system that allows scoping down permissions where needed. For example, a given role may be able to list or read a resource but not updated it. In the future, we may integrate more deeply with this system in order to implement fine-grained access control to a Ray cluster.
+Kubernetes provides a rich RBAC system that allows scoping down permissions where needed. For example, a given role may be able to list or read a resource but not updated it. In the future, we may integrate more deeply with this system in order to implement fine-grained access control to a Ray cluster. This is not in scope for the initial implementation.
