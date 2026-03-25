@@ -119,6 +119,56 @@ export RAY_GCS_STORAGE_PATH=/data/gcs-state    # must be on a persistent volume
 export RAY_GCS_STORAGE=redis                    # or: export RAY_REDIS_ADDRESS=...
 ```
 
+#### RocksDB Configuration
+
+GCS metadata is small (10–100 MB across ~10 column families: ACTOR, NODE, JOB, PLACEMENT_GROUP, WORKER, etc.) with moderate write throughput and read-heavy recovery. The configuration priorities are **crash safety** and **fast recovery**, not write throughput.
+
+##### Default Configuration (Hardcoded)
+
+The following are compiled into `RocksDbStoreClient` with conservative values sized for this workload:
+
+| Category | Setting | Default | Rationale |
+|---|---|---|---|
+| **Durability** | `WriteOptions::sync` | `true` (fsync every write) | GCS acknowledges state changes to callers. Without fsync, a crash can lose acknowledged writes — violating the FT durability contract. On SSD, fsync adds ~0.1–0.5ms per write, acceptable for GCS's moderate write rate. |
+| **Durability** | `manual_wal_flush` | `false` | WAL writes flush to OS page cache immediately. Combined with sync writes, ensures durability. |
+| **Durability** | `bytes_per_sync` | 1 MB | Periodic sync of SST files during compaction reduces data loss window. |
+| **Memory** | Write buffer (per CF) | 16 MB × 2 buffers | Default 64 MB is oversized for CFs holding 1–10 MB each. With ~10 CFs, worst-case memory: `10 × 16 MB × 2 + 32 MB cache ≈ 352 MB`. |
+| **Memory** | Block cache (shared) | 32 MB LRU | Covers a large fraction of total data. Hot metadata (active actors, live nodes) stays cached during normal operation. |
+| **Compaction** | Style | Level compaction with dynamic level bytes | Correct for mixed read/write with recovery scans. Dynamic level bytes auto-adjusts for small data sizes. |
+| **Compaction** | `max_background_jobs` | 2 | One flush thread, one compaction thread. With 10–100 MB data, compaction is rare and fast. |
+| **Compaction** | `target_file_size_base` | 4 MB | Sized for small metadata. Smaller files = more granular compaction, faster recovery reads. |
+| **Compaction** | `max_bytes_for_level_base` | 32 MB | Most data stays in L0/L1. Default 256 MB is far too large for this workload. |
+| **Compression** | Per-level | None (L0–L1), LZ4 (L2+) | No compression on hot levels for fastest recovery reads. LZ4 on cold levels for modest space savings. |
+| **Read perf** | Bloom filter | 10 bits/key | ~1% false positive rate. Essential for point lookups (`AsyncGet`, `AsyncExists`). |
+| **Read perf** | `max_open_files` | -1 (unlimited) | With tiny data (tens of SST files), keep all files open to avoid table cache misses during recovery. |
+| **I/O** | Direct I/O | Disabled | Does not apply to WAL (no durability benefit). OS page cache helps with repeated hot-path reads. Can break on NFS/FUSE-backed PVs in Kubernetes. |
+| **Logging** | `info_log_level` | WARN | INFO-level RocksDB logs are extremely verbose. WARN captures actionable events (compaction stalls, corruption warnings). |
+
+##### User-Configurable Options
+
+Operators can tune these settings via environment variables for their deployment:
+
+| Env Var | Default | Description |
+|---|---|---|
+| `RAY_GCS_STORAGE_PATH` | *(required)* | Path to persistent volume for RocksDB data. |
+| `RAY_GCS_ROCKSDB_SYNC_WRITES` | `1` | fsync on every write. Set `0` for dev/test when crash safety is not needed (~5–10× write throughput improvement). |
+| `RAY_GCS_ROCKSDB_BLOCK_CACHE_MB` | `32` | Block cache size in MB. Increase for clusters with very large metadata (thousands of actors/jobs). Range: 8–256. |
+| `RAY_GCS_ROCKSDB_WRITE_BUFFER_SIZE_MB` | `16` | Per-column-family write buffer size in MB. Increase for high metadata churn. Range: 4–64. |
+| `RAY_GCS_ROCKSDB_MAX_BACKGROUND_JOBS` | `2` | Max compaction/flush threads. Increase to 4 on head nodes with spare CPU if compaction falls behind. Range: 1–8. |
+| `RAY_GCS_ROCKSDB_COMPRESSION` | `1` | LZ4 compression on L2+ levels. Set `0` to disable — saves CPU at cost of slightly more disk. |
+| `RAY_GCS_ROCKSDB_WAL_DIR` | *(same as storage path)* | Separate directory for WAL files. Useful if main storage is slow but a faster disk is available for WAL. |
+
+##### What Is NOT Configurable (and Why)
+
+The following are intentionally hardcoded because incorrect values can break correctness or crash safety:
+
+- **`create_if_missing` / `create_missing_column_families`** — Must be `true`. GCS creates the DB on first start, and new Ray versions may add column families. Exposing these invites misconfiguration that prevents startup or breaks upgrades.
+- **Compaction style and level sizing** — Level compaction with dynamic level bytes is the only correct choice for this workload. Universal compaction increases space amplification; FIFO is for TTL workloads. `target_file_size_base` and `max_bytes_for_level_base` are coupled — changing one without the other causes pathological compaction.
+- **Bloom filter bits and block size** — 10 bits/key and 16 KB blocks are tuned for point lookups on metadata. These have subtle interactions with compression ratios and cache efficiency.
+- **`prefix_extractor`** — RocksDB warns this cannot be changed after creation. GCS uses full-key lookups, not prefix scans on key substrings. Incorrect settings are unrecoverable.
+- **`merge_operator`** — Custom operator for `AsyncGetNextJobID` atomic increment. Changing it corrupts the job ID sequence.
+- **Direct I/O** — No durability benefit (doesn't apply to WAL) and can break on Kubernetes PV implementations.
+
 #### Recovery Flow
 
 ```mermaid
