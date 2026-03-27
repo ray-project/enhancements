@@ -199,12 +199,19 @@ flowchart TD
 | Recovery read (full state) | Bound by network bandwidth | Bound by disk bandwidth (faster) |
 | Failure mode | Network partition, Redis crash, topology change | Disk failure (rare with cloud PVs) |
 
-#### What This Does NOT Provide
+#### What This Does and Does NOT Provide
 
-This proposal provides **persistence**, not **high availability**. The distinction:
+This proposal provides **GCS persistence** — cluster metadata survives head pod restarts. It is one layer in the full fault tolerance stack, not a complete solution by itself.
 
-- **Persistence**: GCS state survives head pod restart. There is a recovery window (seconds to minutes) during which the cluster is unavailable.
-- **High Availability**: Zero-downtime failover with a standby GCS. This requires active/standby or Raft replication — a separate, larger effort.
+| Concern | What happens during head pod restart | Addressed by |
+|---|---|---|
+| **Cluster metadata** | Preserved in RocksDB, restored on restart | **This REP** |
+| **Worker reconnection** | Workers reconnect within `gcs_rpc_server_reconnect_timeout_s` | Existing GCS FT mechanism |
+| **Driver/submitter pod** | Survives if running in a separate pod (RayJob), but pending RPCs may timeout and crash the driver process | **Needs separate work** — RayJob controller and driver reconnection logic |
+| **Distributed training (NCCL)** | NCCL training group breaks — NCCL has no reconnection. Training must restart from last checkpoint | **Application responsibility** — Ray Train + periodic checkpointing (`TorchTrainer.restore()`) |
+| **High availability** | GCS is unavailable during restart (seconds to minutes) | **Separate effort** — active/standby GCS with Raft or WAL replication |
+
+For the distributed training use case that motivates this REP: GCS persistence eliminates the need to reprovision the entire cluster after a head node failure. Combined with training checkpointing, this reduces the blast radius from "restart a 24-hour job from hour 0" to "restart training from the last checkpoint while the cluster recovers in place."
 
 The recovery model is identical to today's Redis-based FT: GCS goes down, restarts, reads state, workers reconnect. The difference is purely in where state is persisted — local disk instead of a remote Redis instance.
 
@@ -393,13 +400,15 @@ We recommend **RocksDB** based on:
 
 ## Follow-on Work
 
-1. **[potential] Active/Standby GCS** — A hot standby GCS process that takes over on failure, using RocksDB on a shared ReadWriteMany volume or replicated via WAL shipping. This would provide true HA (zero-downtime failover). The embedded storage backend proposed here is a prerequisite.
+1. **[needed] Driver resilience during head pod restart** — The RayJob submitter pod survives head pod restarts physically, but the driver process may crash due to gRPC timeouts on pending RPCs. The RayJob controller and driver reconnection logic need hardening so the driver can survive GCS downtime gracefully and resume orchestration after recovery.
 
-2. **[potential] SQLite backend** — SQLite as a lighter alternative for smaller clusters where minimal dependency footprint is preferred over KV-optimized performance (see alternatives analysis above).
+2. **[potential] Active/Standby GCS** — A hot standby GCS process that takes over on failure, using RocksDB on a shared ReadWriteMany volume or replicated via WAL shipping. This would provide true HA (zero-downtime failover). The embedded storage backend proposed here is a prerequisite.
 
-3. **[potential] State compaction and TTL** — Automatic cleanup of stale entries (completed jobs, dead actors) to bound RocksDB size.
+3. **[potential] SQLite backend** — SQLite as a lighter alternative for smaller clusters where minimal dependency footprint is preferred over KV-optimized performance (see alternatives analysis above).
 
-4. **[potential] Pluggable external backends** — The `StoreClient` interface can support additional external backends (etcd, DynamoDB, etc.) using the same configuration pattern. This REP establishes the multi-backend configuration surface that future backends would use.
+4. **[potential] State compaction and TTL** — Automatic cleanup of stale entries (completed jobs, dead actors) to bound RocksDB size.
+
+5. **[potential] Pluggable external backends** — The `StoreClient` interface can support additional external backends (etcd, DynamoDB, etc.) using the same configuration pattern. This REP establishes the multi-backend configuration surface that future backends would use.
 
 ## References
 
