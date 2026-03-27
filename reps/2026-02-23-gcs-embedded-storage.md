@@ -17,7 +17,7 @@ This enhancement proposes an **embedded storage backend** (RocksDB) as an altern
 
 ### Should this change be within `ray` or outside?
 
-This change affects both `ray` (new `StoreClient` implementation in C++) and `kuberay` (PVC provisioning and configuration for the embedded storage path).
+This change affects both `ray` (new `StoreClient` implementation in C++) and `kuberay` (automatic PVC lifecycle management so users don't need to create or clean up PVCs manually).
 
 ## Stewardship
 
@@ -152,22 +152,31 @@ Operators can tune these settings via environment variables for their deployment
 |---|---|---|
 | `RAY_GCS_STORAGE_PATH` | *(required)* | Path to persistent volume for RocksDB data. |
 | `RAY_GCS_ROCKSDB_SYNC_WRITES` | `1` | fsync on every write. Set `0` for dev/test when crash safety is not needed (~5–10× write throughput improvement). |
-| `RAY_GCS_ROCKSDB_BLOCK_CACHE_MB` | `32` | Block cache size in MB. Increase for clusters with very large metadata (thousands of actors/jobs). Range: 8–256. |
-| `RAY_GCS_ROCKSDB_WRITE_BUFFER_SIZE_MB` | `16` | Per-column-family write buffer size in MB. Increase for high metadata churn. Range: 4–64. |
-| `RAY_GCS_ROCKSDB_MAX_BACKGROUND_JOBS` | `2` | Max compaction/flush threads. Increase to 4 on head nodes with spare CPU if compaction falls behind. Range: 1–8. |
-| `RAY_GCS_ROCKSDB_COMPRESSION` | `1` | LZ4 compression on L2+ levels. Set `0` to disable — saves CPU at cost of slightly more disk. |
 | `RAY_GCS_ROCKSDB_WAL_DIR` | *(same as storage path)* | Separate directory for WAL files. Useful if main storage is slow but a faster disk is available for WAL. |
+
+Additional tuning knobs (block cache size, write buffer size, background jobs, compression) are intentionally omitted from the initial release. The hardcoded defaults are sized for the GCS metadata workload (10–100 MB). If operators report specific performance issues, we can expose targeted env vars in a follow-up — starting restrictive is safer than starting permissive.
+
+##### Why Environment Variables, Not a Config File
+
+An alternative is a single `RAY_GCS_ROCKSDB_CONFIG_FILE` pointing to a RocksDB options file. We chose env vars because:
+
+- **Safety guardrails.** A raw RocksDB options file exposes ~200 settings, including ones that silently break correctness: changing `merge_operator` corrupts the job ID sequence, changing `create_if_missing` prevents startup, changing compaction style causes pathological space amplification. The env var approach acts as a curated API surface that only exposes safe-to-tune options.
+- **Ray convention.** Every Ray component is configured via environment variables (`RAY_REDIS_ADDRESS`, `RAY_GCS_SERVER_PORT`, etc.). A config file would be the only exception.
+- **Kubernetes-native.** Env vars map directly to pod spec `.env[]`. A config file requires creating a ConfigMap, mounting it, and keeping it in sync — extra operational burden for no functional benefit.
+
+If advanced tuning demand emerges in production, a config file override can be added as follow-on work with an explicit allowlist of safe options.
 
 ##### What Is NOT Configurable (and Why)
 
 The following are intentionally hardcoded because incorrect values can break correctness or crash safety:
 
-- **`create_if_missing` / `create_missing_column_families`** — Must be `true`. GCS creates the DB on first start, and new Ray versions may add column families. Exposing these invites misconfiguration that prevents startup or breaks upgrades.
-- **Compaction style and level sizing** — Level compaction with dynamic level bytes is the only correct choice for this workload. Universal compaction increases space amplification; FIFO is for TTL workloads. `target_file_size_base` and `max_bytes_for_level_base` are coupled — changing one without the other causes pathological compaction.
-- **Bloom filter bits and block size** — 10 bits/key and 16 KB blocks are tuned for point lookups on metadata. These have subtle interactions with compression ratios and cache efficiency.
-- **`prefix_extractor`** — RocksDB warns this cannot be changed after creation. GCS uses full-key lookups, not prefix scans on key substrings. Incorrect settings are unrecoverable.
+- **`create_if_missing` / `create_missing_column_families`** — Must be `true`. GCS creates the DB on first start, and new Ray versions may add column families.
+- **Compaction style and level sizing** — Level compaction with dynamic level bytes is the only correct choice for this workload. `target_file_size_base` and `max_bytes_for_level_base` are coupled — changing one without the other causes pathological compaction.
+- **Bloom filter bits and block size** — 10 bits/key and 16 KB blocks are tuned for point lookups on metadata. Subtle interactions with compression ratios and cache efficiency.
+- **`prefix_extractor`** — Cannot be changed after DB creation. Incorrect settings are unrecoverable.
 - **`merge_operator`** — Custom operator for `AsyncGetNextJobID` atomic increment. Changing it corrupts the job ID sequence.
 - **Direct I/O** — No durability benefit (doesn't apply to WAL) and can break on Kubernetes PV implementations.
+- **Memory settings** (block cache, write buffers) — Hardcoded at conservative values (32 MB cache, 16 MB × 2 write buffers per CF). These ensure bounded memory on shared head nodes without operator tuning.
 
 #### Recovery Flow
 
@@ -219,30 +228,61 @@ All changes are in `src/ray/gcs/store_client/`:
 
 ### KubeRay Changes
 
-1. **RayCluster CRD extension**
+When `gcsFaultTolerance.backend: rocksdb` is set, the KubeRay operator automatically manages the full PVC lifecycle — users don't create, mount, or clean up PVCs manually.
 
-   ```yaml
-   spec:
-     gcsFaultTolerance:
-       # Existing: Redis-based
-       # redisAddress: "redis:6379"
+**Note:** RocksDB is an embedded C++ library linked into the GCS process — it is not a sidecar or separate service. The PVC simply provides a persistent directory for GCS to write to.
 
-       # New: Embedded storage
-       backend: rocksdb
-       storage:
-         size: 10Gi
-         storageClassName: ssd   # optional, uses default SC if omitted
-   ```
+#### User-Facing Configuration
 
-2. **Operator reconciliation**
-   - When `backend: rocksdb` is set, create a PVC and mount it on the head pod at the configured path
-   - Set `RAY_GCS_STORAGE=rocksdb` and `RAY_GCS_STORAGE_PATH` env vars on the head container
-   - Ensure PVC lifecycle is tied to the RayCluster (deleted when cluster is deleted, persists across head pod restarts)
+```yaml
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: my-ray-cluster
+spec:
+  gcsFaultTolerance:
+    backend: rocksdb
+    storage:
+      size: 1Gi                # GCS metadata is 10-100MB; 1Gi provides ample headroom
+      storageClassName: ssd    # optional, uses default SC if omitted
+```
 
-3. **Head pod restart behavior**
-   - KubeRay already restarts the head pod on failure
-   - The PVC survives pod deletion/restart by design
-   - No special handling needed beyond ensuring the PVC is mounted
+This is all the user specifies. The operator handles everything else.
+
+#### What the Operator Does
+
+When `backend: rocksdb` is set, the KubeRay operator reconciliation:
+
+1. **Creates a PVC** named `{cluster-name}-gcs-pvc` with `ReadWriteOnce` access mode, the specified size and storage class, and `ownerReferences` pointing to the RayCluster (so Kubernetes garbage collection deletes the PVC automatically when the cluster is deleted).
+2. **Mounts the PVC** on the head pod at `/data/gcs-state`.
+3. **Sets environment variables** on the head container: `RAY_GCS_STORAGE=rocksdb` and `RAY_GCS_STORAGE_PATH=/data/gcs-state`.
+
+The resulting head pod spec (generated by the operator, not written by the user):
+
+```yaml
+# Auto-generated by KubeRay operator — users do not write this
+containers:
+- name: ray-head
+  env:
+  - name: RAY_GCS_STORAGE
+    value: "rocksdb"
+  - name: RAY_GCS_STORAGE_PATH
+    value: "/data/gcs-state"
+  volumeMounts:
+  - name: gcs-storage
+    mountPath: /data/gcs-state
+volumes:
+- name: gcs-storage
+  persistentVolumeClaim:
+    claimName: my-ray-cluster-gcs-pvc
+```
+
+#### PVC Lifecycle
+
+- **Created** by the operator when the RayCluster is created with `backend: rocksdb`.
+- **Survives head pod restarts.** Kubernetes does not delete a PVC when its pod is deleted. When the head pod restarts, it re-mounts the same PVC and GCS recovers from the existing RocksDB data.
+- **Deleted automatically** when the RayCluster is deleted, via `ownerReferences` and Kubernetes garbage collection. No manual cleanup required.
+- **Stale data protection.** On startup, `RocksDbStoreClient` should validate that the RocksDB data directory belongs to this cluster (e.g., by storing and checking a cluster ID marker). If a PVC is accidentally reused with a different cluster, GCS should fail-fast rather than load stale state from a previous cluster.
 
 ## Compatibility, Deprecation, and Migration Plan
 
@@ -267,8 +307,8 @@ All changes are in `src/ray/gcs/store_client/`:
 
 ### KubeRay E2E Tests
 
-- RayCluster with `gcsFaultTolerance.backend: rocksdb` creates PVC and mounts it
-- Head pod deletion + restart recovers cluster state
+- RayCluster with `gcsFaultTolerance.backend: rocksdb` creates PVC and mounts it on head pod automatically
+- Head pod deletion + restart recovers cluster state from PVC
 - RayJob completes successfully after head pod restart mid-job
 - PVC is cleaned up when RayCluster is deleted
 
