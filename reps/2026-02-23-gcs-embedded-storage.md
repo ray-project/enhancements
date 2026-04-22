@@ -108,6 +108,16 @@ The `RedisStoreClient` uses Redis `INCR` for atomic job ID generation. RocksDB p
 // on a reserved key is sufficient. No distributed coordination needed.
 ```
 
+#### Durability and Consistency Semantics
+
+Although the `StoreClient` API is async (`AsyncPut` returns immediately and invokes a callback), the storage-layer write itself is synchronous:
+
+1. `AsyncPut` dispatches the write to an I/O worker thread so the GCS event loop is not blocked.
+2. The worker calls `rocksdb::Put` with `WriteOptions::sync = true`, which fsyncs the WAL before returning.
+3. The callback fires only after fsync completes. GCS's RPC reply to the caller is sent inside that callback.
+
+The net effect: a caller observes an ack only after the write is durable on disk. The "async" here refers to thread decoupling, not fire-and-forget semantics. There is no separate in-memory GCS cache that can diverge from RocksDB — the store client is authoritative for persisted state.
+
 #### Storage Path and Configuration
 
 ```bash
@@ -121,7 +131,7 @@ export RAY_GCS_STORAGE=redis                    # or: export RAY_REDIS_ADDRESS=.
 
 #### RocksDB Configuration
 
-GCS metadata is small (10–100 MB across ~10 column families: ACTOR, NODE, JOB, PLACEMENT_GROUP, WORKER, etc.) with moderate write throughput and read-heavy recovery. The configuration priorities are **crash safety** and **fast recovery**, not write throughput.
+GCS metadata is typically small (10–100 MB across ~10 column families: ACTOR, NODE, JOB, PLACEMENT_GROUP, WORKER, etc.) for a cluster in steady-state operation, with moderate write throughput and read-heavy recovery. This is an operating-size estimate, not a hard ceiling — long-running clusters with accumulating job history, dead-actor entries, and completed placement groups can grow beyond this. Unbounded growth is not unique to this proposal (the same applies to Redis-backed FT today) and is addressed by state compaction and TTL as follow-on work. The configuration priorities are **crash safety** and **fast recovery**, not write throughput.
 
 ##### Default Configuration (Hardcoded)
 
@@ -215,6 +225,27 @@ For the distributed training use case that motivates this REP: GCS persistence e
 
 The recovery model is identical to today's Redis-based FT: GCS goes down, restarts, reads state, workers reconnect. The difference is purely in where state is persisted — local disk instead of a remote Redis instance.
 
+#### Impact on GCS OOM
+
+GCS is OOM-killed today primarily due to its in-memory working set (actor / task / node tables, task lineage), not the storage backend. This proposal does not change how much state GCS keeps resident and adds a small constant memory overhead (~20–50 MB for the RocksDB block cache and write buffers). In strict terms this makes head-pod memory pressure modestly worse, not better.
+
+Durable local storage does, however, *unlock* a future optimization: paging cold state out of RAM and faulting it back from RocksDB on demand (analogous to a database buffer pool). That path to making GCS OOM-resistant is out of scope for this REP and is listed under "State compaction and TTL" in follow-on work.
+
+#### When to Use Embedded Storage vs Redis
+
+Both backends remain supported and the choice is left to the operator. Rough guidance:
+
+| Situation | Suggested Backend |
+|---|---|
+| New deployment, especially on KubeRay — want fewer moving parts and minimal operational surface | Embedded (RocksDB) |
+| Latency-sensitive writes; want to avoid network RTT on every state change | Embedded (RocksDB) |
+| Already operate managed Redis at high quality, with monitoring / backup / upgrade story | Redis |
+| Need external inspection of GCS state (e.g., `redis-cli`) or cross-cluster state sharing | Redis |
+| Head-pod memory is tightly constrained and even ~20–50 MB of extra overhead matters | Redis |
+| Storage must survive loss of the entire head node, not just pod restart | Redis, or embedded on a remote / network-attached PV |
+
+The embedded backend is node-local: state is tied to the PV(C), and for `ReadWriteOnce` volumes, to re-attachability in the same zone / node pool. Redis, being external, decouples state from head-node locality.
+
 ### Ray Core Changes
 
 All changes are in `src/ray/gcs/store_client/`:
@@ -232,6 +263,17 @@ All changes are in `src/ray/gcs/store_client/`:
 3. **Build system: `BUILD.bazel`**
    - Add RocksDB as a new third-party dependency. RocksDB is available in the [Bazel Central Registry](https://registry.bazel.build/modules/rocksdb) (`bazel_dep(name = "rocksdb", version = "9.11.2")`) and is widely used in C++ infrastructure projects (CockroachDB, TiKV, Kafka Streams).
    - **Note:** Ray does not currently depend on RocksDB. This is a new dependency.
+
+### Deployment on Non-Kubernetes Platforms
+
+The `RocksDbStoreClient` change is platform-agnostic. It only requires a local directory that survives head-process restarts. Examples:
+
+- **Bare metal / VM** — attach a local SSD or block volume, mount at a stable path, set `RAY_GCS_STORAGE=rocksdb` and `RAY_GCS_STORAGE_PATH=/path/to/mount`.
+- **Cloud VMs (EC2, GCE, Azure)** — mount an attached volume (EBS, Persistent Disk, Managed Disk) at the configured path.
+- **On-prem NAS / SAN** — any stable POSIX filesystem mount works, with the usual caveats about NFS and fsync semantics.
+- **Other orchestrators (Nomad, Slurm, ECS, etc.)** — the env-var configuration surface is the same; automating volume lifecycle (equivalent to the KubeRay PVC work below) would be orchestrator-specific follow-on work.
+
+The KubeRay changes described below automate volume lifecycle for Kubernetes. Equivalent integrations for other orchestrators are out of scope for this REP.
 
 ### KubeRay Changes
 
