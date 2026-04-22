@@ -242,9 +242,20 @@ Both backends remain supported and the choice is left to the operator. Rough gui
 | Already operate managed Redis at high quality, with monitoring / backup / upgrade story | Redis |
 | Need external inspection of GCS state (e.g., `redis-cli`) or cross-cluster state sharing | Redis |
 | Head-pod memory is tightly constrained and even ~20–50 MB of extra overhead matters | Redis |
-| Storage must survive loss of the entire head node, not just pod restart | Redis, or embedded on a remote / network-attached PV |
+| Cross-zone failover required (single-zone storage outage must not stop the cluster) | Redis, or embedded on a regional / RWX volume |
 
-The embedded backend is node-local: state is tied to the PV(C), and for `ReadWriteOnce` volumes, to re-attachability in the same zone / node pool. Redis, being external, decouples state from head-node locality.
+##### Volume Topology and Failover Scope
+
+The embedded backend is not inherently node-scoped — the boundary depends on the PVC's access mode and the underlying volume provider's topology:
+
+- **Access mode:** `ReadWriteOnce` (the KubeRay default) means "mounted on one node *at a time*," not "one node forever." When the head pod is rescheduled, Kubernetes detaches the volume from the old node and re-attaches it to the new node. `ReadWriteOncePod` (K8s 1.27+ GA) is stricter: single pod only. `ReadWriteMany` (RWX) allows simultaneous mounts on multiple nodes.
+- **Volume provider topology:**
+  - **Cloud block storage** (EBS, GCE Persistent Disk, Azure Managed Disk) is *zone-scoped*: the volume can re-attach to any node in the same zone but not across zones. This covers the common failure modes (node reboot, pod eviction, spot preemption within the zone).
+  - **Regional disks** (GCE regional PD, Azure ZRS) span two zones, enabling failover across one zone boundary.
+  - **RWX filesystems** (EFS, CephFS, NFS, Azure Files) have no locality restriction but typically trade off latency and per-op cost.
+  - **Local PV / hostPath** is truly node-pinned — unsuitable for this feature because it defeats the recovery model.
+
+**Practical takeaway:** on default KubeRay with cloud block storage, the head pod survives node-level failures within a zone, which covers the typical disruption modes driving this REP. Cross-zone head-node failure requires a regional disk, an RWX volume, or out-of-band backup. Redis, being external, is insulated from head-pod volume topology entirely.
 
 ### Ray Core Changes
 
