@@ -161,10 +161,9 @@ Operators can tune these settings via environment variables for their deployment
 | Env Var | Default | Description |
 |---|---|---|
 | `RAY_GCS_STORAGE_PATH` | *(required)* | Path to persistent volume for RocksDB data. |
-| `RAY_GCS_ROCKSDB_SYNC_WRITES` | `1` | fsync on every write. Set `0` for dev/test when crash safety is not needed (~5–10× write throughput improvement). |
 | `RAY_GCS_ROCKSDB_WAL_DIR` | *(same as storage path)* | Separate directory for WAL files. Useful if main storage is slow but a faster disk is available for WAL. |
 
-Additional tuning knobs (block cache size, write buffer size, background jobs, compression) are intentionally omitted from the initial release. The hardcoded defaults are sized for the GCS metadata workload (10–100 MB). If operators report specific performance issues, we can expose targeted env vars in a follow-up — starting restrictive is safer than starting permissive.
+All other RocksDB tuning knobs (sync writes, block cache size, write buffer size, background jobs, compression) are intentionally not exposed. fsync-on-write is non-negotiable for the FT durability contract — disabling it would silently break the guarantee this REP provides, so it is hardcoded rather than offered as a footgun env var. The remaining defaults are sized for the GCS metadata workload (10–100 MB); if operators report specific performance issues, we can expose targeted env vars in a follow-up — starting restrictive is safer than starting permissive.
 
 ##### Why Environment Variables, Not a Config File
 
@@ -180,6 +179,7 @@ If advanced tuning demand emerges in production, a config file override can be a
 
 The following are intentionally hardcoded because incorrect values can break correctness or crash safety:
 
+- **`WriteOptions::sync`** — Always `true`. Disabling fsync would silently break the FT durability contract this REP exists to provide; a caller that received an ack would be lying about persistence. Tests that need non-sync mode use an internal-only fixture flag, not a public env var.
 - **`create_if_missing` / `create_missing_column_families`** — Must be `true`. GCS creates the DB on first start, and new Ray versions may add column families.
 - **Compaction style and level sizing** — Level compaction with dynamic level bytes is the only correct choice for this workload. `target_file_size_base` and `max_bytes_for_level_base` are coupled — changing one without the other causes pathological compaction.
 - **Bloom filter bits and block size** — 10 bits/key and 16 KB blocks are tuned for point lookups on metadata. Subtle interactions with compression ratios and cache efficiency.
@@ -288,7 +288,7 @@ The KubeRay changes described below automate volume lifecycle for Kubernetes. Eq
 
 ### KubeRay Changes
 
-When `gcsFaultTolerance.backend: rocksdb` is set, the KubeRay operator automatically manages the full PVC lifecycle — users don't create, mount, or clean up PVCs manually.
+When `gcsFaultToleranceOptions.backend: rocksdb` is set, the KubeRay operator automatically manages the full PVC lifecycle — users don't create, mount, or clean up PVCs manually.
 
 **Note:** RocksDB is an embedded C++ library linked into the GCS process — it is not a sidecar or separate service. The PVC simply provides a persistent directory for GCS to write to.
 
@@ -300,11 +300,17 @@ kind: RayCluster
 metadata:
   name: my-ray-cluster
 spec:
-  gcsFaultTolerance:
+  gcsFaultToleranceOptions:                # extends KubeRay's existing GcsFaultToleranceOptions struct
     backend: rocksdb
     storage:
-      size: 1Gi                # GCS metadata is 10-100MB; 1Gi provides ample headroom
-      storageClassName: ssd    # optional, uses default SC if omitted
+      # Operator-managed PVC (default path)
+      size: 1Gi                            # GCS metadata is 10-100MB; 1Gi provides ample headroom
+      storageClassName: ssd                # optional, uses default SC if omitted
+      accessModes: [ReadWriteOnce]         # optional, defaults to [ReadWriteOnce]
+      # OR: bring your own PVC
+      # existingClaim: my-gcs-pvc          # mutually exclusive with size/storageClassName/accessModes
+      # subPath: clusters/my-ray/gcs       # optional, mount a subdir of the volume
+                                           # (useful for shared NFS/Vast exports with preallocated per-cluster dirs)
 ```
 
 This is all the user specifies. The operator handles everything else.
@@ -313,8 +319,10 @@ This is all the user specifies. The operator handles everything else.
 
 When `backend: rocksdb` is set, the KubeRay operator reconciliation:
 
-1. **Creates a PVC** named `{cluster-name}-gcs-pvc` with `ReadWriteOnce` access mode, the specified size and storage class, and `ownerReferences` pointing to the RayCluster (so Kubernetes garbage collection deletes the PVC automatically when the cluster is deleted).
-2. **Mounts the PVC** on the head pod at `/data/gcs-state`.
+1. **Provisions storage:**
+   - If `existingClaim` is set, the operator uses that PVC as-is. It does not create or delete the PVC, and does not set `ownerReferences` — the user owns the PVC's lifecycle.
+   - Otherwise, the operator **creates a PVC** named `{cluster-name}-gcs-pvc` with the specified `accessModes` (default `[ReadWriteOnce]`), `size`, and `storageClassName`, and `ownerReferences` pointing to the RayCluster (so Kubernetes garbage collection deletes the PVC automatically when the cluster is deleted).
+2. **Mounts the PVC** on the head pod at `/data/gcs-state`. If `storage.subPath` is set, the operator mounts that subdirectory of the volume rather than the volume root — useful for shared exports (NFS, Vast) where each cluster lives in a preallocated per-tenant subdirectory.
 3. **Sets environment variables** on the head container: `RAY_GCS_STORAGE=rocksdb` and `RAY_GCS_STORAGE_PATH=/data/gcs-state`.
 
 The resulting head pod spec (generated by the operator, not written by the user):
@@ -331,18 +339,19 @@ containers:
   volumeMounts:
   - name: gcs-storage
     mountPath: /data/gcs-state
+    # subPath: clusters/my-ray/gcs    # populated only when storage.subPath is set
 volumes:
 - name: gcs-storage
   persistentVolumeClaim:
-    claimName: my-ray-cluster-gcs-pvc
+    claimName: my-ray-cluster-gcs-pvc    # or storage.existingClaim, when BYO-PVC is used
 ```
 
 #### PVC Lifecycle
 
-- **Created** by the operator when the RayCluster is created with `backend: rocksdb`.
-- **Survives head pod restarts.** Kubernetes does not delete a PVC when its pod is deleted. When the head pod restarts, it re-mounts the same PVC and GCS recovers from the existing RocksDB data.
-- **Deleted automatically** when the RayCluster is deleted, via `ownerReferences` and Kubernetes garbage collection. No manual cleanup required.
-- **Stale data protection.** On startup, `RocksDbStoreClient` should validate that the RocksDB data directory belongs to this cluster (e.g., by storing and checking a cluster ID marker). If a PVC is accidentally reused with a different cluster, GCS should fail-fast rather than load stale state from a previous cluster.
+- **Operator-managed PVC** (`size` / `storageClassName` / `accessModes`): created by the operator when the RayCluster is created, deleted automatically on cluster deletion via `ownerReferences` and Kubernetes garbage collection. No manual cleanup required.
+- **User-managed PVC** (`existingClaim`): the operator never creates or deletes the PVC. The user is responsible for provisioning, sizing, and cleanup; the operator only consumes the claim.
+- **Survives head pod restarts** in both cases. Kubernetes does not delete a PVC when its pod is deleted. When the head pod restarts, it re-mounts the same PVC and GCS recovers from the existing RocksDB data.
+- **Stale data protection.** On startup, `RocksDbStoreClient` should validate that the RocksDB data directory belongs to this cluster (e.g., by storing and checking a cluster ID marker). If a PVC is accidentally reused with a different cluster — particularly relevant for `existingClaim` and shared `subPath` exports — GCS should fail-fast rather than load stale state from a previous cluster.
 
 ## Compatibility, Deprecation, and Migration Plan
 
@@ -367,7 +376,9 @@ volumes:
 
 ### KubeRay E2E Tests
 
-- RayCluster with `gcsFaultTolerance.backend: rocksdb` creates PVC and mounts it on head pod automatically
+- RayCluster with `gcsFaultToleranceOptions.backend: rocksdb` creates PVC and mounts it on head pod automatically
+- RayCluster with `gcsFaultToleranceOptions.storage.existingClaim` consumes a pre-provisioned PVC and does not create or delete it
+- RayCluster with `gcsFaultToleranceOptions.storage.subPath` mounts the configured subdirectory of the volume on the head pod
 - Head pod deletion + restart recovers cluster state from PVC
 - RayJob completes successfully after head pod restart mid-job
 - PVC is cleaned up when RayCluster is deleted
