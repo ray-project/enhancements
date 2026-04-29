@@ -86,6 +86,8 @@ The architecture relies on an **Active-Passive** model with distinct responsibil
 - **Active Node (Leader)**: Holds the Kubernetes Lease, initializes all GCS managers, hydrates the cluster state from Redis, and fully serves read/write traffic. It is responsible for continuously renewing the lease.
 - **Passive Node (Standby)**: Operates in a restricted shadow mode. It runs the GCS gRPC server in a read-only state (to satisfy health checks) but defers loading cluster state and isolates itself from external traffic routing. It continuously polls the lease status.
 
+For Ray on Kubernetes, these two pods will be scheduled on different nodes by leveraging `podAntiAffinity` configuration to prevent a single node failure from taking down both the active and passive heads.
+
 The **Promotion Protocol** is designed to be non-blocking and safe:
 1. **Background Polling**: A dedicated thread continuously polls the lease status via the Kubernetes API, completely isolating blocking network I/O from the main ASIO event loop.
 2. **Fail-Fast on Leadership Loss**: Continues to poll the lease state post-promotion. If lease ownership lapses or renewal requests cross the expiration deadline, the leader immediately self-terminates (`RAY_LOG(FATAL)`) to protect cluster state consistency and avoid split-brain scenarios.
@@ -139,22 +141,29 @@ The host machine experiences severe CPU starvation, or the OS forcefully pauses 
 	
 	**Note**: The longer the LeaseDuration, the more resilient the cluster is to temporary network glitches, but the longer it takes for a failed node to be considered offline.
 
-2. **Atomic variable for leadership status**: For the process frozen scenario, we want to have a faster way to send the leadership loss signal to the main thread. We could achieve this by sharing a lock-free `std::atomic<bool>` `is_leader_{true}` between your threads.
-	- The leadership status must be checked before every write operation.
-	- When the Renew Thread wakes up and realizes it missed the deadline, it must set the value to false This memory write takes only a few nanoseconds. After doing this, it can proceed with the slower fatal() system call.
-
-3. **Fencing Token**: The last barrier to prevent data inconsistency. It is also one of the best practices for implementing lease-based leader election in production. At the end of the day, we must make sure the data stored in redis is pure.
+2. **Fencing Token**: The last barrier to prevent data inconsistency. It is also one of the best practices for implementing lease-based leader election in production. At the end of the day, we must make sure the data stored in redis is pure.
 	- **The Token**: Lease transition, it is updated when a new leader takes over the lease
 	- **Write to Redis**: the leader GCS attaches the token with the query
 	- **Fencing**: The Redis rejects the request if the request_epoch is smaller than its current_epoch
 	
-4. **Cross-head communication**: Establish the connection between heads. The passive cannot be promoted until it notices that the previous head is stepped down.
+3. **Cross-head communication**: Establish the connection between heads. The passive cannot be promoted until it notices that the previous head is stepped down.
 
-5. **Worker Awareness**: The worker nodes track the GCS leader’s state(e.g. Pod name, generation ID…). If the local worker receives requests issued by a stale ID or unrecognized head, it drops the packet and ignores the request. 
+4. **Worker Awareness**: The worker nodes track the GCS leader’s state(e.g. Pod name, generation ID…). If the local worker receives requests issued by a stale ID or unrecognized head, it drops the packet and ignores the request. 
 
 The first three mechanisms are production golden standards for leader election implementations. They are generic and must be included in the first phase of this REP. 
 
 The latter two are Ray-specific optimizations for the GCS HA scenario. Techenically, they could provide additional data consistency guarantees. However, it may involve other potential risk and additional implementation work.(e.g. communication between heads/workers could be unreliable) We can leave it to the future iterations. 
+##### Metrics and Monitoring
+- `gcs_is_leader`: Emits a 1 if the current instance is the leader, and a 0 if it is a passive head.
+- `gcs_leader_transitions_total`: Incremented every time a leadership change is detected
+- `gcs_recovery_latency_ms`: The time it takes for a passive head to recover the state and become the leader.
+
+Even though the passive head is in "read-only" mode and failing readiness probes (so it doesn't get traffic), its metrics endpoint should still be active. The dashboard should plot these metrics for both pods, allowing users to see the health of both the active and passive heads.  
+
+##### Detection and Alerting
+  - Alert if `gcs_is_leader` is 1 for both heads(split brain).
+  - Alert if `gcs_recovery_latency_ms` is continously too high.
+  - Alert if `gcs_leader_transitions_total` is too frequent(leader flapping).
 
 #### 5. KubeRay Changes
 1. **API change**: specifying the number of desired head replicas.
@@ -162,7 +171,7 @@ The latter two are Ray-specific optimizations for the GCS HA scenario. Techenica
     - Readiness Probe for passive heads to fail.
     - Disable PublishNotReadyAddresses.
     - Configure head internal communication to local GCS.
-
+    - Pod anti-affinity configuration to schedule active and passive heads on different nodes.
 ## Compatibility, Deprecation, and Migration Plan
 
 - **Head Node Components Compatibility**: 
