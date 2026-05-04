@@ -192,6 +192,21 @@ Even though the passive head is in "read-only" mode and failing readiness probes
     Requires Process Gating.
     (Autoscaler, Dashboard, Job API, Serve Controller, Client Server, API Agent)
 
+## Baseline latency
+By default, we adhere to the standard `client-go` leader election settings:
+- `LeaseDuration`: 15s
+- `RenewDeadline`: 10s
+- `RetryPeriod`: 2s
+
+Here is the latency profiled for 30 failover iterations:
+
+```
+Metric                    Min (s)    Max (s)    Average (s)
+------------------------------------------------------------
+Leadership Acquisition    17         20         18.67
+Total Recovery (Worker)   18         28         20.80
+```
+
 ## Test Plan and Acceptance Criteria
 
 - **Unit Testing**: Verify REST client retry behaviors, exponential backoff, and timeout bounds.
