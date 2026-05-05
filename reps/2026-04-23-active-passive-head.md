@@ -184,13 +184,12 @@ Even though the passive head is in "read-only" mode and failing readiness probes
 
 - **Head Node Components Compatibility**: 
   To ensure a highly available Active-Passive architecture, all background processes running on the Ray Head Node must operate safely in a multi-head environment.
-  - **GCS Server (`gcs_server`)**
-    Safe on Standby. Global tracking managers are instantiated empty; state hydration is deferred until promotion.
-  - **Raylet**
-    Safe to run only if launched with `--num-cpus=0` and `--num-gpus=0`, ensuring the active primary never schedules user tasks onto the standby head node.
+  - **GCS Server**
+    Safe on Standby. Global tracking managers are instantiated empty; state hydration is deferred until promotion. The rpc server can only answer read requests in passive mode. All mutation requests should not be accepted and the rejection should be handled gracefully on the client side. (With the proper traffic routing, the requests will be sent to the active head only. But it is another layer of protection to avoid any potential split brain issue.)
   - **Other components**
-    Requires Process Gating.
-    (Autoscaler, Dashboard, Job API, Serve Controller, Client Server, API Agent)
+    Requires Process Gating. The component can only run in passive mode.
+    - Raylet: 
+    (Raylet, Autoscaler, Dashboard, Job API, Serve Controller, Client Server, API Agent)
 
 ## Baseline latency
 By default, we adhere to the standard `client-go` leader election settings:
