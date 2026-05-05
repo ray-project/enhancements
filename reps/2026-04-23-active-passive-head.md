@@ -163,13 +163,14 @@ Besides those generic safeguards, we can also apply the following Ray-specific o
 
 2. **Worker Awareness**: The worker nodes track the GCS leader’s state(e.g. Pod name, generation ID…). If the local worker receives requests issued by a stale ID or unrecognized head, it drops the packet and ignores the request. 
 ##### Metrics and Monitoring
-- `gcs_is_leader`: Emits a 1 if the current instance is the leader, and a 0 if it is a passive head.
-- `gcs_leader_transitions_total`: Incremented every time a leadership change is detected
-- `gcs_recovery_latency_ms`: The time it takes for a passive head to recover the state and become the leader.
+- `gcs_is_leader`: Gauge metrics. Emits a 1 if the current instance is the leader, and a 0 if it is a passive head.
+- `gcs_leader_transitions_total`: Counter metrics. Incremented every time a leadership change is detected. For a single GCS process, the metrics will only ever transition from 0 to 1. Next time a failover occurs, a brand-new GCS pod will spin up, start at 0, and then transition to 1 when it becomes the active leader. 
+- `gcs_recovery_latency_ms`: Histogram metrics. The time it takes for a passive head to recover the state from the moment that it takes over the leadership.
 
-Even though the passive head is in "read-only" mode and failing readiness probes (so it doesn't get traffic), its metrics endpoint should still be active. The dashboard should plot these metrics for both pods, allowing users to see the health of both the active and passive heads.  
+Even though the passive head is in "read-only" mode and failing readiness probes (so it doesn't get traffic), its metrics endpoint should still be active. An external dashboard should aggregate and plot these metrics for both pods, allowing users to see the health of both the active and passive heads.  
 
-##### Detection and Alerting
+##### Detection and Alerting 
+The cluster-wide metrics aggregation and alert should be built outside of gcs/ray process. Here are some examples:
   - Alert if `gcs_is_leader` is 1 for both heads(split brain).
   - Alert if `gcs_recovery_latency_ms` is continously too high.
   - Alert if `gcs_leader_transitions_total` is too frequent(leader flapping).
@@ -186,10 +187,15 @@ Even though the passive head is in "read-only" mode and failing readiness probes
   To ensure a highly available Active-Passive architecture, all background processes running on the Ray Head Node must operate safely in a multi-head environment.
   - **GCS Server**
     Safe on Standby. Global tracking managers are instantiated empty; state hydration is deferred until promotion. The rpc server can only answer read requests in passive mode. All mutation requests should not be accepted and the rejection should be handled gracefully on the client side. (With the proper traffic routing, the requests will be sent to the active head only. But it is another layer of protection to avoid any potential split brain issue.)
-  - **Other components**
-    Requires Process Gating. The component can only run in passive mode.
-    - Raylet: 
-    (Raylet, Autoscaler, Dashboard, Job API, Serve Controller, Client Server, API Agent)
+  - **Raylet**: it is required to be alive to answer the readiness and liveness probes.
+      - **Startup**: Upon boot, the local standby Raylet targets the local GCS and sends a RegisterNode gRPC request. On passive head, the PUT request should not reach to Redis. 
+      - **Passive State**: The Raylet continuously sends heartbeats to the local GCS to keep its node liveness. 
+      - **Promotion**: During promotion, the Raylet should register itself and  physically writes it to Redis.
+  - **Autoscaler**: it is a critical, high-risk background component that must be suppressed on passive head.
+  - **Dashboard**: the local Dashboard process is started by KubeRay pointing to the local GCS. Because it queries the passive local GCS, the dashboard UI initially displays a single-node cluster (only itself) with no active jobs or actors. Since the standby pod is Not Ready, its dashboard API is completely unreachable by external clients with the current k8s service setup. 
+  - **Job API**: with right k8s service configuration, the `ray job submit` request should not be able to reach the passive head.
+  - **Serve Controller**: The Ray Serve Controller is a standard Ray actor. Since GCS in standby mode has no active workers and no running jobs, no Serve Controller is ever spawned on the standby head.
+  - **Dashboard Agent**: Runs locally and reports metrics to the co-located passive GCS. Upon promotion, it continues reporting to the now-promoted local GCS. Ready to initialize runtime environments if new jobs are submitted post-failover.
 
 ## Baseline latency
 By default, we adhere to the standard `client-go` leader election settings:
