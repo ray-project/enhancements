@@ -192,6 +192,9 @@ The cluster-wide metrics aggregation and alert should be built outside of gcs/ra
       - **Passive State**: The Raylet continuously sends heartbeats to the local GCS to keep its node liveness. 
       - **Promotion**: During promotion, the Raylet should register itself and  physically writes it to Redis.
   - **Autoscaler**: it is a critical, high-risk background component that must be suppressed on passive head.
+      - **Startup**: Upon boot, the local autoscaler targets the local GCS and periodically sends a GetClusterResourceState gRPC request to check if the cluster resource state in GCS is ready. The cluster resource state should only be ready when the GCS is in active mode.
+      - **Active State**: Autoscaler gets the cluster resource state from GCS and continues with the normal autoscaling logic including updating KubeRay CRDs, reporting the autoscaling state back to GCS.
+      - **Passive State**: Autoscaler gets the cluster resource state from GCS, which indicates the cluster resource state is not ready. The autoscaler skips the rest of the logic.
   - **Dashboard**: the local Dashboard process is started by KubeRay pointing to the local GCS. Because it queries the passive local GCS, the dashboard UI initially displays a single-node cluster (only itself) with no active jobs or actors. Since the standby pod is Not Ready, its dashboard API is completely unreachable by external clients with the current k8s service setup. 
   - **Job API**: with right k8s service configuration, the `ray job submit` request should not be able to reach the passive head.
   - **Serve Controller**: The Ray Serve Controller is a standard Ray actor. Since GCS in standby mode has no active workers and no running jobs, no Serve Controller is ever spawned on the standby head.
