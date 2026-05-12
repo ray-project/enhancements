@@ -43,7 +43,7 @@ The initial design and implementation targets **KubeRay** exclusively for the fo
 2. **Election**: Both pods attempt to acquire the Kubernetes Lease (e.g., `ray-gcs-leader-lock`).
 3. **Active Node**: The winner acquires the lease, initializes its GCS managers, loads data from Redis, and starts the full GCS gRPC server.
 4. **Passive Node**: The loser enters **Observer Mode**:
-   - Starts the GCS gRPC server (`rpc_server_`) in **read-only mode** (allowing health check endpoints like `gcs_healthz` to succeed).
+   - Starts the GCS gRPC server (`rpc_server_`) in **standby mode** (allowing only the health check endpoint to succeed).
    - Defers loading Redis data.
    - Enters a continuous background loop polling the lease status.
 
@@ -71,7 +71,7 @@ The initial design and implementation targets **KubeRay** exclusively for the fo
 
 ### GCS Native Leader Election
 
-We propose integrating the Lease election protocol directly into the GCS C++ runtime. 
+We propose integrating the lease election protocol directly into the GCS C++ runtime. 
 
 #### 1. Protocol
 
@@ -104,13 +104,15 @@ The **Promotion Protocol** is designed to be non-blocking and safe:
 - `RAY_LEADER_ELECT_RESOURCE_NAMESPACE`: The operational namespace mapping the lease scope.
 
 #### 3. Request and Traffic Routing
-- **Kubernetes Service**: KubeRay creates a Service routing traffic to head pods.
+- **[Existing]Kubernetes Service for Worker Discovery**: 
+  - **Stable DNS Endpoint**: KubeRay provisions a static Head Service (e.g., `<cluster-name>-head-svc`) acting as the central, unchangeable discovery address for all worker pods. Workers configure their startup parameters to target this Service DNS name (`--address=<cluster-name>-head-svc:6379`) instead of ephemeral pod IPs.
 - **Readiness Probe Control**: 
   - The default KubeRay `readinessProbe` for the head node is usually configured to use an `exec` probe checking the local Dashboard API endpoints:
     `wget -T 2 -q -O- http://localhost:52365/api/local_raylet_healthz | grep success && wget -T 10 -q -O- http://localhost:8265/api/gcs_healthz | grep success`. We should extend the `gcs_healthz` endpoint to check the leadership status. It should return 200 OK if GCS is the active leader AND is healthy.
   - In **Passive Mode**, the readiness probe explicitly fails, removing the pod from Service endpoints.
   - Upon **Promotion**, the readiness probe succeeds, routing traffic to the new leader.
   - This mechanism prevents clients and workers from attempting to communicate with a standby GCS that has deferred loading its state.
+- **Seamless Failover Discovery**: During a transition, the unready standby pod is physically excluded from the Service endpoints. Once promoted, the new leader passes readiness checks, instantly updating the Service endpoints. Consequently, reconnecting workers automatically discover the new active GCS instance via the identical DNS address without requiring configuration updates or container restarts.
 - **Head Node Internal Traffic**: Processes on the head pod (e.g., Autoscaler, Dashboard) must be configured to connect **directly to the local GCS instance** (e.g., via `127.0.0.1`) rather than the Kubernetes Service address to avoid cross-pod state confusion.
 
 #### 4. Split-Brain Safeguards
@@ -161,7 +163,7 @@ Besides those generic safeguards, we can also apply the following Ray-specific o
 
 1. **Cross-head communication**: Establish the connection between heads. The passive cannot be promoted until it notices that the previous head is stepped down.
 
-2. **Worker Awareness**: The worker nodes track the GCS leader’s state(e.g. Pod name, generation ID…). If the local worker receives requests issued by a stale ID or unrecognized head, it drops the packet and ignores the request. 
+2. **Worker Awareness**: The worker nodes track the GCS leader’s state(e.g. Pod name, generation ID…). If the local worker receives requests issued by a stale ID or unrecognized head, it drops the RPC and ignores the request. 
 ##### Metrics and Monitoring
 - `gcs_is_leader`: Gauge metrics. Emits a 1 if the current instance is the leader, and a 0 if it is a passive head.
 - `gcs_leader_transitions_total`: Counter metrics. Incremented every time a leadership change is detected. For a single GCS process, the metrics will only ever transition from 0 to 1. Next time a failover occurs, a brand-new GCS pod will spin up, start at 0, and then transition to 1 when it becomes the active leader. 
@@ -290,9 +292,9 @@ When a `RayCluster` is deployed with `headGroupSpec.replicas: 2`, the KubeRay co
 
   **2. Sidecar components**
     - **Autoscaler**: In standard KubeRay setups where `enableInTreeAutoscaling: true` is configured, the Autoscaler is typically injected as a dedicated sidecar container running alongside the ray-head container inside the same pod. It is a critical, high-risk background component that must be suppressed on passive head.
-      - **Startup**: Upon boot, the local autoscaler targets the local GCS and periodically sends a GetClusterResourceState gRPC request to check if the cluster resource state in GCS is ready. The cluster resource state should only be ready when the GCS is in active mode.
+      - **Startup**: Upon boot, the local autoscaler targets the local GCS and periodically sends a `GetClusterResourceState` gRPC request to check if the cluster resource state in GCS is ready. The cluster resource state should only be ready when the GCS is in active mode.
       - **Active State**: Autoscaler gets the cluster resource state from GCS and continues with the normal autoscaling logic including updating KubeRay CRDs, reporting the autoscaling state back to GCS.
-      - **Passive State**: Autoscaler gets the cluster resource state from GCS, which indicates the cluster resource state is not ready. The autoscaler skips the rest of the logic.
+      - **Passive State**: Autoscaler continuously gets the cluster resource state from GCS, which indicates the cluster resource state is not ready. The autoscaler skips the rest of the logic.
 
 ## Baseline latency
 By default, we adhere to the standard `client-go` leader election settings:
