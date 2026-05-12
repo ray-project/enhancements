@@ -176,29 +176,123 @@ The cluster-wide metrics aggregation and alert should be built outside of gcs/ra
   - Alert if `gcs_leader_transitions_total` is too frequent(leader flapping).
 
 #### 5. KubeRay Changes
-1. **API change**: specifying the number of desired head replicas.
-2. ** Configuration changes**: 
-    - Disable Ray Head Service's `publishNotReadyAddresses`.
-    - Configure head internal communication to local GCS.
-    - Pod anti-affinity configuration to schedule active and passive heads on different nodes.
+
+To support the Active-Passive Head architecture, the KubeRay operator requires updates to its CRDs and controller reconciliation logic.
+
+##### 1. Customer-Facing API Changes
+
+Currently, the `HeadGroupSpec` in the `RayCluster` CRD assumes a single head node instance. We propose adding a `Replicas` field to the `HeadGroupSpec` API schema to allow users to explicitly configure the desired number of head pods. To streamline leader election tuning, we also extend `GcsFaultToleranceOptions` to natively support lease parameters.
+
+**Go API Schema Definitions (`apis/ray/v1/raycluster_types.go`):**
+
+```go
+type HeadGroupSpec struct {
+	// Replicas specifies the desired number of head node replicas.
+	// Defaults to 1. If set to 2, Active-Passive High Availability is enabled.
+	// +kubebuilder:default:=1
+	// +kubebuilder:validation:Minimum:=1
+	// +kubebuilder:validation:Maximum:=2
+	Replicas *int32 `json:"replicas,omitempty"`
+
+	// RayStartParams are the params of the start command: node-manager-port, object-store-memory, etc.
+	RayStartParams map[string]string `json:"rayStartParams"`
+...
+}
+
+type GcsFaultToleranceOptions struct {
+	// RedisConfiguration struct defining external storage endpoints
+	...
+
+	// LeaderElectionLeaseDurationSeconds is the duration that non-leader candidates wait before forcing leadership acquisition.
+	// +kubebuilder:default:=15
+	LeaderElectionLeaseDurationSeconds *int32 `json:"leaderElectionLeaseDurationSeconds,omitempty"`
+
+	// LeaderElectionRenewDeadlineSeconds is the acting leader's bounded deadline for executing consecutive renewal sequences.
+	// +kubebuilder:default:=10
+	LeaderElectionRenewDeadlineSeconds *int32 `json:"leaderElectionRenewDeadlineSeconds,omitempty"`
+
+	// LeaderElectionRetryPeriodSeconds is the duration clients wait between sequential resource acquisition attempts.
+	// +kubebuilder:default:=2
+	LeaderElectionRetryPeriodSeconds *int32 `json:"leaderElectionRetryPeriodSeconds,omitempty"`
+}
+```
+
+**Validation Webhook:**
+- A validating webhook will enforce that `Replicas` can only be set to `1` or `2`. Initially, we limit the replicas to 2.
+- If `Replicas` is set to `2`, the webhook validates that external Redis persistence is configured under `spec.gcsFaultToleranceOptions` (since native GCS recovery relies on Redis storage).
+- Enforces timing invariants if customized: `LeaderElectionLeaseDurationSeconds > LeaderElectionRenewDeadlineSeconds > LeaderElectionRetryPeriodSeconds`.
+
+**Example Customer Manifest (`RayCluster` CR):**
+
+```yaml
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: raycluster-ha-sample
+  namespace: default
+spec:
+  rayVersion: '2.9.0'
+  gcsFaultToleranceOptions:
+    redisAddress: "redis:6379"
+    ...
+    leaderElectionLeaseDurationSeconds: 20
+    leaderElectionRenewDeadlineSeconds: 12
+    leaderElectionRetryPeriodSeconds: 3
+  headGroupSpec:
+    replicas: 2 # Enable Active-Passive HA
+    rayStartParams:
+      ...
+    template:
+      spec:
+        containers:
+        - name: ray-head
+          image: rayproject/ray:2.9.0
+```
+
+##### 2. Controller Configuration & Reconciliation Logic
+
+When a `RayCluster` is deployed with `headGroupSpec.replicas: 2`, the KubeRay controller executes the following advanced reconciliation logic:
+
+- **Head Pod Provisioning & Lifecycle**:
+  - Provisions two independent head pods labeled as candidates for leadership.
+  - Automatically maps the fields configured under `gcsFaultToleranceOptions` into the required environment variables inside the head containers to trigger native C++ GCS leader election:
+    - `RAY_LEADER_ELECT=true`
+    - `RAY_LEADER_ELECT_RESOURCE_NAME=<cluster-name>-gcs-leader-lock`
+    - `RAY_LEADER_ELECT_RESOURCE_NAMESPACE=<pod-namespace>`
+    - `RAY_LEADER_ELECT_LEASE_DURATION=<value>`
+    - `RAY_LEADER_ELECT_RENEW_DEADLINE=<value>`
+    - `RAY_LEADER_ELECT_RETRY_PERIOD=<value>`
+- **Service Routing & Readiness Control**:
+  - Modifies the Ray Head Service reconciliation to explicitly set `publishNotReadyAddresses: false` (overriding default behaviors where head services might publish unready addresses).
+  - Configures the Kubernetes Head Service to map its endpoints strictly based on pod readiness, external and worker traffic is dynamically routed exclusively to the active leader pod.
+- **Internal Component Routing**:
+  - Co-located system components running inside the head pod (such as the Autoscaler, Dashboard, and Dashboard Agent) must be configured to communicate with the local loopback GCS interface (`127.0.0.1:6379`) rather than the shared Kubernetes Head Service DNS name. This prevents cross-pod pollution where a background process on the passive head communicates with the active head's GCS.
+- **Automatic Pod Anti-Affinity Injection**:
+  - To prevent a single-node outage from terminating both head pods simultaneously, the controller inspects the head pod template. If no explicit affinity rules are defined, it automatically injects a `podAntiAffinity` policy targeting the `ray.io/node-type: head` label to schedule active and passive heads on different nodes.
 ## Compatibility, Deprecation, and Migration Plan
 
 - **Head Node Components Compatibility**: 
   To ensure a highly available Active-Passive architecture, all background processes running on the Ray Head Node must operate safely in a multi-head environment.
+
+  **1. Single-container co-located components**:
+  These components are running in the same container as different subprocesses. The gcs termination caused by lease lost will terminate other processes.
   - **GCS Server**
     Safe on Standby. Global tracking managers are instantiated empty; state hydration is deferred until promotion. The rpc server can only answer read requests in passive mode. All mutation requests should not be accepted and the rejection should be handled gracefully on the client side. (With the proper traffic routing, the requests will be sent to the active head only. But it is another layer of protection to avoid any potential split brain issue.)
+    - **Leadership Loss**: If the active GCS fails to renew its lease or voluntarily steps down, it immediately self-terminates (`RAY_LOG(FATAL)`) to eliminate split-brain risks, instantly closing all active gRPC client streams.
   - **Raylet**: it is required to be alive to answer the readiness and liveness probes.
       - **Startup**: Upon boot, the local standby Raylet targets the local GCS and sends a RegisterNode gRPC request. On passive head, the PUT request should not reach to Redis. 
       - **Passive State**: The Raylet continuously sends heartbeats to the local GCS to keep its node liveness. 
       - **Promotion**: During promotion, the Raylet should register itself and  physically writes it to Redis.
-  - **Autoscaler**: it is a critical, high-risk background component that must be suppressed on passive head.
-      - **Startup**: Upon boot, the local autoscaler targets the local GCS and periodically sends a GetClusterResourceState gRPC request to check if the cluster resource state in GCS is ready. The cluster resource state should only be ready when the GCS is in active mode.
-      - **Active State**: Autoscaler gets the cluster resource state from GCS and continues with the normal autoscaling logic including updating KubeRay CRDs, reporting the autoscaling state back to GCS.
-      - **Passive State**: Autoscaler gets the cluster resource state from GCS, which indicates the cluster resource state is not ready. The autoscaler skips the rest of the logic.
   - **Dashboard**: the local Dashboard process is started by KubeRay pointing to the local GCS. Because it queries the passive local GCS, the dashboard UI initially displays a single-node cluster (only itself) with no active jobs or actors. Since the standby pod is Not Ready, its dashboard API is completely unreachable by external clients with the current k8s service setup. 
   - **Job API**: with right k8s service configuration, the `ray job submit` request should not be able to reach the passive head.
   - **Serve Controller**: The Ray Serve Controller is a standard Ray actor. Since GCS in standby mode has no active workers and no running jobs, no Serve Controller is ever spawned on the standby head.
   - **Dashboard Agent**: Runs locally and reports metrics to the co-located passive GCS. Upon promotion, it continues reporting to the now-promoted local GCS. Ready to initialize runtime environments if new jobs are submitted post-failover.
+
+  **2. Sidecar components**
+    - **Autoscaler**: In standard KubeRay setups where `enableInTreeAutoscaling: true` is configured, the Autoscaler is typically injected as a dedicated sidecar container running alongside the ray-head container inside the same pod. It is a critical, high-risk background component that must be suppressed on passive head.
+      - **Startup**: Upon boot, the local autoscaler targets the local GCS and periodically sends a GetClusterResourceState gRPC request to check if the cluster resource state in GCS is ready. The cluster resource state should only be ready when the GCS is in active mode.
+      - **Active State**: Autoscaler gets the cluster resource state from GCS and continues with the normal autoscaling logic including updating KubeRay CRDs, reporting the autoscaling state back to GCS.
+      - **Passive State**: Autoscaler gets the cluster resource state from GCS, which indicates the cluster resource state is not ready. The autoscaler skips the rest of the logic.
 
 ## Baseline latency
 By default, we adhere to the standard `client-go` leader election settings:
