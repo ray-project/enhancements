@@ -294,7 +294,9 @@ When a `RayCluster` is deployed with `headGroupSpec.replicas: 2`, the KubeRay co
     - **Autoscaler**: In standard KubeRay setups where `enableInTreeAutoscaling: true` is configured, the Autoscaler is typically injected as a dedicated sidecar container running alongside the ray-head container inside the same pod. It is a critical, high-risk background component that must be suppressed on passive head.
       - **Startup**: Upon boot, the local autoscaler targets the local GCS and periodically sends a `GetClusterResourceState` gRPC request to check if the cluster resource state in GCS is ready. The cluster resource state should only be ready when the GCS is in active mode.
       - **Active State**: Autoscaler gets the cluster resource state from GCS and continues with the normal autoscaling logic including updating KubeRay CRDs, reporting the autoscaling state back to GCS.
-      - **Passive State**: Autoscaler continuously gets the cluster resource state from GCS, which indicates the cluster resource state is not ready. The autoscaler skips the rest of the logic.
+      - **Passive State**: Autoscaler periodically gets the cluster resource state from GCS, which indicates the cluster resource state is not ready. The autoscaler skips the rest of the logic. The polling interval is configured by `AUTOSCALER_UPDATE_INTERVAL_S` (default: 5s).
+      - **GCS Failure**: If the active head GCS fails, the gRPC call `GetClusterResourceState` will raise an error, causing the local autoscaler to skip the rest of the logic and retry at the interval specified by `AUTOSCALER_UPDATE_INTERVAL_S`.
+      - **Promotion**: Once the GCS of the passive head is promoted to active, its local autoscaler should detect that the cluster resource state is ready via the `GetClusterResourceState` gRPC call and start the normal autoscaling logic.
 
 ## Baseline latency
 By default, we adhere to the standard `client-go` leader election settings:
