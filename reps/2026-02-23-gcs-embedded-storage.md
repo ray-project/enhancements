@@ -118,6 +118,21 @@ Although the `StoreClient` API is async (`AsyncPut` returns immediately and invo
 
 The net effect: a caller observes an ack only after the write is durable on disk. The "async" here refers to thread decoupling, not fire-and-forget semantics. There is no separate in-memory GCS cache that can diverge from RocksDB — the store client is authoritative for persisted state.
 
+#### Concurrency and Ordering Semantics
+
+RocksDB I/O does not run on the GCS event loop. The store client maintains a `boost::asio::thread_pool` (size `gcs_rocksdb_io_pool_size`, default 4) and posts each `Async*` call onto it. The event loop returns in ~40 µs regardless of the underlying 3–5 ms fsync.
+
+Because requests now execute concurrently across pool threads, per-key submission-order ordering must be preserved explicitly. The store client routes every single-key operation (`Put` / `Get` / `Delete` / `Exists`) through a `boost::asio::strand` chosen by `hash(table, key) % gcs_rocksdb_strand_buckets` (default 64 — comfortable headroom over the default 4-thread pool). This preserves:
+
+- **`AsyncPut(K, !overwrite)` race resolution** — two concurrent inserts to the same key cannot both observe "not found" and both write.
+- **Last-writer-wins** — `Put` followed by `Put` for the same key commits in submission order.
+- **Read-your-writes** — `Put` followed by `Get` on the same key sees the new value.
+- **Delete-then-Put / Put-then-Delete** ordering on the same key.
+
+Multi-key and scan operations (`AsyncMultiGet`, `AsyncBatchDelete`, `AsyncGetAll`, `AsyncGetKeys`) use the bare pool without strand bucketing — their semantics intentionally match Redis pipelining and `InMemoryStoreClient` under concurrent callers, where global ordering across keys is not provided.
+
+The offload path is currently opt-in (`RAY_GCS_ROCKSDB_ASYNC_OFFLOAD`, default `false`) pending a queue-fill backpressure design — under saturation the pool queue can grow without bound, masking fsync latency as queue-wait. The inline path (default) blocks the event loop for the full fsync per call; it is correct but unsuitable for non-trivial write rates. Promoting offload to default is tracked as follow-on work. POC measurements: offload yields ~2.5× aggregate throughput under pipelined writers (215 → 593 ops/s) via RocksDB group commit, with zero measurable cost from the strand layer.
+
 #### Storage Path and Configuration
 
 ```bash
@@ -162,6 +177,9 @@ Operators can tune these settings via environment variables for their deployment
 |---|---|---|
 | `RAY_GCS_STORAGE_PATH` | *(required)* | Path to persistent volume for RocksDB data. |
 | `RAY_GCS_ROCKSDB_WAL_DIR` | *(same as storage path)* | Separate directory for WAL files. Useful if main storage is slow but a faster disk is available for WAL. |
+| `RAY_GCS_ROCKSDB_ASYNC_OFFLOAD` | `false` | Run RocksDB I/O on a dedicated thread pool rather than the GCS event loop. Default off pending backpressure design; recommended for non-trivial write rates. See §"Concurrency and Ordering Semantics". |
+| `RAY_GCS_ROCKSDB_IO_POOL_SIZE` | `4` | Thread pool size for offloaded I/O. Only meaningful when `RAY_GCS_ROCKSDB_ASYNC_OFFLOAD=true`. |
+| `RAY_GCS_ROCKSDB_STRAND_BUCKETS` | `64` | Number of `boost::asio::strand` buckets for per-key ordering on the offload path. Only meaningful when `RAY_GCS_ROCKSDB_ASYNC_OFFLOAD=true`. |
 
 All other RocksDB tuning knobs (sync writes, block cache size, write buffer size, background jobs, compression) are intentionally not exposed. fsync-on-write is non-negotiable for the FT durability contract — disabling it would silently break the guarantee this REP provides, so it is hardcoded rather than offered as a footgun env var. The remaining defaults are sized for the GCS metadata workload (10–100 MB); if operators report specific performance issues, we can expose targeted env vars in a follow-up — starting restrictive is safer than starting permissive.
 
@@ -200,14 +218,17 @@ flowchart TD
     F --> G[Cluster resumes<br/>operation]
 ```
 
-#### Performance Characteristics (Expected)
+#### Performance Characteristics
 
 | Operation | Redis (network) | RocksDB (local SSD) |
 |-----------|----------------|---------------------|
-| Write latency | 0.5–2ms (network RTT) | 0.01–0.1ms (local I/O) |
-| Read latency | 0.5–2ms | 0.01–0.05ms |
-| Recovery read (full state) | Bound by network bandwidth | Bound by disk bandwidth (faster) |
+| Write latency (durable, fsync) | 0.5–2 ms (network RTT; default Redis is not synchronously persisted) | ~3–5 ms (fsync-bounded; POC ext4: 3.81 ms p50) |
+| Write latency (non-durable, memtable only) | n/a | 0.01–0.1 ms (`WriteOptions::sync = false`; tests only, never production) |
+| Read latency | 0.5–2 ms | 0.01–0.05 ms (POC ext4: 0.97 µs p50) |
+| Recovery read (full state) | Bound by network bandwidth | Bound by disk bandwidth (POC: 34 / 39 / 81 ms cold open at 100 / 1k / 10k entries) |
 | Failure mode | Network partition, Redis crash, topology change | Disk failure (rare with cloud PVs) |
+
+**Note on write latency:** the durable-write path is fsync-bounded — per-call cost is a property of the storage substrate, not the software. The POC's offload path (see §"Concurrency and Ordering Semantics") leaves per-call latency unchanged but aggregates concurrent fsyncs via RocksDB group commit, yielding ~2.5× throughput under pipelined writers. Note also that Redis's "0.5–2 ms" assumes its default async-append-only behavior, which is not crash-durable; running Redis with `appendfsync always` (the closest equivalent to RocksDB's `sync = true`) brings Redis into the same fsync-bounded regime.
 
 #### What This Does and Does NOT Provide
 
@@ -221,7 +242,7 @@ This proposal provides **GCS persistence** — cluster metadata survives head po
 | **Distributed training (NCCL)** | NCCL training group breaks — NCCL has no reconnection. Training must restart from last checkpoint | **Application responsibility** — Ray Train + periodic checkpointing (`TorchTrainer.restore()`) |
 | **High availability** | GCS is unavailable during restart (seconds to minutes) | **Separate effort** — active/standby GCS with Raft or WAL replication |
 
-For the distributed training use case that motivates this REP: GCS persistence eliminates the need to reprovision the entire cluster after a head node failure. Combined with training checkpointing, this reduces the blast radius from "restart a 24-hour job from hour 0" to "restart training from the last checkpoint while the cluster recovers in place."
+**For the distributed training use case that motivates this REP: this REP alone does not improve resilience of an in-flight training job.** The NCCL training group still breaks on head node failure, the driver process still has to restart, and training still resumes from the last application-level checkpoint regardless of which backend persists GCS state. What this REP delivers is (a) faster cluster recovery than Redis-based FT (POC measures sub-100 ms storage-layer cold open at 10k entries vs. Redis snapshot-restore time) and (b) a foundation for follow-on work — first-class "detached jobs" / checkpointable drivers (see Follow-on Work item 1) that can survive while the cluster recovers in place. End-to-end training resilience requires all three pieces: GCS persistence (this REP), driver resilience (follow-on), and application checkpointing (workload responsibility).
 
 The recovery model is identical to today's Redis-based FT: GCS goes down, restarts, reads state, workers reconnect. The difference is purely in where state is persisted — local disk instead of a remote Redis instance.
 
@@ -230,6 +251,19 @@ The recovery model is identical to today's Redis-based FT: GCS goes down, restar
 GCS is OOM-killed today primarily due to its in-memory working set (actor / task / node tables, task lineage), not the storage backend. This proposal does not change how much state GCS keeps resident and adds a small constant memory overhead (~20–50 MB for the RocksDB block cache and write buffers). In strict terms this makes head-pod memory pressure modestly worse, not better.
 
 Durable local storage does, however, *unlock* a future optimization: paging cold state out of RAM and faulting it back from RocksDB on demand (analogous to a database buffer pool). That path to making GCS OOM-resistant is out of scope for this REP and is listed under "State compaction and TTL" in follow-on work.
+
+#### Binary Size Impact
+
+Adding RocksDB as a dependency increases artifact sizes measurably but modestly. POC-measured deltas (Linux x86_64, RocksDB built via `rules_foreign_cc` with all optional features OFF — compression backends, RocksDB tools, Java bindings):
+
+| Artifact | Master | With RocksDB | Δ |
+|---|---|---|---|
+| `gcs_server` (stripped) | 16.5 MB | 23.1 MB | +6.5 MB (+39%) |
+| `gcs_server` (unstripped) | 23.8 MB | 32.0 MB | +8.2 MB (+34%) |
+| ray wheel (py3.10 manylinux x86_64) | 70.2 MiB | 73.4 MiB | +3.2 MiB (+4.6%) |
+| Docker image (`ray-py3.10-cpu`) | 2.15 GB | 2.17 GB | +20 MB (+0.9%) |
+
+The wheel and Docker image deltas are dominated by RocksDB statically linked into `gcs_server`; everything else is unchanged. Users who do not enable embedded FT (`RAY_GCS_STORAGE != rocksdb`) still pay this cost because the dependency is linked into the standard binary; an `extras_require` split (`ray[rocksdb]`) was considered and rejected — maintaining a separate release artifact is not worth the < 5% wheel-size increase.
 
 #### When to Use Embedded Storage vs Redis
 
@@ -325,6 +359,8 @@ When `backend: rocksdb` is set, the KubeRay operator reconciliation:
 2. **Mounts the PVC** on the head pod at `/data/gcs-state`. If `storage.subPath` is set, the operator mounts that subdirectory of the volume rather than the volume root — useful for shared exports (NFS, Vast) where each cluster lives in a preallocated per-tenant subdirectory.
 3. **Sets environment variables** on the head container: `RAY_GCS_STORAGE=rocksdb` and `RAY_GCS_STORAGE_PATH=/data/gcs-state`.
 
+Steps 2 and 3 run on both the operator-managed and `existingClaim` paths — only step 1 (PVC creation) is skipped when `existingClaim` is set. Setting `backend: rocksdb` always wires the GCS env vars on the head pod regardless of which storage path the user chose.
+
 The resulting head pod spec (generated by the operator, not written by the user):
 
 ```yaml
@@ -349,9 +385,14 @@ volumes:
 #### PVC Lifecycle
 
 - **Operator-managed PVC** (`size` / `storageClassName` / `accessModes`): created by the operator when the RayCluster is created, deleted automatically on cluster deletion via `ownerReferences` and Kubernetes garbage collection. No manual cleanup required.
+- **RayService caveat.** When a RayCluster is owned by a RayService (zero-downtime upgrade pattern: the RayService controller creates a new RayCluster and deletes the old one on upgrade), the operator should set the PVC's `ownerReferences` to the **RayService**, not the RayCluster. Otherwise an upgrade garbage-collects the PVC alongside the old RayCluster and discards GCS state mid-upgrade. This is an implementation note for the KubeRay change, not a user-configurable option.
 - **User-managed PVC** (`existingClaim`): the operator never creates or deletes the PVC. The user is responsible for provisioning, sizing, and cleanup; the operator only consumes the claim.
 - **Survives head pod restarts** in both cases. Kubernetes does not delete a PVC when its pod is deleted. When the head pod restarts, it re-mounts the same PVC and GCS recovers from the existing RocksDB data.
-- **Stale data protection.** On startup, `RocksDbStoreClient` should validate that the RocksDB data directory belongs to this cluster (e.g., by storing and checking a cluster ID marker). If a PVC is accidentally reused with a different cluster — particularly relevant for `existingClaim` and shared `subPath` exports — GCS should fail-fast rather than load stale state from a previous cluster.
+- **Stale data protection.** A naive "compare to GCS-generated cluster ID" approach does not work — Ray's GCS init order calls `InitKVManager` before `GetOrGenerateClusterId`, and the persisted ID *is* the cluster ID, so there is no out-of-band authority to compare against during open. Two viable approaches:
+  - **(a) Operator-injected cluster ID.** KubeRay sets a `RAY_CLUSTER_ID` env var on the head pod, sourced from the RayCluster UID via the Kubernetes downward API. `RocksDbStoreClient` writes this to a marker key on first open and refuses to open if a subsequent restart sees a different value. This is the recommended production design; it requires only operator-side plumbing and no change to GCS init order.
+  - **(b) Defer to follow-on work.** Document the failure mode (operator misconfigures `existingClaim` → GCS silently loads stale state from a previous cluster) and rely on operator discipline in the meantime. The POC took this path for the initial proof of concept.
+
+  This protection matters most for `existingClaim` and shared `subPath` exports. Operator-managed PVCs with `ownerReferences` are deleted with their owner (see RayService caveat above) and cannot accidentally outlive their original cluster.
 
 ## Compatibility, Deprecation, and Migration Plan
 
