@@ -125,7 +125,7 @@ There are two scenarios that could suffer from this issue:
 A network partition occurs while the Leadership Renew Thread is trying to contact the K8s API server. The HTTP client hangs indefinitely waiting for a response. Because the thread is stuck, it cannot check its internal clock, misses the `RenewDeadline`, and fails to trigger a process suicide before K8s elects a new leader.
 
 ##### 2. Process Frozen
-The host machine experiences severe CPU starvation, or the OS forcefully pauses your entire GCS process. The K8s lease expires, and a new leader takes over. When the OS finally unfreezes the process, the GCS main thread instantly executes some ongoing resource update and database writes before the renew thread has the microsecond needed to call `fatal()` and kill itself.
+The host machine experiences severe CPU starvation, or the OS forcefully pauses your entire GCS process. The K8s lease expires, and a new leader takes over. When the OS finally unfreezes the process, the GCS main thread instantly executes some ongoing resource update and database writes before the renew thread has the microsecond needed to call `fatal()` and kill itself. Enabling [resource isolation with Cgroup v2](https://docs.ray.io/en/latest/ray-core/resource-isolation-with-cgroupv2.html) can help with this issue.
 
 ##### Safeguards & Mitigations
 
@@ -168,6 +168,8 @@ Besides those generic safeguards, we can also apply the following Ray-specific o
 - `gcs_is_leader`: Gauge metrics. Emits a 1 if the current instance is the leader, and a 0 if it is a passive head.
 - `gcs_leader_transitions_total`: Counter metrics. Incremented every time a leadership change is detected. For a single GCS process, the metrics will only ever transition from 0 to 1. Next time a failover occurs, a brand-new GCS pod will spin up, start at 0, and then transition to 1 when it becomes the active leader. 
 - `gcs_recovery_latency_ms`: Histogram metrics. The time it takes for a passive head to recover the state from the moment that it takes over the leadership.
+- `gcs_lease_renew_latency_ms`: Histogram metrics. The latency of GCS leader lease renewal request.
+- `gcs_lease_renew_failures_total`: Counter metrics. The total number of failed GCS leader lease renewal requests.
 
 Even though the passive head is in "read-only" mode and failing readiness probes (so it doesn't get traffic), its metrics endpoint should still be active. An external dashboard should aggregate and plot these metrics for both pods, allowing users to see the health of both the active and passive heads.  
 
@@ -176,6 +178,8 @@ The cluster-wide metrics aggregation and alert should be built outside of gcs/ra
   - Alert if `gcs_is_leader` is 1 for both heads(split brain).
   - Alert if `gcs_recovery_latency_ms` is continously too high.
   - Alert if `gcs_leader_transitions_total` is too frequent(leader flapping).
+  - Alert if `gcs_lease_renew_failures_total` rate is high (potential lease loss risk).
+  - Alert if P99 of `gcs_lease_renew_latency_ms` is close to `RenewDeadline`.
 
 #### 5. KubeRay Changes
 
@@ -183,27 +187,19 @@ To support the Active-Passive Head architecture, the KubeRay operator requires u
 
 ##### 1. Customer-Facing API Changes
 
-Currently, the `HeadGroupSpec` in the `RayCluster` CRD assumes a single head node instance. We propose adding a `Replicas` field to the `HeadGroupSpec` API schema to allow users to explicitly configure the desired number of head pods. To streamline leader election tuning, we also extend `GcsFaultToleranceOptions` to natively support lease parameters.
+Currently, the `HeadGroupSpec` in the `RayCluster` CRD assumes a single head node instance. To support Active-Passive High Availability, we propose adding an `EnableActivePassiveHead` boolean field under `GcsFaultToleranceOptions` to control the active/passive mode enablement. If set to `true`, KubeRay will automatically provision a standby head node. To streamline leader election tuning, we also extend `GcsFaultToleranceOptions` to natively support lease parameters.
 
 **Go API Schema Definitions (`apis/ray/v1/raycluster_types.go`):**
 
 ```go
-type HeadGroupSpec struct {
-	// Replicas specifies the desired number of head node replicas.
-	// Defaults to 1. If set to 2, Active-Passive High Availability is enabled.
-	// +kubebuilder:default:=1
-	// +kubebuilder:validation:Minimum:=1
-	// +kubebuilder:validation:Maximum:=2
-	Replicas *int32 `json:"replicas,omitempty"`
-
-	// RayStartParams are the params of the start command: node-manager-port, object-store-memory, etc.
-	RayStartParams map[string]string `json:"rayStartParams"`
-...
-}
-
 type GcsFaultToleranceOptions struct {
 	// RedisConfiguration struct defining external storage endpoints
 	...
+
+	// EnableActivePassiveHead enables active-passive high availability for the GCS.
+	// If enabled, KubeRay will provision a standby head node to ensure quick recovery.
+	// +kubebuilder:default:=false
+	EnableActivePassiveHead *bool `json:"enableActivePassiveHead,omitempty"`
 
 	// LeaderElectionLeaseDurationSeconds is the duration that non-leader candidates wait before forcing leadership acquisition.
 	// +kubebuilder:default:=15
@@ -220,9 +216,9 @@ type GcsFaultToleranceOptions struct {
 ```
 
 **Validation Webhook:**
-- A validating webhook will enforce that `Replicas` can only be set to `1` or `2`. Initially, we limit the replicas to 2.
-- If `Replicas` is set to `2`, the webhook validates that external Redis persistence is configured under `spec.gcsFaultToleranceOptions` (since native GCS recovery relies on Redis storage).
+- If `EnableActivePassiveHead` is set to `true`, the webhook validates that external Redis persistence is configured under `spec.gcsFaultToleranceOptions` (since native GCS recovery relies on Redis storage).
 - Enforces timing invariants if customized: `LeaderElectionLeaseDurationSeconds > LeaderElectionRenewDeadlineSeconds > LeaderElectionRetryPeriodSeconds`.
+- Validates that lease parameters (`LeaderElectionLeaseDurationSeconds`, `LeaderElectionRenewDeadlineSeconds`, `LeaderElectionRetryPeriodSeconds`) are **only** configured when `EnableActivePassiveHead` is set to `true`.
 
 **Example Customer Manifest (`RayCluster` CR):**
 
@@ -236,12 +232,11 @@ spec:
   rayVersion: '2.9.0'
   gcsFaultToleranceOptions:
     redisAddress: "redis:6379"
-    ...
+    enableActivePassiveHead: true # Enable Active-Passive HA
     leaderElectionLeaseDurationSeconds: 20
     leaderElectionRenewDeadlineSeconds: 12
     leaderElectionRetryPeriodSeconds: 3
   headGroupSpec:
-    replicas: 2 # Enable Active-Passive HA
     rayStartParams:
       ...
     template:
@@ -253,7 +248,7 @@ spec:
 
 ##### 2. Controller Configuration & Reconciliation Logic
 
-When a `RayCluster` is deployed with `headGroupSpec.replicas: 2`, the KubeRay controller executes the following advanced reconciliation logic:
+When a `RayCluster` is deployed with `gcsFaultToleranceOptions.enableActivePassiveHead: true`, the KubeRay controller executes the following advanced reconciliation logic:
 
 - **Head Pod Provisioning & Lifecycle**:
   - Provisions two independent head pods labeled as candidates for leadership.
@@ -279,7 +274,7 @@ When a `RayCluster` is deployed with `headGroupSpec.replicas: 2`, the KubeRay co
   **1. Single-container co-located components**:
   These components are running in the same container as different subprocesses. The gcs termination caused by lease lost will terminate other processes.
   - **GCS Server**
-    Safe on Standby. Global tracking managers are instantiated empty; state hydration is deferred until promotion. The rpc server can only answer read requests in passive mode. All mutation requests should not be accepted and the rejection should be handled gracefully on the client side. (With the proper traffic routing, the requests will be sent to the active head only. But it is another layer of protection to avoid any potential split brain issue.)
+    Safe on Standby. Global tracking managers are instantiated empty; state hydration is deferred until promotion. The rpc server can only answer critical read requests in passive mode including `GetClusterId` for head initialization and the liveness & readiness health check rpc. All mutation requests and unnecessary read requests should not be accepted and the rejection should be handled gracefully on the client side. (With the proper traffic routing, the requests will be sent to the active head only. But it is another layer of protection to avoid any potential split brain issue.)
     - **Leadership Loss**: If the active GCS fails to renew its lease or voluntarily steps down, it immediately self-terminates (`RAY_LOG(FATAL)`) to eliminate split-brain risks, instantly closing all active gRPC client streams.
   - **Raylet**: it is required to be alive to answer the readiness and liveness probes.
       - **Startup**: Upon boot, the local standby Raylet targets the local GCS and sends a RegisterNode gRPC request. On passive head, the PUT request should not reach to Redis. 
