@@ -105,10 +105,10 @@ ray.get(pg.ready(), timeout=10)
 
 The placement, with 2 nodes labeled rack\_id \= 1 and 2 nodes labeled rack\_id \= 2 each having 4 CPU resources each:
 
-![](image1.png)
+![](image2.png)
 
 The bundles are STRICT\_PACKed based on rack\_id=1, so one node with rack\_id=1 is selected and placed with the bundles. Now, let us assume rack 1 goes down, and takes down all of its nodes. The placement will now be as follows:   
-![](image2.png)
+![](image4.png)
 
 Since rack 1 has gone down, the bundles are now scheduled onto another value of rack\_id, which in this case is rack\_id=2.
 
@@ -128,7 +128,7 @@ Note here that, we enforce that all bundles are STRICT\_PACK on the same value r
 ![](image3.png)
 
 Let us say one node within this placement fails, since our placement group is not completely unplaced as in the previous example, we will still try to reschedule the unplaced bundle to no avail, marking this placement group as infeasible.  
-![](image4.png)
+![](image5.png)
 
 ### Spread Across Availability Zone and Within Rack (Possible Future Steps)
 
@@ -146,7 +146,7 @@ Note that this is a rough sketch of how possible future steps would be for hiera
 
 Now for each group, the individual `{"CPU": 2}` bundles will be STRICT\_PACK on the same rack\_id, and STRICT\_SPREAD across the nodes, similar to the examples above. Hence, we would have a potential following placement.
 
-![](image5.png)
+![](image1.png)
 
 ### Nuances Between Different Hierarchical Scheduling (Possible Future Steps)
 
