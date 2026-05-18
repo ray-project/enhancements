@@ -269,7 +269,10 @@ When a `RayCluster` is deployed with `gcsFaultToleranceOptions.enableActivePassi
 ## Compatibility, Deprecation, and Migration Plan
 
 - **Head Node Components Compatibility**: 
-  To ensure a highly available Active-Passive architecture, all background processes running on the Ray Head Node must operate safely in a multi-head environment.
+  To ensure a highly available Active-Passive architecture, all background processes running on the Ray Head Node must operate safely in a multi-head environment. Specifically, all components must adhere to the following design principles:
+  1. **Suppress Unnecessary Work in Passive Mode**: Standby components must disable non-essential processes (e.g., registering nodes with the GCS, accepting job requests, publishing/aggregating cluster events).
+  2. **Avoid Interfering with the Active Leader**: Standby components must not perform tasks reserved for the active head node. For instance, only the active leader's autoscaler should update KubeRay CRDs, and only the active GCS server should persist states to Redis.
+  3. **Recover Functionality Automatically Post-Promotion**: Standby components must continuously monitor the leadership status (e.g., via polling periodically) and automatically resume full operations immediately upon promotion. While some components like Raylet and Autoscaler already have the channel to fetch status from local GCS periodically, we need to ensure that the leadership status is propagated to all components. The GCS needs to expose an rpc for other components to fetch its leadership status.
 
   **1. Single-container co-located components**:
   These components are running in the same container as different subprocesses. The gcs termination caused by lease lost will terminate other processes.
@@ -281,9 +284,9 @@ When a `RayCluster` is deployed with `gcsFaultToleranceOptions.enableActivePassi
       - **Passive State**: The Raylet continuously sends heartbeats to the local GCS to keep its node liveness. 
       - **Promotion**: During promotion, the Raylet should register itself and  physically writes it to Redis.
   - **Dashboard**: the local Dashboard process is started by KubeRay pointing to the local GCS. Because it queries the passive local GCS, the dashboard UI initially displays a single-node cluster (only itself) with no active jobs or actors. Since the standby pod is Not Ready, its dashboard API is completely unreachable by external clients with the current k8s service setup. 
-  - **Job API**: with right k8s service configuration, the `ray job submit` request should not be able to reach the passive head.
+  - **Job API**: with right k8s service configuration, the `ray job submit` request should not be able to reach the passive head. If it does, the server should reject the request with a well-defined error message and code under passive mode.
   - **Serve Controller**: The Ray Serve Controller is a standard Ray actor. Since GCS in standby mode has no active workers and no running jobs, no Serve Controller is ever spawned on the standby head.
-  - **Dashboard Agent**: Runs locally and reports metrics to the co-located passive GCS. Upon promotion, it continues reporting to the now-promoted local GCS. Ready to initialize runtime environments if new jobs are submitted post-failover.
+  - **Dashboard Agent**: Runs locally and reports events to the co-located passive GCS. Upon promotion, it continues reporting to the now-promoted local GCS. Ready to initialize runtime environments if new jobs are submitted post-failover. Block gcs event publishing in passive mode.
 
   **2. Sidecar components**
     - **Autoscaler**: In standard KubeRay setups where `enableInTreeAutoscaling: true` is configured, the Autoscaler is typically injected as a dedicated sidecar container running alongside the ray-head container inside the same pod. It is a critical, high-risk background component that must be suppressed on passive head.
