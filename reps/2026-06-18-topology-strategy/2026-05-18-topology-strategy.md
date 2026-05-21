@@ -2,11 +2,11 @@
 ## General Motivation
 The goal of this API is to introduce topology aware scheduling for placement groups. This allows users to specify a given label to have a specified placement strategy, such as packing all bundles of a placement group within one rack.
 
-This change is in part motivated by new GB300 racks that are connected through the NVLink domain, necessitating placement groups that target entire NVLink domains. The end goal is to further abstract to placement groups that target general groups such as TPU pods, NVLink domains, availability zones, etc.
+This change is in part motivated by new GB300 racks that are connected by a NVLink domain. The end goal is to further abstract to placement groups that target general groups such as TPU pods, NVLink domains, availability zones, etc.
 
 ### Current Functionality Issues
 
-Currently, there is no way to specify this for placement groups, since the functionality only supports targeting specific labels, rather than targeting any possible value given some topology strategy. For example, if you tried to reserve resources to occupy an entire rack: 
+Currently, there is no way exposed by the ray API to specify topology aware scheduling for placement groups, since the functionality only supports targeting specific labels, rather than targeting any possible value given some topology strategy. For example, if you tried to reserve resources to occupy an entire rack: 
 
 ```py
 ray.util.placement_group([{"GPU": 4, "CPU": 2}] * 18, strategy="STRICT_PACK")
@@ -41,7 +41,7 @@ This change will affect both `ray` and `KubeRay`.
 ## Design and Architecture
 ### Basic API
 
-Support a topology\_strategy option on ray.util.placement\_group(). Topology\_strategy denotes a label and the placement strategy over the label. Ray groups candidate nodes by the value of that label and applies the chosen strategy over those groups. Let us first assume that we have started a cluster of nodes with custom labels, which can either be done through [CLI](https://docs.ray.io/en/latest/ray-core/scheduling/labels.html#custom), [yaml](https://docs.ray.io/en/latest/cluster/vms/references/ray-cluster-cli.html) files, or through [KubeRay](https://docs.ray.io/en/latest/cluster/kubernetes/user-guides/label-based-scheduling.html). An example of how one might use CLI to start a cluster with rack\_ids for specific nodes:
+Support a topology\_strategy option on ray.util.placement\_group(). Topology\_strategy denotes a label and the placement strategy over the label. Ray groups candidate nodes by the value of that label and applies the chosen strategy over those groups. Let us first assume that we have started a cluster of nodes with custom labels, which can either be done through [CLI](https://docs.ray.io/en/latest/ray-core/scheduling/labels.html#custom), [yaml](https://docs.ray.io/en/latest/cluster/vms/references/ray-cluster-cli.html) files, or through [KubeRay](https://docs.ray.io/en/latest/cluster/kubernetes/user-guides/label-based-scheduling.html). An example of how one might use the Ray CLI to start a cluster with rack\_ids for specific nodes:
 
 ```
 ray start --head --labels="rack_id=1"
@@ -59,7 +59,7 @@ topology_strategy = [{"ray.io/node-id": "STRICT_PACK", "rack_id" : "STRICT_PACK"
 )
 ```
 
-We define the topology strategy for the `rack_id` label, and based on the `rack_id` label, we will `STRICT_PACK` all the bundles. Thus, we want to find a feasible allocation for the bundles such that all the bundles’ nodes that share the same label value of `rack_id`, let’s say `{rack_id : 1}`, committing and pushing this to the raylets, or we deem this infeasible (so the autoscaler can deal with it). Furthermore, for the `ray.io/node-id` label, this keeps with the existing placement group `strategy` field, where we will `STRICT_PACK` all bundles such that they also share the same node id. Combining this with the other restriction means all bundles of this placement group must be placed on the **same** `rack_id` and **same** `ray.io/node-id`.
+We define the topology strategy for the `rack_id` label, and based on the `rack_id` label, we will `STRICT_PACK` all the bundles. Thus, we want to find a feasible allocation for the bundles such that all the bundles’ nodes that share the same label value of `rack_id`, let’s say `{rack_id : 1}`, or we deem this infeasible (so the autoscaler can deal with it). Furthermore, for the `ray.io/node-id` label, this keeps with the existing placement group `strategy` field, where we will `STRICT_PACK` all bundles such that they also share the same node id. Combining this with the other restriction means all bundles of this placement group must be placed on the **same** `rack_id` and **same** `ray.io/node-id`.
 
 ```py
 @PublicAPI
