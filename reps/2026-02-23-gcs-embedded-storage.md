@@ -21,7 +21,7 @@ This change affects both `ray` (new `StoreClient` implementation in C++) and `ku
 
 ## Stewardship
 
-- **Required Reviewers**: @jjyao (GCS maintainer), @kevin85421 (KubeRay / GCS FT integration)
+- **Required Reviewers**: @rueian, @andrewsykim, @MengjinYan 
 - **Shepherd of the Proposal**: TBD — requesting @jjyao or another GCS-experienced committer
 
 ## Design and Architecture
