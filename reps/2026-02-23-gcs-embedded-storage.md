@@ -22,7 +22,7 @@ This change affects both `ray` (new `StoreClient` implementation in C++) and `ku
 ## Stewardship
 
 - **Required Reviewers**: @rueian, @andrewsykim, @MengjinYan 
-- **Shepherd of the Proposal**: TBD — requesting @jjyao or another GCS-experienced committer
+- **Shepherd of the Proposal**: @edoakes 
 
 ## Design and Architecture
 
