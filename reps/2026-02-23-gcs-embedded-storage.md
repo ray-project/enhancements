@@ -250,7 +250,7 @@ The recovery model is identical to today's Redis-based FT: GCS goes down, restar
 
 GCS is OOM-killed today primarily due to its in-memory working set (actor / task / node tables, task lineage), not the storage backend. This proposal does not change how much state GCS keeps resident and adds a small constant memory overhead (~20–50 MB for the RocksDB block cache and write buffers). In strict terms this makes head-pod memory pressure modestly worse, not better.
 
-Durable local storage does, however, *unlock* a future optimization: paging cold state out of RAM and faulting it back from RocksDB on demand (analogous to a database buffer pool). That path to making GCS OOM-resistant is out of scope for this REP and is listed under "State compaction and TTL" in follow-on work.
+Durable local storage does, however, *unlock* a future optimization: paging cold state out of RAM and faulting it back from RocksDB on demand (analogous to a database buffer pool). Non-critical, high-volume data is a particularly good fit — for example, observability data (event logs, task/actor history, log indexes) that is read on demand and tolerant of slightly higher access latency could live primarily on disk rather than in RAM. That path to making GCS OOM-resistant is out of scope for this REP and is listed under "State compaction and TTL" in follow-on work.
 
 #### Binary Size Impact
 
@@ -290,6 +290,21 @@ The embedded backend is not inherently node-scoped — the boundary depends on t
   - **Local PV / hostPath** is truly node-pinned — unsuitable for this feature because it defeats the recovery model.
 
 **Practical takeaway:** on default KubeRay with cloud block storage, the head pod survives node-level failures within a zone, which covers the typical disruption modes driving this REP. Cross-zone head-node failure requires a regional disk, an RWX volume, or out-of-band backup. Redis, being external, is insulated from head-pod volume topology entirely.
+
+##### Interaction with Active-Passive Head ([REP #65](https://github.com/ray-project/enhancements/pull/65))
+
+[REP #65 (Ray Active-Passive Head Architecture)](https://github.com/ray-project/enhancements/pull/65) — recently merged — introduces a hot standby GCS process for sub-second failover via lease-based leader election. The embedded RocksDB backend proposed here is a natural fit for that design:
+
+- **Storage topology:** a single `ReadWriteMany` PVC (e.g., EFS, CephFS, Azure Files) mounted on both the active and passive head pods. Only the active head opens the RocksDB instance for read/write; the passive head keeps the volume mounted but does not open the DB until it wins the lease.
+- **Split-brain prevention — three layers, in priority order:**
+  1. **Lease-based leader election (REP #65, primary)** — only the current lease holder serves GCS RPCs.
+  2. **Cooperative self-termination (REP #65, primary fencing)** — the active leader runs a lease-watcher with a watchdog timeout strictly less than the lease TTL. On lease loss it calls exit(1) immediately; the kernel releases the RocksDB LOCK as part of process teardown. This is the path the expected failover follows.
+  c. **RocksDB LOCK file (corruption safety net only)** — if cooperation fails (hung process, kernel wedge), the LOCK still prevents a passive from opening the DB and corrupting state. KubeRay pod-deletion fences the stuck process; failover then proceeds. The LOCK is not in the hot path under normal failover.
+- **Failover sequence (common case):** active loses lease → watchdog fires → active exit(1) → kernel releases LOCK → passive acquires lease → passive opens RocksDB → resumes serving. Dominated by lease TTL + RocksDB cold open (sub-100 ms at 10k entries per POC).
+- **Failover sequence (degraded case, hung leader):** lease TTL + KubeRay pod-delete + RocksDB cold open. Adds the pod-delete latency (~5–15 s).
+- **Caveats with RWX volumes:** RWX filesystems trade off latency and per-op cost compared to block storage. The active head's write path will be slower than on `ReadWriteOnce` block storage; this is the price of zero-downtime failover. For deployments that don't need active/passive HA, `ReadWriteOnce` remains the default and recommended topology.
+
+This section documents *how the embedded backend supports* the Active-Passive design; the failover protocol, lease management, and KubeRay multi-head provisioning are owned by REP #65.
 
 ### Ray Core Changes
 
@@ -432,10 +447,12 @@ volumes:
 
 ### Acceptance Criteria
 
-- All existing GCS FT tests pass when run against RocksDB backend
-- Recovery time is equal to or better than Redis-based FT
-- No measurable regression in GCS write latency during normal operation
-- Documentation and examples for both bare-metal and KubeRay deployment
+The embedded RocksDB backend is considered ready to ship when all of the following pass:
+
+1. **Ray release tests** — the standard release test suite passes with `RAY_GCS_STORAGE=rocksdb`.
+2. **Ray Core GCS FT test equivalent** — a new postmerge CI job mirroring the existing Redis GCS FT job in [`.buildkite/core.rayci.yml`](https://github.com/ray-project/ray/blob/master/.buildkite/core.rayci.yml#L114), running against a local-file RocksDB. Labeled `skip-premerge`, with path-based triggers on `src/ray/gcs/**` so it runs whenever GCS code is changed.
+3. **Ray scale tests** — `test_many_actors.py` and other GCS-heavy scale tests pass with the RocksDB backend at parity with Redis.
+4. **Ray Serve chaos testing** — Serve chaos tests (head pod kills, network partitions) pass with RocksDB-backed GCS FT.
 
 ## Embedded Storage Backend Selection
 
@@ -507,7 +524,7 @@ We recommend **RocksDB** based on:
 
 1. **[needed] Driver resilience during head pod restart** — The RayJob submitter pod survives head pod restarts physically, but the driver process may crash due to gRPC timeouts on pending RPCs. The RayJob controller and driver reconnection logic need hardening so the driver can survive GCS downtime gracefully and resume orchestration after recovery.
 
-2. **[potential] Active/Standby GCS** — A hot standby GCS process that takes over on failure, using RocksDB on a shared ReadWriteMany volume or replicated via WAL shipping. This would provide true HA (zero-downtime failover). The embedded storage backend proposed here is a prerequisite.
+2. **[in flight] Active/Passive GCS** — Covered by the recently merged [REP #65 (Ray Active-Passive Head Architecture)](https://github.com/ray-project/enhancements/pull/65), which adds a hot standby GCS process with lease-based leader election for sub-second failover. The embedded storage backend proposed here is a prerequisite — see "Interaction with Active-Passive Head" in the Design and Architecture section for the storage topology and split-brain story.
 
 3. **[potential] SQLite backend** — SQLite as a lighter alternative for smaller clusters where minimal dependency footprint is preferred over KV-optimized performance (see alternatives analysis above).
 
