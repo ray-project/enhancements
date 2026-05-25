@@ -34,6 +34,7 @@ This change will affect both `ray` and `KubeRay`.
 
 ### Reviewers
 - @MengjinYan
+- @andrewsykim
 
 ### Shepherd of the Proposal (should be a senior committer)
 - @edoakes
