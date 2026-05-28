@@ -149,6 +149,24 @@ Now for each group, the individual `{"CPU": 2}` bundles will be STRICT\_PACK on 
 
 ![](image1.png)
 
+### Strict Pack Within Availability Zone and Within Rack (Possible Future Steps)
+
+```py
+pg = ray.util.placement_group(
+bundles = [[{"CPU": 2}, {"CPU": 2}], [{"CPU": 2}, {"CPU": 2}]],
+topology_strategy = 
+[{"ray.io/node-id" : "STRICT_SPREAD", "rack_id" : "STRICT_PACK"}, {"availability_zone" : "STRICT_PACK"}]
+)
+
+ray.get(pg.ready(), timeout=10)
+```
+
+In this case, we have the initial list, which represents two groups of bundles, each defined as: `[{"CPU": 2}, {"CPU": 2}]`. Both of these groups will try to be STRICT\_PACK within some availability\_zone. Now for each group, the individual `{"CPU": 2}` bundles will be STRICT\_PACK on the same rack\_id, and STRICT\_SPREAD across the nodes, similar to the examples above. Hence, we would have a potential following placement.
+
+The following is only a potential configuration. Another possible configuration is that both bundle groups are scheduled with the same rack\_id.
+
+![](image6.png)
+
 ### Nuances Between Different Hierarchical Scheduling (Possible Future Steps)
 
 ```py
@@ -176,6 +194,27 @@ ray.get(pg.ready(), timeout=10)
 This is a different placement group scheduling that we have. The subtle difference is that the `rack_id` requirement is moved as the requirement for how to place the groups of bundles. At first, it might be hard to wrap around what is the difference between these two scheduling patterns.
 
 In the first strategy, both groups of bundles have to be in the same availability zone. However, these groups of bundles can be on the same / different racks. The bundles themselves within each group must be spread on different nodes of the rack. In the second strategy, both groups of bundles have to be in the same availability zone AND same rack. However, these groups of bundles have to then be spread across different nodes of that rack.
+
+## Implementation Plan
+
+### Milestone 1: public topology\_strategy API for placement groups
+
+* Create public topology\_strategy API on placement groups.  
+* Support STRICT\_PACK placement groups on arbitrary labels.  
+* Confirming functionality with NVIDIA / Reflection folks.
+
+### Milestone 2: support multiple scheduling strategies
+
+* Support PACK, SPREAD, STRICT\_SPREAD, etc.
+
+### Milestone 3: e2e autoscaler integration
+
+* Support TPU-slice labels, availability zones, etc.
+
+### Milestone 4: nested and hierarchical topology scheduling
+
+* Add a nested representation so that a higher-level label topology\_strategy can treat lower-level groups as units.  
+* Helps support cases such as rack-in-AZ, multi-rack NVLink topology\_strategies, and future region-level scheduling on a high level (without autoscaler automatic labeling / scaling integration yet)
 
 ## Compatibility, Deprecation, and Migration Plan
 As mentioned above, we will continue to support all current functionality as normal, and only provide additional functionality with the new topology_strategy field. Only when users specify this new field will we disable the strategy field.
