@@ -117,7 +117,7 @@ Since rack 1 has gone down, the bundles are now scheduled onto another value of 
 
 ```py
 pg = ray.util.placement_group(
-bundles = [{"CPU": 2}] * 4,
+bundles = [{"CPU": 2}] * 2,
 topology_strategy = [{"ray.io/node-id" : "STRICT_SPREAD", "rack_id" : "STRICT_PACK"}],
 )
 
@@ -166,6 +166,22 @@ In this case, we have the initial list, which represents two groups of bundles, 
 The following is only a potential configuration. Another possible configuration is that both bundle groups are scheduled with the same rack\_id.
 
 ![](image6.png)
+
+### Strict Spread Across Racks And Nodes (Possible Future Steps)
+
+```py
+pg = ray.util.placement_group(
+bundles = [[{"CPU": 2}, {"CPU": 2}] * 4],
+topology_strategy = 
+[{"ray.io/node-id" : "STRICT_SPREAD"}, {"rack_id" : "STRICT_SPREAD"}]
+)
+
+ray.get(pg.ready(), timeout=10)
+```
+
+In this case, we have groups of bundles that we want to STRICT\_SPREAD across all racks, so each group of bundles has the same rack\_id locality, but no group of bundles will share the same rack. We then STRICT\_SPREAD the bundles across the nodes within the rack. The configuration would look similar to below.
+
+![](image7.png)
 
 ### Nuances Between Different Hierarchical Scheduling (Possible Future Steps)
 
