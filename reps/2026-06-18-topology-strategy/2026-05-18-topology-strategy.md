@@ -71,7 +71,7 @@ strategy: str, # if defined along with topology_strategy, will error out
 ...
 bundle_label_selector: List[Dict[str, str]] = None,
 # NEW FIELD
-topology_strategy: Dict[str, str] = None,
+topology_strategy: List[Dict[str, str]] = None,
 )
 ```
 
