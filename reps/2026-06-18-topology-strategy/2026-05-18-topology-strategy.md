@@ -1,4 +1,4 @@
-# Ray Toplogy Strategy
+# Ray Topology Strategy
 ## General Motivation
 The goal of this API is to introduce topology aware scheduling for placement groups. This allows users to specify a given label to have a specified placement strategy, such as packing all bundles of a placement group within one rack.
 
@@ -56,7 +56,7 @@ To create a placement group with the new API:
 pg = ray.util.placement_group(
 bundles = [{"CPU": 2, "GPU": 4}] * 16,
 # NEW FIELD
-topology_strategy = [{"ray.io/node-id": "STRICT_PACK", "rack_id" : "STRICT_PACK"}],
+topology_strategy = {"ray.io/node-id": "STRICT_PACK", "rack_id" : "STRICT_PACK"},
 )
 ```
 
@@ -98,7 +98,7 @@ The public API only exposes topology\_strategy, but internally there are two dis
 ```py
 pg = ray.util.placement_group(
 bundles = [{"CPU": 2}] * 2,
-topology_strategy = [{"ray.io/node-id" : "STRICT_PACK", "rack_id" : "STRICT_PACK"}],
+topology_strategy = {"ray.io/node-id" : "STRICT_PACK", "rack_id" : "STRICT_PACK"},
 )
 
 ray.get(pg.ready(), timeout=10)
@@ -118,7 +118,7 @@ Since rack 1 has gone down, the bundles are now scheduled onto another value of 
 ```py
 pg = ray.util.placement_group(
 bundles = [{"CPU": 2}] * 2,
-topology_strategy = [{"ray.io/node-id" : "STRICT_SPREAD", "rack_id" : "STRICT_PACK"}],
+topology_strategy = ["ray.io/node-id" : "STRICT_SPREAD", "rack_id" : "STRICT_PACK"},
 )
 
 ray.get(pg.ready(), timeout=10)
@@ -143,7 +143,7 @@ topology_strategy =
 ray.get(pg.ready(), timeout=10)
 ```
 
-Note that this is a rough sketch of how possible future steps would be for hierarchical topology scheduling. In this case, we have the initial list, which represents two groups of bundles, each defined as: `[{"CPU": 2}, {"CPU": 2}]`. So, both of these groups will try to be STRICT\_SPREAD across availability\_zone labels, so bundles of each group will not overlap.
+Note that this is a rough sketch of how possible future steps would be for hierarchical topology scheduling. We introduce topology strategy in a list format, where each element of the list maps to each layer of bundles. In this case, we have the initial list, which represents two groups of bundles, each defined as: `[{"CPU": 2}, {"CPU": 2}]`. So, both of these groups will try to be STRICT\_SPREAD across availability\_zone labels, so bundles of each group will not overlap.
 
 Now for each group, the individual `{"CPU": 2}` bundles will be STRICT\_PACK on the same rack\_id, and STRICT\_SPREAD across the nodes, similar to the examples above. Hence, we would have a potential following placement.
 
@@ -217,7 +217,7 @@ In the first strategy, both groups of bundles have to be in the same availabilit
 
 * Create public topology\_strategy API on placement groups.  
 * Support STRICT\_PACK placement groups on arbitrary labels.  
-* Confirming functionality with NVIDIA / Reflection folks.
+* Only support one layer of topology strategy
 
 ### Milestone 2: support multiple scheduling strategies
 
