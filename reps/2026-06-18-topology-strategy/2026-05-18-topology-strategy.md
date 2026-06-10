@@ -71,7 +71,7 @@ strategy: str, # if defined along with topology_strategy, will error out
 ...
 bundle_label_selector: List[Dict[str, str]] = None,
 # NEW FIELD
-topology_strategy: List[Dict[str, str]] = None,
+topology_strategy: Dict[str, str] = None,
 )
 ```
 
@@ -118,7 +118,7 @@ Since rack 1 has gone down, the bundles are now scheduled onto another value of 
 ```py
 pg = ray.util.placement_group(
 bundles = [{"CPU": 2}] * 2,
-topology_strategy = ["ray.io/node-id" : "STRICT_SPREAD", "rack_id" : "STRICT_PACK"},
+topology_strategy = {"ray.io/node-id" : "STRICT_SPREAD", "rack_id" : "STRICT_PACK"},
 )
 
 ray.get(pg.ready(), timeout=10)
