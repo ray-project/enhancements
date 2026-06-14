@@ -1,11 +1,14 @@
 # Question / feature request: Is there an MCP server for managing Ray on Kubernetes — and if not, why not?
 
-_**Status:** RFC / request for comments. Per the REP process, a potential **new
-ecosystem project outside `ray-project`** is filed as an RFC and requires no vote.
-This is not a formal REP proposing a specific implementation — it's a question
-about why an agent-facing control surface for Ray-on-Kubernetes doesn't appear to
-exist yet, filed here to reach maintainers who'd know the history. If a lighter
-venue (Discussion/Slack) is preferred, happy to move it._
+_**Status:** RFC / request for comments. I'm hoping this could become an
+**ecosystem project under `ray-project`** — the REP process asks whether a change
+belongs within `ray`, as an ecosystem project under `ray-project`, or as a new
+project outside it, and the second is my preference: built KubeRay-native and
+upstream-aligned so it could live in the org rather than off to the side. This is
+not yet a formal implementation proposal — it's a question about why an
+agent-facing control surface for Ray-on-Kubernetes doesn't appear to exist yet,
+filed to reach the maintainers who'd know the history and to invite review before
+I build. If a lighter venue (Discussion/Slack) is preferred, happy to move it._
 
 ---
 
@@ -53,7 +56,10 @@ feels like a real capability an agent would need and doesn't have today.
    that I missed? If so, a pointer would be much appreciated.
 2. **Is there a reason it shouldn't exist** — a design, security, or
    maintenance concern that's kept it from being built?
-3. If it's genuinely an open gap, **would the Ray community want to see it** as a
-   community/ecosystem effort, and is there prior discussion I should read first?
+3. If it's genuinely an open gap, **would the Ray maintainers want to see it as an
+   ecosystem project under `ray-project`?** That's my preference — built
+   KubeRay-native and upstream-aligned so it could live in the org. (Happy to
+   start it independently and propose contributing it later if that's the more
+   natural path.) Is there prior discussion I should read first?
 
 Mostly I'd just like to understand the history before going further. Thanks!
