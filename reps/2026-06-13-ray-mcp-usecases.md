@@ -36,27 +36,44 @@ That's why "agent + MCP server" beats "agent + raw APIs." The rest of this doc
 shows why that MCP server must be **Ray-aware** — a generic Kubernetes MCP gives
 typed CRD tools but is still blind to Ray's runtime.
 
-## The three surfaces compared
+## How the existing surfaces compare
 
-| | **Generic K8s MCP** | **KubeRay API Server** | **Ray-aware MCP (proposed)** |
-|---|---|---|---|
-| Layer | k8s API (any CRD) | CRUD over KubeRay CRDs | CRD path **+** Ray dashboard |
-| Reaches Ray dashboard (:8265) | ❌ | ❌ | ✅ read-only |
-| "Why is this job stuck?" | ❌ raw CRD status | ❌ raw CRD status | ✅ distilled |
-| Live job logs | ❌ | ❌ | ✅ (bounded tail) |
-| Submit → follow to completion | ❌ | partial (CRD only) | ✅ cross-plane |
-| Ray-aware typed params / pruning warnings | ❌ | partial | ✅ |
-| Ray-specific destructive guards | ❌ | ❌ | ✅ (agent-safety) |
-| Caller authn/authz by default | inherits kubeconfig | ❌ shared credential¹ | inherits kubeconfig/SA RBAC |
+| | **Generic K8s MCP** | **KubeRay API Server** | **`kubectl ray` plugin** | **Ray-aware MCP (proposed)** |
+|---|---|---|---|---|
+| Consumer | agent | agent | **human at a terminal** | agent |
+| Layer | k8s API (any CRD) | CRUD over KubeRay CRDs | human CLI over CRDs + port-forward | CRD path **+** Ray dashboard |
+| Reaches Ray dashboard (:8265) | ❌ | ❌ | ✅ port-forward² | ✅ read-only |
+| "Why is this job stuck?" | ❌ raw CRD status | ❌ raw CRD status | ❌ status tables | ✅ distilled |
+| Live job logs | ❌ | ❌ | partial (download to disk³) | ✅ (bounded tail) |
+| Submit → follow to completion | ❌ | partial (CRD only) | ✅ (`job submit`) | ✅ cross-plane |
+| Ray-aware typed params / pruning warnings | ❌ | partial | partial (typed flags, no pruning warn) | ✅ |
+| Ray-specific destructive guards | ❌ | ❌ | ❌ | ✅ (agent-safety) |
+| Machine-consumable contract (typed tools, danger hints) | ✅ (generic) | partial (REST) | ❌ human tables | ✅ Ray-aware |
+| Caller authn/authz by default | inherits kubeconfig | ❌ shared credential¹ | inherits kubeconfig | inherits kubeconfig/SA RBAC |
 
 ¹ The KubeRay API Server (`apiserversdk`) proxies the Kubernetes API but, as
 shipped, forwards requests under **one shared credential** — it doesn't pass the
 agent's identity through to Kubernetes RBAC unless the deployer adds custom
 middleware.
 
-**The pattern:** the things a generic K8s MCP server *can't* do are the same things
-the KubeRay API Server *can't* do — because both stop at the CRD. The agent's hard
-problems live in Ray's data plane and in cross-plane correlation.
+² `kubectl ray session` *port-forwards* the dashboard to `localhost:8265`; it
+**opens** the surface, it doesn't consume it. An agent on top would still drive raw
+HTTP against the unauthenticated, RCE-capable dashboard itself — the loaded gun this
+doc is about. The proposed server reads that surface *for* the agent, read-only by
+construction.
+
+³ `kubectl ray log` downloads head/worker logs to a local directory, and `job
+submit` prints job output inline until completion — neither is a byte-bounded tail
+an agent can pull into a finite context window on demand.
+
+**The pattern:** the generic K8s MCP and the KubeRay API Server both stop at the CRD,
+so the agent's hard problems — data-plane truth and cross-plane correlation — are out
+of reach. `kubectl ray` *does* reach the runtime, but as a **human onboarding CLI**
+([REP #52](https://github.com/ray-project/enhancements/pull/52)): it port-forwards
+the dashboard rather than distilling it, emits tables rather than a typed contract,
+and has no agent-safety guards. An agent built on top of it would still have to add
+the distillation + safety layer — which is this proposal. The two are complementary:
+`kubectl ray` is the paved **human** path; this is the **agent** path.
 
 ---
 
