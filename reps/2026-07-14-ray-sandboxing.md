@@ -81,7 +81,6 @@ ray.init()
 # Create a gVisor sandbox environment on the local worker node
 sb = sandbox.create(
     runtime="gvisor",
-    image="python:3.10-slim",
     resources={"cpu": "1000m", "memory": "512Mi"},
     timeout=300,  # Auto-terminate after 5 minutes
 )
@@ -103,7 +102,7 @@ sb.terminate()
 ```python
 from ray import sandbox
 
-with sandbox.create(runtime="gvisor", image="python:3.10-slim") as sb:
+with sandbox.create(runtime="gvisor") as sb:
     # Upload local files or scripts into the sandbox Pod
     sb.upload_file(local_path="model_eval.py", remote_path="/tmp/model_eval.py")
 
@@ -225,6 +224,21 @@ Because gVisor operates on the local worker node, file operations leverage direc
   2. `runsc --root=<root_dir> delete <instance_id>`
   3. Removes the temporary OCI bundle directory `<bundle_dir>`.
 - **Worker Process Death Handler**: Registers exit hooks (`atexit`) and Raylet worker heartbeat checkers to execute `runsc delete -f <instance_id>` and delete stale bundle directories if the parent worker process crashes abruptly.
+
+#### 5. Release / Dependency Updates
+
+Supporting gVisor will require bundling `runsc` into Ray container images. The `runsc` binary is ~30MB.
+
+#### 6. Container Image Support
+
+The initial version of the gVisor runtime will not support specifying container images. As a result, gVisor sandboxes only have access to tools
+that are present on the Raylet's root filesystem. However, container images will be supported in the future once the gVisor backend meets baseline
+requirements for performance and reliability.
+
+To support container images in a future release, Ray will need to implement the following workflow:
+* Pull image from remote registry (e.g. Dockerhub) to the Raylet process's local image cache.
+* Untar container image filesystem into a local directory that can be used by gVisor sandboxes
+* Support pre-loaded container images in Ray container images for faster sandbox startup
 
 ---
 
