@@ -79,7 +79,8 @@ ray.init()
 # Create a gVisor sandbox environment on the local worker node
 sb = sandbox.create(
     runtime="gvisor",
-    resources={"cpu": "1000m", "memory": "512Mi"},
+    cpu=1.0,
+    memory="512Mi",
     timeout=300,  # Auto-terminate after 5 minutes
 )
 
