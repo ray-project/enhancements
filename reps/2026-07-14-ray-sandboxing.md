@@ -6,11 +6,11 @@ Ray is emerging as the de facto orchestrator for Reinforcement Learning (RL) fra
 
 Currently, running untrusted code directly on Ray worker nodes poses severe security and operational risks, including arbitrary host access, data leakage, and cluster instability. To avoid these risks, frameworks often delegate execution to external sandbox services or third-party APIs. However, this externalized approach fragments the Ray ecosystem with ad-hoc abstractions and increases orchestration complexity.
 
-This proposal addresses these challenges by introducing a Ray Sandbox library to programmatically manage isolated sandbox environments. Following industry best practices, `ray.sandbox` will provide a common denominator abstraction with support for widely used backends. The initial implementation will support two default sandboxing backends: a Kubernetes-based backend (using K8s Pods) for cluster-managed container isolation, and a gVisor-based backend (`runsc`) operating directly on Ray worker nodes for fast sandbox startup and dense bin packing of isolated execution environments.
+This proposal addresses these challenges by introducing an (experimental) Ray Sandbox library to programmatically manage isolated sandbox environments. The `ray.experimental.sandbox` library will provide a common denominator abstraction with support for widely used backends and unfied resource scheduling with Ray. The initial implementation will support two default sandboxing backends: a Kubernetes-based backend (using K8s Pods) for cluster-managed container isolation, and a gVisor-based backend (`runsc`) operating directly on Ray worker nodes for fast sandbox startup and dense bin packing of isolated execution environments.
 
 ### Should this change be within `ray` or outside?
 
-Within `ray` as a library (`ray.sandbox`).
+Within `ray` as an experimental library (`ray.experimental.sandbox`).
 
 ## Stewardship
 
@@ -22,13 +22,13 @@ Within `ray` as a library (`ray.sandbox`).
 
 ### Shepherd of the Proposal (should be a senior committer)
 
-@pcmoritz
+@edoakes @pcmoritz
 
 ## Design and Architecture
 
 ### Overview
 
-`ray.sandbox` introduces an abstraction layer between Ray workloads (tasks, actors, or driver scripts) and underlying container or micro-VM orchestration engines.
+`ray.experimental.sandbox` introduces an abstraction layer between Ray workloads (tasks, actors, or driver scripts) and underlying container or micro-VM runtimes for sandbox environments.
 
 ```
 +-------------------------------------------------------------------+
@@ -38,7 +38,7 @@ Within `ray` as a library (`ray.sandbox`).
                                   |
                                   v
 +-------------------------------------------------------------------+
-|                            ray.sandbox                            |
+|                      ray.experimental.sandbox                     |
 |  +---------------------+  +-----------------+  +-----------------+|
 |  |   Sandbox           |  |  SandboxPool    |  |  ExecResult     ||
 |  +---------------------+  +-----------------+  +-----------------+|
@@ -66,9 +66,7 @@ Within `ray` as a library (`ray.sandbox`).
 
 ### Python API Design
 
-The `ray.sandbox` library will provide an intuitive, high-level abstractions for creating and managing isolated sandbox environments across common execution backends.
-
-The initial implementation introduces support for both Kubernetes Pods and gVisor (`runsc`) sandboxes. Kubernetes Pods offer cluster-managed execution and remote isolation, while gVisor provides node-local container sandboxing optimized for sub-100ms startup times and high-density bin packing of concurrent execution tasks.
+The `ray.experimental.sandbox` library will provide an intuitive, high-level abstractions for creating and managing isolated sandbox environments across common execution backends. The initial implementation will support both Kubernetes Pods and gVisor (`runsc`) sandboxes. Kubernetes Pods offer cluster-managed execution and remote isolation, while gVisor provides node-local container sandboxing optimized for sub-100ms startup times and high-density bin packing of concurrent execution tasks.
 
 #### Example: Basic Sandbox Creation and Command Execution
 
@@ -278,17 +276,27 @@ To ensure Pods are reliably cleaned up and do not become orphaned:
 
 ---
 
+### Logical Resourcing for Sandboxes
+
+Ray will provide unified resource scheduiling and allocation for sandboxes by leveraging Ray's logical resource management and scheduling system. When users request resources for a sandbox, Ray will reserve those resources on the node where the sandbox is created, preventing those resources from being allocated to other tasks or actors.
+
+Resource scheduling will be implemented differently depending on the sandbox backend:
+- **Node-Local Backends (e.g., `gvisor`)**: For backends that execute sandbox environments directly on the host worker node, requesting resources during sandbox creation (e.g., `resources={"cpu": "1000m", "memory": "512Mi"}`) reserves corresponding logical resources (e.g., 1 CPU) on that Ray worker node. These logical resources remain reserved in Ray's scheduler for the duration of the sandbox's lifecycle and are released back to the node when `sb.terminate()` or context manager exit occurs.
+- **Remote / Cluster-Managed Backends (e.g., `kubernetes`)**: For backends where sandboxes run off-node on external compute infrastructure (such as Kubernetes Pods scheduled by the Kubernetes control plane), the sandbox does not consume host Raylet logical resources, leaving resource allocation and scheduling accounting to the remote cluster manager.
+
+---
+
 ## Compatibility, Deprecation, and Migration Plan
 
-- **Backwards Compatibility**: This change is 100% backwards compatible. `ray.sandbox` is a completely new, independent library. No existing Ray Core APIs, Raylet behaviors, or `@ray.remote` actor options are modified or deprecated.
-- **Migration Path**: Frameworks currently using custom subprocess wrappers or external REST APIs can directly replace their execution code with `ray.sandbox.create(runtime="gvisor", ...)` or `ray.sandbox.create(runtime="kubernetes", ...)` calls.
+- **Backwards Compatibility**: This change is 100% backwards compatible. `ray.experimental.sandbox` is a completely new, independent library. No existing Ray Core APIs, Raylet behaviors, or `@ray.remote` actor options are modified or deprecated.
+- **Migration Path**: Frameworks currently using custom subprocess wrappers or external REST APIs can directly replace their execution code with `ray.experimental.sandbox.create(runtime="gvisor", ...)` or `ray.experimental.sandbox.create(runtime="kubernetes", ...)` calls.
 
 ---
 
 ## Test Plan and Acceptance Criteria
 
 ### Unit Tests
-- `ray.sandbox` API tests (mocking Kubernetes API and `runsc` CLI invocations).
+- `ray.experimental.sandbox` API tests (mocking Kubernetes API and `runsc` CLI invocations).
 - `GVisorSandboxEnv` OCI spec generation and CLI command string verification (`runsc create`, `start`, `exec`, `kill`, `delete`).
 - `SandboxPool` concurrency, allocation, and release tests.
 - Configuration validation (invalid resource specs, timeouts, image names).
@@ -303,10 +311,10 @@ To ensure Pods are reliably cleaned up and do not become orphaned:
 - **Orphan Sandbox Cleanup**: Test process crashes (killing driver script or worker process) and verify that orphan K8s Pods and `runsc` sandbox containers are cleaned up cleanly.
 
 ### Acceptance Criteria
-1. Complete `ray.sandbox` Python package exported under `ray.sandbox`.
+1. Complete `ray.experimental.sandbox` Python package exported under `ray.experimental.sandbox`.
 2. Fully functional `kubernetes` and `gvisor` sandbox implementations supporting sandbox lifecycle, command execution, and file transfers.
 3. `SandboxPool` implementation for high-throughput parallel execution across both runtimes.
-4. Comprehensive documentation and example script showing RL code evaluation using `ray.sandbox`.
+4. Comprehensive documentation and example script showing RL code evaluation using `ray.experimental.sandbox`.
 
 ---
 
