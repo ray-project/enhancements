@@ -6,7 +6,7 @@ Ray is emerging as the de facto orchestrator for Reinforcement Learning (RL) fra
 
 Currently, running untrusted code directly on Ray worker nodes poses severe security and operational risks, including arbitrary host access, data leakage, and cluster instability. To avoid these risks, frameworks often delegate execution to external sandbox services or third-party APIs. However, this externalized approach fragments the Ray ecosystem with ad-hoc abstractions and increases orchestration complexity.
 
-This proposal addresses these challenges by introducing a Ray Sandbox library to programmatically manage isolated sandbox environments. Following industry best practices, `ray.sandbox` will provide a common denominator abstraction with support for widely used backends (e.g., Kubernetes, container runtimes, and microVMs). The initial implementation will support a Kubernetes-based sandbox envirionments, using Pods to execute code in isolated environments.
+This proposal addresses these challenges by introducing a Ray Sandbox library to programmatically manage isolated sandbox environments. Following industry best practices, `ray.sandbox` will provide a common denominator abstraction with support for widely used backends. The initial implementation will support two default sandboxing backends: a Kubernetes-based backend (using K8s Pods) for cluster-managed container isolation, and a gVisor-based backend (`runsc`) operating directly on Ray worker nodes for fast sandbox startup and dense bin packing of isolated execution environments.
 
 ### Should this change be within `ray` or outside?
 
@@ -48,28 +48,27 @@ Within `ray` as a library (`ray.sandbox`).
 +-------------------------------------------------------------------+
 |                          SandboxEnv Interface                     |
 +-------------------------------------------------------------------+
-                                  |
-                                  v
-+-------------------------------------------------------------------+
-|                       KubernetesSandboxEnv                        |
-|            (Manages K8s Pods, SecurityContext, TTL)               |
-+-------------------------------------------------------------------+
-                                  |
-                                  v
-+-------------------------------------------------------------------+
-|                         Kubernetes Cluster                        |
-|   +-----------------------+       +-----------------------+       |
-|   | Sandbox Pod 1         |       | Sandbox Pod 2         |       |
-|   | (Isolated Execution)  |       | (Isolated Execution)  |       |
-|   +-----------------------+       +-----------------------+       |
-+-------------------------------------------------------------------+
+                 |                                   |
+                 v                                   v
++---------------------------------+ +-------------------------------+
+|      KubernetesSandboxEnv       | |       GVisorSandboxEnv        |
+| (Manages K8s Pods & Security)   | |  (Manages host `runsc` spec)  |
++---------------------------------+ +-------------------------------+
+                 |                                   |
+                 v                                   v
++---------------------------------+ +-------------------------------+
+|        Kubernetes Cluster       | |        Ray Worker Node        |
+|  +---------------------------+  | |  +-------------------------+  |
+|  | Sandbox Pod               |  | |  | gVisor Sandbox (runsc)  |  |
+|  +---------------------------+  | |  +-------------------------+  |
++---------------------------------+ +-------------------------------+
 ```
 
 ### Python API Design
 
 The `ray.sandbox` library will provide an intuitive, high-level abstractions for creating and managing isolated sandbox environments across common execution backends.
 
-The initial implementation introduces support for Kubernetes Pods, incorporating industry best practices for security and performance—such as Pod security hardening and pre-warmed sandbox pool management for high-throughput RL evaluation workloads.
+The initial implementation introduces support for both Kubernetes Pods and gVisor (`runsc`) sandboxes. Kubernetes Pods offer cluster-managed execution and remote isolation, while gVisor provides node-local container sandboxing optimized for sub-100ms startup times and high-density bin packing of concurrent execution tasks.
 
 #### Example: Basic Sandbox Creation and Command Execution
 
@@ -79,12 +78,11 @@ from ray import sandbox
 
 ray.init()
 
-# Create a Kubernetes sandbox environment
+# Create a gVisor sandbox environment on the local worker node
 sb = sandbox.create(
-    runtime="kubernetes",
+    runtime="gvisor",
     image="python:3.10-slim",
-    resources={"cpu": "1000m", "memory": "2Gi"},
-    namespace="ray-sandboxes",
+    resources={"cpu": "1000m", "memory": "512Mi"},
     timeout=300,  # Auto-terminate after 5 minutes
 )
 
@@ -105,7 +103,7 @@ sb.terminate()
 ```python
 from ray import sandbox
 
-with sandbox.create(runtime="kubernetes", image="python:3.10-slim") as sb:
+with sandbox.create(runtime="gvisor", image="python:3.10-slim") as sb:
     # Upload local files or scripts into the sandbox Pod
     sb.upload_file(local_path="model_eval.py", remote_path="/tmp/model_eval.py")
 
@@ -181,9 +179,58 @@ class SandboxEnv(ABC):
 
 ---
 
+### gVisor Env
+
+The `gvisor` sandbox environment implementation (`GVisorSandboxEnv`) uses gVisor's OCI runtime (`runsc`) to execute untrusted code in lightweight, kernel-isolated sandboxes directly on Ray worker nodes.
+
+#### Motivation: Fast Startup & Dense Bin Packing
+
+In RL training and LLM agent evaluation loops, workers execute thousands of short-lived code snippets per second. Traditional Kubernetes Pod creation adds multi-second latency (scheduling, API server overhead, networking setup), creating a bottleneck for high-throughput rollout pipelines.
+
+gVisor addresses these challenges through two key advantages:
+1. **Fast Startup**: By intercepting application system calls in user space via the gVisor application kernel, sandbox containers start in tens of milliseconds (sub-100ms latency), bypassing container daemon and Kubernetes control plane overhead.
+2. **Dense Bin Packing**: gVisor sandboxes have a minimal memory footprint and near-zero idle CPU overhead per instance. Ray worker nodes can densely pack hundreds or thousands of concurrent gVisor sandboxes alongside Ray actors and tasks without requiring separate VM instances or cluster nodes.
+
+#### 1. Sandbox Provisioning and OCI Spec Generation
+
+When `sandbox.create(runtime="gvisor", ...)` is called on a Ray worker node, `GVisorSandboxEnv` performs the following steps:
+- **OCI Bundle Directory**: Creates a unique OCI bundle directory under `/tmp/ray/sandboxes/<instance_id>/` containing a `rootfs` filesystem (extracted from container image or rootfs cache) and an OCI specification `config.json`.
+- **OCI Config Generation**: Generates `config.json` (or calls `runsc spec` with standard overrides):
+  - **Process Config**: Sets entrypoint process, working directory, UID/GID, and environment variables.
+  - **Resource Limits**: Sets cgroup limits for CPU quota (`resources.cpu`) and memory limits (`resources.memory`).
+  - **Security Hardening**: Enforces rootless execution (`runAsNonRoot`), read-only rootfs (`readonly: true`), drops capabilities (`capabilities.bounding: []`), and enables seccomp syscall filtering.
+- **Sandbox Creation Calls**:
+  - `runsc --root=<root_dir> create --bundle <bundle_dir> <instance_id>`: Initializes the gVisor sandbox container and Sentry kernel process without executing the entrypoint yet.
+  - `runsc --root=<root_dir> start <instance_id>`: Triggers execution of the sandbox container process inside gVisor.
+
+#### 2. Command Execution Mechanism (`runsc exec`)
+
+To execute commands inside an active gVisor sandbox instance:
+- **`execute(instance_id, command, timeout, env)`**:
+  - Calls `runsc --root=<root_dir> exec --cwd <cwd> <instance_id> bash -c "<command>"`
+  - Connects standard IO streams to capture stdout and stderr directly from the sandbox process.
+  - Enforces process timeouts using SIGKILL via `runsc kill` if command execution exceeds the timeout limit.
+  - Returns `ExecutionResult` containing `exit_code`, `stdout`, `stderr`, and precise execution `duration_ms`.
+
+#### 3. File Transfer Mechanism
+
+Because gVisor operates on the local worker node, file operations leverage direct filesystem access into the OCI bundle `rootfs`:
+- **`upload_file(instance_id, local_path, remote_path)`**: Directly copies the local file into `<bundle_dir>/rootfs/<remote_path>` (or streams via `runsc exec` if strict rootfs isolation is active), achieving microsecond-level copy speeds without network overhead.
+- **`download_file(instance_id, remote_path, local_path)`**: Reads directly from `<bundle_dir>/rootfs/<remote_path>` and writes to `local_path` on the host worker filesystem.
+
+#### 4. Lifecycle Management & Garbage Collection
+
+- **Termination**: `sb.terminate()` or context manager exit executes:
+  1. `runsc --root=<root_dir> kill <instance_id> SIGKILL`
+  2. `runsc --root=<root_dir> delete <instance_id>`
+  3. Removes the temporary OCI bundle directory `<bundle_dir>`.
+- **Worker Process Death Handler**: Registers exit hooks (`atexit`) and Raylet worker heartbeat checkers to execute `runsc delete -f <instance_id>` and delete stale bundle directories if the parent worker process crashes abruptly.
+
+---
+
 ### Kubernetes Env
 
-The first sandbox environment implementation will be `kubernetes`, which will support creating dedicated Kubernetes Pods to serve as isolated sandbox environments.
+The `kubernetes` sandbox environment implementation (`KubernetesSandboxEnv`) will support creating dedicated Kubernetes Pods to serve as isolated sandbox environments.
 This will be achieved through the official Kubernetes Python client or in-cluster service account credentials. For the time being, it will be the user's responsibility
 to grant the Raylet's service account the necessary RBAC permissions to create and manage Pods in the target namespace.
 
@@ -200,7 +247,7 @@ When `sandbox.create(env="kubernetes", ...)` is called, `KubernetesSandboxEnv` w
     - `capabilities: drop: ["ALL"]`.
     - `readOnlyRootFilesystem: true` (with `/tmp` mounted as an `emptyDir` volume).
     - `runtimeClassName`: Supports gVisor (`gvisor`) or Kata Containers (`kata`) when configured on the Kubernetes cluster.
-- Apply any user defined modfications to the pod spec via a provided callback.
+- Apply any user defined modifications to the pod spec via a provided callback.
 
 #### 2. Command Execution Mechanism
 
@@ -220,31 +267,37 @@ To ensure Pods are reliably cleaned up and do not become orphaned:
 ## Compatibility, Deprecation, and Migration Plan
 
 - **Backwards Compatibility**: This change is 100% backwards compatible. `ray.sandbox` is a completely new, independent library. No existing Ray Core APIs, Raylet behaviors, or `@ray.remote` actor options are modified or deprecated.
-- **Migration Path**: Frameworks currently using custom subprocess wrappers or external REST APIs can directly replace their execution code with `ray.sandbox.create(env="kubernetes", ...)` calls.
+- **Migration Path**: Frameworks currently using custom subprocess wrappers or external REST APIs can directly replace their execution code with `ray.sandbox.create(runtime="gvisor", ...)` or `ray.sandbox.create(runtime="kubernetes", ...)` calls.
 
 ---
 
 ## Test Plan and Acceptance Criteria
 
 ### Unit Tests
-- `ray.sandbox` API tests (mocking Kubernetes API calls).
+- `ray.sandbox` API tests (mocking Kubernetes API and `runsc` CLI invocations).
+- `GVisorSandboxEnv` OCI spec generation and CLI command string verification (`runsc create`, `start`, `exec`, `kill`, `delete`).
 - `SandboxPool` concurrency, allocation, and release tests.
 - Configuration validation (invalid resource specs, timeouts, image names).
 
 ### Integration & E2E Tests
 - **Local K8s Testing**: E2E tests using Kind/Minikube to verify Pod creation, command execution, stdout/stderr capture, file upload/download, and termination.
-- **Security Validation**: Verify that non-root, read-only rootfs, and dropped capability settings prevent privilege escalation inside the Pod.
-- **Orphan Pod Cleanup**: Test process crashes (killing driver script) and verify that K8s activeDeadline cleans up orphaned sandbox Pods within expected timeout limits.
+- **gVisor Runtime Testing**: E2E tests on nodes with `runsc` installed:
+  - **Startup Latency**: Benchmark sandbox instantiation to verify sub-100ms startup times.
+  - **Bin Packing Density**: Verify execution of 100+ concurrent gVisor sandboxes on a single worker node.
+  - **Command Execution & Files**: Test `runsc exec`, file upload/download, stdout/stderr capture, and timeout enforcement.
+- **Security Validation**: Verify that non-root, read-only rootfs, and dropped capability settings prevent privilege escalation inside both Kubernetes Pods and gVisor sandboxes.
+- **Orphan Sandbox Cleanup**: Test process crashes (killing driver script or worker process) and verify that orphan K8s Pods and `runsc` sandbox containers are cleaned up cleanly.
 
 ### Acceptance Criteria
 1. Complete `ray.sandbox` Python package exported under `ray.sandbox`.
-2. Fully functional `kubernetes` sandbox implementation supporting Pod lifecycle, command execution, and file transfers.
-3. `SandboxPool` implementation for high-throughput parallel execution.
+2. Fully functional `kubernetes` and `gvisor` sandbox implementations supporting sandbox lifecycle, command execution, and file transfers.
+3. `SandboxPool` implementation for high-throughput parallel execution across both runtimes.
 4. Comprehensive documentation and example script showing RL code evaluation using `ray.sandbox`.
 
 ---
 
 ## (Optional) Follow-on Work
 
-- **Additional Runtimes**: Support for gVisor standalone (`runtime="gvisor"`), Firecracker microVMs (`runtime="firecracker"`), other open-source projects for sandboxes (agent-sandbox, skypilot sandboxing, huggingface openenv, etc) and third party APIs (modal, etc).
-- **Pre-warmed Pod Pools**: Fast-start warm pod pools with instant snapshotting/restore to reduce Pod start latency below 100ms.
+- **Additional Runtimes**: Support for Firecracker microVMs (`runtime="firecracker"`), other open-source projects for sandboxes (agent-sandbox, skypilot sandboxing, huggingface openenv, etc.), and third-party APIs (modal, etc.).
+- **gVisor Checkpoint / Restore**: Fast-start warm sandbox pools leveraging `runsc checkpoint` and `runsc restore` to snapshot pre-warmed Python interpreter states for sub-10ms execution start.
+- **Pre-warmed Pod Pools**: Fast-start warm pod pools with instant snapshotting/restore for Kubernetes sandboxes.
