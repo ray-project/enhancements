@@ -85,7 +85,7 @@ sb = sandbox.create(
 )
 
 # Execute code or bash commands inside the sandbox
-result = sb.execute("python -c 'import sys; print(sys.version)'")
+result = sb.exec("python -c 'import sys; print(sys.version)'")
 
 print(f"Exit Code: {result.exit_code}")
 print(f"Stdout: {result.stdout}")
@@ -106,7 +106,7 @@ with sandbox.create() as sb:
     sb.upload_file(local_path="model_eval.py", remote_path="/tmp/model_eval.py")
 
     # Run execution
-    res = sb.execute("python /tmp/model_eval.py --input /tmp/data.json")
+    res = sb.exec("python /tmp/model_eval.py --input /tmp/data.json")
 
     # Download output artifacts
     sb.download_file(remote_path="/tmp/output.json", local_path="results.json")
@@ -126,7 +126,7 @@ class SandboxEnv(ABC):
         pass
 
     @abstractmethod
-    def execute(self, instance_id: str, command: str, timeout: int = None, env: dict = None) -> ExecutionResult:
+    def exec(self, instance_id: str, command: str, timeout: int = None, env: dict = None) -> ExecutionResult:
         """Execute a command inside the specified sandbox."""
         pass
 
@@ -175,7 +175,7 @@ When `sandbox.create(...)` is called on a Ray worker node, `GVisorSandboxEnv` pe
 #### 2. Command Execution Mechanism (`runsc exec`)
 
 To execute commands inside an active gVisor sandbox instance:
-- **`execute(instance_id, command, timeout, env)`**:
+- **`exec(instance_id, command, timeout, env)`**:
   - Calls `runsc --root=<root_dir> exec --cwd <cwd> <instance_id> bash -c "<command>"`
   - Connects standard IO streams to capture stdout and stderr directly from the sandbox process.
   - Enforces process timeouts using SIGKILL via `runsc kill` if command execution exceeds the timeout limit.
