@@ -290,6 +290,8 @@ gVisor addresses these challenges through two key advantages:
 1. **Fast Startup**: By intercepting application system calls in user space via the gVisor application kernel, sandbox containers start in tens of milliseconds (sub-100ms latency), bypassing container daemon and Kubernetes control plane overhead.
 2. **Dense Bin Packing**: gVisor sandboxes have a minimal memory footprint and near-zero idle CPU overhead per instance. Ray worker nodes can densely pack hundreds or thousands of concurrent gVisor sandboxes alongside Ray actors and tasks without requiring separate VM instances or cluster nodes.
 
+Since gVisor is a user-space Linux kernel implementation, it can provide sandboxes for any Linux-based environment. While it may require additional pod security configurations on Kubernetes, these rely on standard features supported across most Kubernetes distributions. Any future runtimes must meet the same criteria.
+
 #### 1. Sandbox Provisioning and OCI Spec Generation
 
 When `sandbox.create(...)` is called on a Ray worker node, `GVisorSandboxRuntime` performs the following steps:
