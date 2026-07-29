@@ -6,7 +6,7 @@ Ray is emerging as the de facto orchestrator for Reinforcement Learning (RL) fra
 
 Currently, running untrusted code directly on Ray worker nodes poses severe security and operational risks, including arbitrary host access, data leakage, and cluster instability. To avoid these risks, frameworks often delegate execution to external sandbox services or third-party APIs. However, this externalized approach fragments the Ray ecosystem with ad-hoc abstractions and increases orchestration complexity.
 
-This proposal addresses these challenges by introducing an (experimental) Ray Sandbox library to programmatically manage isolated sandbox environments. The library will provide a common denominator abstraction and building blocks for secure sandboxing with unified resource scheduling in Ray. The initial implementation will focus solely on a gVisor-based backend (`runsc`) operating directly on Ray worker nodes for fast sandbox startup, strong kernel isolation, and dense bin packing of execution environments.
+This proposal addresses these challenges by introducing an (experimental) Ray Sandbox library. The library will provide common building blocks for secure sandboxing with unified resource scheduling in Ray. The initial implementation will focus solely on a gVisor-based backend (`runsc`) operating directly on Ray worker nodes for fast sandbox startup, strong kernel isolation, and dense bin packing of execution environments.
 
 ### Should this change be within `ray` or outside?
 
@@ -16,22 +16,26 @@ Within `ray` as an experimental library (`ray.experimental.sandbox`).
 
 ### Required Reviewers
 
+@edoakes
 @MengjinYan
 @richardliaw
 @kouroshHakha
 
 ### Shepherd of the Proposal (should be a senior committer)
 
-@edoakes @pcmoritz
+@robertnishihara @pcmoritz
 
 ## Design and Architecture
 
 ### Overview
 
-Ray will introduce the following experimental APIs to provide the following building blocks for sandboxing within Ray:
-1. A `ray.experimental.SandboxRuntime` API - this is a common interface for managing local sandbox environemnts. For the initial version, we will only support gVisor as the sandbox runtime. 
-2. A `ray.experimental.Sandbox` Ray actor that wraps `SandboxRuntime` and provides a high-level API for creating and managing sandbox environemnts. The main purpose of this API is to manage scheduling and lifecycle of sandboxes using familiar Ray Core APIs.
-3. A Modal-like library (`ray.experimental.sandbox`) that manages `ray.experimental.Sandbox` actors for sandboxes.
+Ray will introduce the following experimental APIs to provide building blocks for sandboxing within Ray:
+1. A `ray.experimental.SandboxRuntime` API - this is a common interface for managing local sandbox environments. For the initial version, we will only support gVisor as the sandbox runtime.
+2. A `ray.experimental.Sandbox` Ray actor that wraps `SandboxRuntime` and provides a high-level API for creating and managing sandbox environments. The main purpose of this API is to manage scheduling and lifecycle of sandboxes using familiar Ray Actor API.
+3. A Modal-like library (`ray.experimental.sandbox`) that manages `ray.experimental.Sandbox` actors.
+
+> [!NOTE]
+> All experimental APIs are subject to review prior to GA graduation and may be modified or removed.
 
 ```
 +-------------------------------------------------------------------+
@@ -76,7 +80,7 @@ Ray will introduce the following experimental APIs to provide the following buil
 
 #### ray.experimental.SandboxRuntime
 
-This is the lowest-level API for sandboxing and should only be used by higher-level Ray libraries (see below) or power users who need fine-grained control over the sandbox environment.
+This is the lowest-level API for sandboxing and should only be used by higher-level Ray APIs (see below) or power users who need fine-grained control over the sandbox environment.
 
 Below is the interface for `SandboxRuntime`. Ray will only support a gVisor backend for the initial release.
 ```python
@@ -113,28 +117,27 @@ class SandboxRuntime(ABC):
 
 `ray.experimental.Sandbox` is a Ray actor that wraps `SandboxRuntime` and provides a high-level API for creating and managing sandbox environments. The main purpose of this actor is to manage scheduling and lifecycle of sandboxes using familiar Ray Core APIs.
 
-Below is the interface for `Sandbox` actor:
+Below is the interface for the `Sandbox` actor:
 ```python
 @ray.remote
 class Sandbox():
     """Ray actor interface for managing scheduling and lifecycle of an isolated sandbox."""
-    
+
     def __init__(self, runtime: SandboxRuntime):
         self.runtime = runtime
 
     def exec(self, command: str, timeout: int = None, env: dict = None) -> ExecutionResult:
         """Execute a command inside the sandbox."""
         pass
+
     def upload_file(self, local_path: str, remote_path: str) -> None:
         """Copy local file into the sandbox."""
         pass
 
-    @abstractmethod
     def download_file(self, remote_path: str, local_path: str) -> None:
         """Copy file from the sandbox to local."""
         pass
 
-    @abstractmethod
     def delete(self) -> None:
         """Clean up and terminate the sandbox instance."""
         pass
@@ -145,7 +148,7 @@ class Sandbox():
 
 The `ray.experimental.sandbox` library will provide a high-level abstraction for creating and managing isolated sandbox environments.
 Under the hood, it will use a `ray.experimental.Sandbox` actor for scheduling and resource assignment and `SandboxRuntime` to manage the sandbox runtime
-using gVisor. For the initial version of this API, we will provide a simple `create` and `create_async` API that returns a `SandboxHandle`. Below are usage example:
+using gVisor. For the initial version of this API, we will provide a simple `create` and `create_async` API that returns a `SandboxHandle`. Below is the interface:
 
 ```python
 def create(
@@ -338,17 +341,9 @@ To support container images in a future release, Ray will need to implement the 
 
 ---
 
-### Logical Resourcing for Sandboxes
-
-Ray will provide unified resource scheduling and allocation for sandboxes by leveraging Ray's logical resource management and scheduling system. When users request resources during sandbox creation (e.g., `cpu=1.0, memory="512Mi"`), Ray will reserve those logical resources on the host worker node where the gVisor sandbox is created, preventing those resources from being allocated to other tasks or actors.
-
-These logical resources remain reserved in Ray's scheduler for the duration of the sandbox's lifecycle and are automatically released back to the worker node when `sb.delete()` or context manager exit occurs.
-
----
-
 ## Compatibility, Deprecation, and Migration Plan
 
-- **Backwards Compatibility**: This change is 100% backwards compatible. All APIs are new and experimental. No existing Ray Core APIs, Raylet behaviors, or `@ray.remote` actor options are modified or deprecated.
+- **Backwards Compatibility**: This change is 100% backwards compatible. All APIs are new and experimental. No existing Ray Core APIs or behaviors are modified or deprecated.
 - **Migration Path**: Frameworks currently using custom subprocess wrappers or external REST APIs can directly replace their implementation with one of the Ray experimental APIs.
 
 ---
@@ -372,8 +367,8 @@ These logical resources remain reserved in Ray's scheduler for the duration of t
 
 ### Acceptance Criteria
 1. Complete `ray.experimental.sandbox` Python package exported under `ray.experimental.sandbox`.
-2. Complete implementation for `ray.experimental.Sandbox`
-3. Complete implementation for `ray.experimental.SandboxRuntime` with fully functional `gvisor` sandbox implementation supporting sandbox lifecycle, command execution, and file transfers.
+2. Complete implementation for `ray.experimental.Sandbox` actor.
+3. Complete implementation for `ray.experimental.SandboxRuntime` with a fully functional `gvisor` sandbox implementation supporting sandbox lifecycle, command execution, and file transfers.
 4. Comprehensive documentation and example script showing RL code evaluation using all experimental APIs.
 
 ---
