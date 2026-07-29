@@ -2,7 +2,7 @@
 
 ### General Motivation
 
-Ray is emerging as the de facto orchestrator for Reinforcement Learning (RL) frameworks and AI agent workflows (e.g. veRL, MILES, SkyRL, SLIME, NeMo-RL, coding benchmarks, and tool-use evaluation). A key requirement in these workloads is the safe execution of untrusted, model-generated code and tool calls during training and evaluation loops.
+Ray is emerging as the de facto orchestrator for Reinforcement Learning (RL) frameworks (e.g. veRL, MILES, SkyRL, SLIME, NeMo-RL, etc). A key requirement in these workloads is the safe execution of untrusted, model-generated code and tool calls during training and evaluation loops.
 
 Currently, running untrusted code directly on Ray worker nodes poses severe security and operational risks, including arbitrary host access, data leakage, and cluster instability. To mitigate these risks, frameworks often delegate execution to external sandbox services or third-party APIs. These services play an important role in the ecosystem and will continue to be fully supported. That said, we believe there is also value in a native sandbox solution that works out of the box on any Ray cluster and provides strong isolation for agentic workloads.
 
@@ -81,7 +81,7 @@ Ray will introduce the following experimental APIs to provide building blocks fo
 
 #### ray.experimental.sandbox.runtime.SandboxRuntime
 
-This is the lowest-level API for sandboxing and should only be used by higher-level Ray APIs (see below) or power users who need fine-grained control over the sandbox environment.
+This is the lowest-level API for sandboxing which provides fine-grained control over the sandbox environments.
 
 Below is the interface for `SandboxRuntime`. Ray will only support a gVisor backend for the initial release.
 ```python
@@ -294,7 +294,7 @@ Since gVisor is a user-space Linux kernel implementation, it can provide sandbox
 
 #### 1. Sandbox Provisioning and OCI Spec Generation
 
-When `sandbox.create(...)` is called on a Ray worker node, `GVisorSandboxRuntime` performs the following steps:
+When `SandboxRuntime.create(...)` is called on a Ray worker node, `GVisorSandboxRuntime` performs the following steps:
 - **OCI Bundle Directory**: Creates a unique OCI bundle directory under `/tmp/ray/sandboxes/<instance_id>/` containing a `rootfs` filesystem (extracted from container image or rootfs cache) and an OCI specification `config.json`.
 - **OCI Config Generation**: Generates `config.json` (or calls `runsc spec` with standard overrides):
   - **Process Config**: Sets entrypoint process, working directory, UID/GID, and environment variables.
