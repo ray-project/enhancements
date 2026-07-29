@@ -32,7 +32,7 @@ Within `ray` as an experimental library (`ray.experimental.sandbox`).
 Ray will introduce the following experimental APIs to provide building blocks for sandboxing within Ray:
 1. A `SandboxRuntime` class (in `ray.experimental.sandbox.runtime`) - this is a common interface for managing local sandbox environments. For the initial version, we will only support gVisor as the sandbox runtime.
 2. A `Sandbox` Ray actor (in `ray.experimental.sandbox`) that wraps `SandboxRuntime` and provides a high-level API for creating and managing sandbox environments. The main purpose of this API is to manage scheduling and lifecycle of sandboxes using familiar Ray Actor API.
-3. A Modal-like library (in `ray.experimental.sandbox`) that manages `ray.experimental.Sandbox` actors.
+3. A Modal-like library (in `ray.experimental.sandbox`) that manages `ray.experimental.sandbox.Sandbox` actors.
 
 > [!NOTE]
 > All experimental APIs are subject to review prior to GA graduation and may be modified or removed.
@@ -57,7 +57,8 @@ Ray will introduce the following experimental APIs to provide building blocks fo
                                   |
                                   v
 +-------------------------------------------------------------------+
-|                     SandboxRuntime Interface                      |
+|                   ray.experimental.sandbox.runtime                |
+|                      SandboxRuntime Interface                     |
 +-------------------------------------------------------------------+
                                   |
                                   v
@@ -115,7 +116,7 @@ class SandboxRuntime(ABC):
 
 #### ray.experimental.sandbox.Sandbox
 
-`ray.experimental.Sandbox` is a Ray actor that wraps `SandboxRuntime` and provides a high-level API for creating and managing sandbox environments. The main purpose of this actor is to manage scheduling and lifecycle of sandboxes using familiar Ray Core APIs.
+`ray.experimental.sandbox.Sandbox` is a Ray actor that wraps `SandboxRuntime` and provides a high-level API for creating and managing sandbox environments. The main purpose of this actor is to manage scheduling and lifecycle of sandboxes using familiar Ray Core APIs.
 
 Below is the interface for the `Sandbox` actor:
 ```python
@@ -147,7 +148,7 @@ class Sandbox():
 #### ray.experimental.sandbox
 
 The `ray.experimental.sandbox` library will provide a high-level abstraction for creating and managing isolated sandbox environments.
-Under the hood, it will use a `ray.experimental.Sandbox` actor for scheduling and resource assignment and `SandboxRuntime` to manage the sandbox runtime
+Under the hood, it will use a `ray.experimental.sandbox.Sandbox` actor for scheduling and resource assignment and `SandboxRuntime` to manage the sandbox runtime
 using gVisor. For the initial version of this API, we will provide a simple `create` and `create_async` API that returns a `SandboxHandle`. Below is the interface:
 
 ```python
@@ -193,7 +194,7 @@ class SandboxHandle():
 
 ```python
 import ray
-from ray import sandbox
+from ray.experimental import sandbox
 
 ray.init()
 
@@ -219,7 +220,7 @@ sb.terminate()
 #### Example: Context Manager Usage
 
 ```python
-from ray import sandbox
+from ray.experimental import sandbox
 
 with sandbox.create() as sb:
     # Upload local files or scripts into the gVisor sandbox
@@ -233,12 +234,12 @@ with sandbox.create() as sb:
 ```
 
 
-#### Example: Create a `ray.experimental.Sandbox` actor
+#### Example: Create a `ray.experimental.sandbox.Sandbox` actor
 
 ```python
-import ray
+from ray.experimental.sandbox import Sandbox
 
-sandbox = ray.experimental.Sandbox.options(
+sandbox = Sandbox.options(
     num_cpus=1,
     memory=1e9
 ).remote(
@@ -253,7 +254,7 @@ result = ray.get(sandbox_client.exec.remote("python3 /workspace/main.py"))
 
 ```python
 import ray
-from ray.experimental.sandbox_runtime import SandboxRuntime
+from ray.experimental.sandbox.runtime import SandboxRuntime
 
 @ray.remote
 class CustomSandbox():
