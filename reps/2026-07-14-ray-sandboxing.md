@@ -2,7 +2,7 @@
 
 ### General Motivation
 
-Ray is emerging as the de facto orchestrator for Reinforcement Learning (RL) frameworks and AI agent workflows (e.g., veRL, SLIME, NeMo-RL, DeepSeek-R1 style training, coding benchmarks, and tool-use evaluation). A key requirement in these workloads is the safe execution of untrusted, model-generated code and tool calls during training and evaluation loops.
+Ray is emerging as the de facto orchestrator for Reinforcement Learning (RL) frameworks and AI agent workflows (e.g. veRL, MILES, SkyRL, SLIME, NeMo-RL, coding benchmarks, and tool-use evaluation). A key requirement in these workloads is the safe execution of untrusted, model-generated code and tool calls during training and evaluation loops.
 
 Currently, running untrusted code directly on Ray worker nodes poses severe security and operational risks, including arbitrary host access, data leakage, and cluster instability. To avoid these risks, frameworks often delegate execution to external sandbox services or third-party APIs. However, this externalized approach fragments the Ray ecosystem with ad-hoc abstractions and increases orchestration complexity.
 
@@ -30,9 +30,9 @@ Within `ray` as an experimental library (`ray.experimental.sandbox`).
 ### Overview
 
 Ray will introduce the following experimental APIs to provide building blocks for sandboxing within Ray:
-1. A `ray.experimental.SandboxRuntime` API - this is a common interface for managing local sandbox environments. For the initial version, we will only support gVisor as the sandbox runtime.
-2. A `ray.experimental.Sandbox` Ray actor that wraps `SandboxRuntime` and provides a high-level API for creating and managing sandbox environments. The main purpose of this API is to manage scheduling and lifecycle of sandboxes using familiar Ray Actor API.
-3. A Modal-like library (`ray.experimental.sandbox`) that manages `ray.experimental.Sandbox` actors.
+1. A `SandboxRuntime` class (in `ray.experimental.sandbox.runtime`) - this is a common interface for managing local sandbox environments. For the initial version, we will only support gVisor as the sandbox runtime.
+2. A `Sandbox` Ray actor (in `ray.experimental.sandbox`) that wraps `SandboxRuntime` and provides a high-level API for creating and managing sandbox environments. The main purpose of this API is to manage scheduling and lifecycle of sandboxes using familiar Ray Actor API.
+3. A Modal-like library (in `ray.experimental.sandbox`) that manages `ray.experimental.Sandbox` actors.
 
 > [!NOTE]
 > All experimental APIs are subject to review prior to GA graduation and may be modified or removed.
@@ -51,7 +51,7 @@ Ray will introduce the following experimental APIs to provide building blocks fo
                                   |
                                   v
 +-------------------------------------------------------------------+
-|                     ray.experimental.Sandbox                      |
+|               ray.experimental.sandbox.Sandbox                    |
 |             (Ray Actor wrapping `SandboxRuntime`)                 |
 +-------------------------------------------------------------------+
                                   |
@@ -78,7 +78,7 @@ Ray will introduce the following experimental APIs to provide building blocks fo
 
 ### API Design
 
-#### ray.experimental.SandboxRuntime
+#### ray.experimental.sandbox.runtime.SandboxRuntime
 
 This is the lowest-level API for sandboxing and should only be used by higher-level Ray APIs (see below) or power users who need fine-grained control over the sandbox environment.
 
@@ -113,7 +113,7 @@ class SandboxRuntime(ABC):
         pass
 ```
 
-#### ray.experimental.Sandbox
+#### ray.experimental.sandbox.Sandbox
 
 `ray.experimental.Sandbox` is a Ray actor that wraps `SandboxRuntime` and provides a high-level API for creating and managing sandbox environments. The main purpose of this actor is to manage scheduling and lifecycle of sandboxes using familiar Ray Core APIs.
 
@@ -371,9 +371,15 @@ To support container images in a future release, Ray will need to implement the 
 3. Complete implementation for `ray.experimental.SandboxRuntime` with a fully functional `gvisor` sandbox implementation supporting sandbox lifecycle, command execution, and file transfers.
 4. Comprehensive documentation and example script showing RL code evaluation using all experimental APIs.
 
+### GA Graduation
+
+On GA gradution, all experimental APIs in `ray.experimental.sandbox` will be migrated to a top-level `ray.sandbox` package.
+All experimental APIs are subject to breaking changes or removal prior to GA graduation.
+
 ---
 
 ## (Optional) Follow-on Work
 
 - **Additional Runtimes**: Support for other sandboxing runtimes such as [Agent Substrate](https://github.com/agent-substrate/substrate), Firecracker microVMs, and third-party APIs (modal, etc.).
 - **Checkpoint / Restore**: Support for checkpoint / restoring sandboxes, leveraging `runsc checkpoint` and `runsc restore` for state snapshotting and sub-10ms execution start.
+- **Modal Compatible API:** Support a Modal compatible API in `ray.experimental.sandbox.modal`.
