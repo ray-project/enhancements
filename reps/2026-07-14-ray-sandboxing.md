@@ -6,7 +6,7 @@ Ray is emerging as the de facto orchestrator for Reinforcement Learning (RL) fra
 
 Currently, running untrusted code directly on Ray worker nodes poses severe security and operational risks, including arbitrary host access, data leakage, and cluster instability. To avoid these risks, frameworks often delegate execution to external sandbox services or third-party APIs. However, this externalized approach fragments the Ray ecosystem with ad-hoc abstractions and increases orchestration complexity.
 
-This proposal addresses these challenges by introducing an (experimental) Ray Sandbox library to programmatically manage isolated sandbox environments. The `ray.experimental.sandbox` library will provide a common denominator abstraction for secure sandboxing with unified resource scheduling in Ray. The initial implementation will focus solely on a gVisor-based backend (`runsc`) operating directly on Ray worker nodes for fast sandbox startup, strong kernel isolation, and dense bin packing of execution environments.
+This proposal addresses these challenges by introducing an (experimental) Ray Sandbox library to programmatically manage isolated sandbox environments. The library will provide a common denominator abstraction and building blocks for secure sandboxing with unified resource scheduling in Ray. The initial implementation will focus solely on a gVisor-based backend (`runsc`) operating directly on Ray worker nodes for fast sandbox startup, strong kernel isolation, and dense bin packing of execution environments.
 
 ### Should this change be within `ray` or outside?
 
@@ -28,7 +28,10 @@ Within `ray` as an experimental library (`ray.experimental.sandbox`).
 
 ### Overview
 
-`ray.experimental.sandbox` introduces an abstraction layer between Ray workloads (tasks, actors, or driver scripts) and underlying container or micro-VM runtimes for sandbox environments.
+Ray will introduce the following experimental APIs to provide the following building blocks for sandboxing within Ray:
+1. A `ray.experimental.SandboxRuntime` API - this is a common interface for managing local sandbox environemnts. For the initial version, we will only support gVisor as the sandbox runtime. 
+2. A `ray.experimental.Sandbox` Ray actor that wraps `SandboxRuntime` and provides a high-level API for creating and managing sandbox environemnts. The main purpose of this API is to manage scheduling and lifecycle of sandboxes using familiar Ray Core APIs.
+3. A Modal-like library (`ray.experimental.sandbox`) that manages `ray.experimental.Sandbox` actors for sandboxes.
 
 ```
 +-------------------------------------------------------------------+
@@ -39,19 +42,23 @@ Within `ray` as an experimental library (`ray.experimental.sandbox`).
                                   v
 +-------------------------------------------------------------------+
 |                      ray.experimental.sandbox                     |
-|  +---------------------+  +-----------------+  +-----------------+|
-|  |   Sandbox           |  |  SandboxPool    |  |  ExecResult     ||
-|  +---------------------+  +-----------------+  +-----------------+|
+|                   (High-Level Modal-Like Library)                 |
 +-------------------------------------------------------------------+
                                   |
                                   v
 +-------------------------------------------------------------------+
-|                          SandboxEnv Interface                     |
+|                     ray.experimental.Sandbox                      |
+|             (Ray Actor wrapping `SandboxRuntime`)                 |
 +-------------------------------------------------------------------+
                                   |
                                   v
 +-------------------------------------------------------------------+
-|                         GVisorSandboxEnv                          |
+|                     SandboxRuntime Interface                      |
++-------------------------------------------------------------------+
+                                  |
+                                  v
++-------------------------------------------------------------------+
+|                        GVisorSandboxRuntime                       |
 |            (Manages host `runsc` spec & lifecycle)                 |
 +-------------------------------------------------------------------+
                                   |
@@ -65,9 +72,119 @@ Within `ray` as an experimental library (`ray.experimental.sandbox`).
 +-------------------------------------------------------------------+
 ```
 
-### Python API Design
+### API Design
 
-The `ray.experimental.sandbox` library will provide an intuitive, high-level abstraction for creating and managing isolated sandbox environments. The initial implementation focuses solely on gVisor (`runsc`), providing node-local container sandboxing optimized for fast startup times (sub-100ms) and high-density bin packing of concurrent execution tasks.
+#### ray.experimental.SandboxRuntime
+
+This is the lowest-level API for sandboxing and should only be used by higher-level Ray libraries (see below) or power users who need fine-grained control over the sandbox environment.
+
+Below is the interface for `SandboxRuntime`. Ray will only support a gVisor backend for the initial release.
+```python
+class SandboxRuntime(ABC):
+    """Low-level interface for managing local sandbox runtime environments."""
+
+    @abstractmethod
+    def create(self, config: SandboxConfig) -> str:
+        """Provision the sandbox instance and return unique instance ID."""
+        pass
+
+    @abstractmethod
+    def exec(self, instance_id: str, command: str, timeout: int = None, env: dict = None) -> ExecutionResult:
+        """Execute a command inside the specified sandbox."""
+        pass
+
+    @abstractmethod
+    def upload_file(self, instance_id: str, local_path: str, remote_path: str) -> None:
+        """Copy local file into the sandbox."""
+        pass
+
+    @abstractmethod
+    def download_file(self, instance_id: str, remote_path: str, local_path: str) -> None:
+        """Copy file from the sandbox to local."""
+        pass
+
+    @abstractmethod
+    def delete(self, instance_id: str) -> None:
+        """Clean up and terminate the sandbox instance."""
+        pass
+```
+
+#### ray.experimental.Sandbox
+
+`ray.experimental.Sandbox` is a Ray actor that wraps `SandboxRuntime` and provides a high-level API for creating and managing sandbox environments. The main purpose of this actor is to manage scheduling and lifecycle of sandboxes using familiar Ray Core APIs.
+
+Below is the interface for `Sandbox` actor:
+```python
+@ray.remote
+class Sandbox():
+    """Ray actor interface for managing scheduling and lifecycle of an isolated sandbox."""
+    
+    def __init__(self, runtime: SandboxRuntime):
+        self.runtime = runtime
+
+    def exec(self, command: str, timeout: int = None, env: dict = None) -> ExecutionResult:
+        """Execute a command inside the sandbox."""
+        pass
+    def upload_file(self, local_path: str, remote_path: str) -> None:
+        """Copy local file into the sandbox."""
+        pass
+
+    @abstractmethod
+    def download_file(self, remote_path: str, local_path: str) -> None:
+        """Copy file from the sandbox to local."""
+        pass
+
+    @abstractmethod
+    def delete(self) -> None:
+        """Clean up and terminate the sandbox instance."""
+        pass
+```
+
+
+#### ray.experimental.sandbox
+
+The `ray.experimental.sandbox` library will provide a high-level abstraction for creating and managing isolated sandbox environments.
+Under the hood, it will use a `ray.experimental.Sandbox` actor for scheduling and resource assignment and `SandboxRuntime` to manage the sandbox runtime
+using gVisor. For the initial version of this API, we will provide a simple `create` and `create_async` API that returns a `SandboxHandle`. Below are usage example:
+
+```python
+def create(
+    config: Optional[SandboxConfig] = None,
+    **kwargs,
+) -> SandboxHandle:
+    """Create a sandbox environment."""
+    pass
+
+
+def create_async(
+    config: Optional[SandboxConfig] = None,
+    **kwargs,
+) -> "ray.util.async_func[SandboxHandle]":
+    """Create a sandbox environment asynchronously."""
+    pass
+
+
+class SandboxHandle():
+    """High-level handle interface for interacting with a Ray sandbox."""
+
+    def exec(self, command: str, timeout: int = None, env: dict = None) -> ExecutionResult:
+        """Execute a command inside the sandbox."""
+        pass
+
+    def upload_file(self, local_path: str, remote_path: str) -> None:
+        """Copy local file into the sandbox."""
+        pass
+
+    def download_file(self, remote_path: str, local_path: str) -> None:
+        """Copy file from the sandbox to local."""
+        pass
+
+    def delete(self) -> None:
+        """Clean up and terminate the sandbox instance."""
+        pass
+```
+
+### Examples
 
 #### Example: Basic Sandbox Creation and Command Execution
 
@@ -112,45 +229,54 @@ with sandbox.create() as sb:
     sb.download_file(remote_path="/tmp/output.json", local_path="results.json")
 ```
 
----
 
-### SandboxEnv Interface
-
-All sandbox implementations will implement a generic `SandboxEnv` interface:
+#### Example: Create a `ray.experimental.Sandbox` actor
 
 ```python
-class SandboxEnv(ABC):
-    @abstractmethod
+import ray
+
+sandbox = ray.experimental.Sandbox.options(
+    num_cpus=1,
+    memory=1e9
+).remote(
+    timeout=1800
+)
+
+sandbox.write_file.remote("/workspace/main.py", "print('Hello from Ray Sandbox!')")
+result = ray.get(sandbox_client.exec.remote("python3 /workspace/main.py"))
+```
+
+#### Example: Create a custom actor using ray.experimental.SandboxRuntime
+
+```python
+import ray
+from ray.experimental.sandbox_runtime import SandboxRuntime
+
+@ray.remote
+class CustomSandbox():
+    def __init__(self):
+      self.runtime = SandboxRuntime()
+      self.instance_id = None
+
     def create(self, config: SandboxConfig) -> str:
         """Provision the sandbox instance and return unique instance ID."""
+        # custom create logic using self.runtime.create()
         pass
 
-    @abstractmethod
     def exec(self, instance_id: str, command: str, timeout: int = None, env: dict = None) -> ExecutionResult:
         """Execute a command inside the specified sandbox."""
+        # custom exec logic using self.runtime.exec()
         pass
 
-    @abstractmethod
-    def upload_file(self, instance_id: str, local_path: str, remote_path: str) -> None:
-        """Copy local file into the sandbox."""
-        pass
-
-    @abstractmethod
-    def download_file(self, instance_id: str, remote_path: str, local_path: str) -> None:
-        """Copy file out of the sandbox to local filesystem."""
-        pass
-
-    @abstractmethod
-    def terminate(self, instance_id: str) -> None:
-        """Destroy the sandbox instance and release underlying resources."""
-        pass
+sandbox = CustomSandbox.remote()
+result = ray.get(sandbox.exec.remote("echo 'Hello from Ray Sandbox!'"))
 ```
 
 ---
 
 ### Sandboxing with gVisor
 
-The `gvisor` sandbox environment implementation (`GVisorSandboxEnv`) uses gVisor's OCI runtime (`runsc`) to execute untrusted code in lightweight, kernel-isolated sandboxes directly on Ray worker nodes.
+The `gvisor` sandbox environment implementation (`GVisorSandboxRuntime`) uses gVisor's OCI runtime (`runsc`) to execute untrusted code in lightweight, kernel-isolated sandboxes directly on Ray worker nodes.
 
 #### Motivation: Fast Startup & Dense Bin Packing
 
@@ -162,7 +288,7 @@ gVisor addresses these challenges through two key advantages:
 
 #### 1. Sandbox Provisioning and OCI Spec Generation
 
-When `sandbox.create(...)` is called on a Ray worker node, `GVisorSandboxEnv` performs the following steps:
+When `sandbox.create(...)` is called on a Ray worker node, `GVisorSandboxRuntime` performs the following steps:
 - **OCI Bundle Directory**: Creates a unique OCI bundle directory under `/tmp/ray/sandboxes/<instance_id>/` containing a `rootfs` filesystem (extracted from container image or rootfs cache) and an OCI specification `config.json`.
 - **OCI Config Generation**: Generates `config.json` (or calls `runsc spec` with standard overrides):
   - **Process Config**: Sets entrypoint process, working directory, UID/GID, and environment variables.
@@ -216,22 +342,24 @@ To support container images in a future release, Ray will need to implement the 
 
 Ray will provide unified resource scheduling and allocation for sandboxes by leveraging Ray's logical resource management and scheduling system. When users request resources during sandbox creation (e.g., `cpu=1.0, memory="512Mi"`), Ray will reserve those logical resources on the host worker node where the gVisor sandbox is created, preventing those resources from being allocated to other tasks or actors.
 
-These logical resources remain reserved in Ray's scheduler for the duration of the sandbox's lifecycle and are automatically released back to the worker node when `sb.terminate()` or context manager exit occurs.
+These logical resources remain reserved in Ray's scheduler for the duration of the sandbox's lifecycle and are automatically released back to the worker node when `sb.delete()` or context manager exit occurs.
 
 ---
 
 ## Compatibility, Deprecation, and Migration Plan
 
-- **Backwards Compatibility**: This change is 100% backwards compatible. `ray.experimental.sandbox` is a completely new, independent library. No existing Ray Core APIs, Raylet behaviors, or `@ray.remote` actor options are modified or deprecated.
-- **Migration Path**: Frameworks currently using custom subprocess wrappers or external REST APIs can directly replace their execution code with `ray.experimental.sandbox.create(...)` calls.
+- **Backwards Compatibility**: This change is 100% backwards compatible. All APIs are new and experimental. No existing Ray Core APIs, Raylet behaviors, or `@ray.remote` actor options are modified or deprecated.
+- **Migration Path**: Frameworks currently using custom subprocess wrappers or external REST APIs can directly replace their implementation with one of the Ray experimental APIs.
 
 ---
 
 ## Test Plan and Acceptance Criteria
 
 ### Unit Tests
-- `ray.experimental.sandbox` API tests (mocking `runsc` CLI invocations).
-- `GVisorSandboxEnv` OCI spec generation and CLI command string verification (`runsc create`, `start`, `exec`, `kill`, `delete`).
+- `ray.experimental.sandbox` tests
+- `ray.experimental.Sandbox` tests
+- `ray.experimental.SandboxRuntime` tests
+- `GVisorSandboxRuntime` OCI spec generation and CLI command string verification (`runsc create`, `start`, `exec`, `kill`, `delete`).
 - Configuration validation (invalid resource specs, timeouts, image names).
 
 ### Integration & E2E Tests
@@ -244,12 +372,13 @@ These logical resources remain reserved in Ray's scheduler for the duration of t
 
 ### Acceptance Criteria
 1. Complete `ray.experimental.sandbox` Python package exported under `ray.experimental.sandbox`.
-2. Fully functional `gvisor` sandbox implementation supporting sandbox lifecycle, command execution, and file transfers.
-3. Comprehensive documentation and example script showing RL code evaluation using `ray.experimental.sandbox`.
+2. Complete implementation for `ray.experimental.Sandbox`
+3. Complete implementation for `ray.experimental.SandboxRuntime` with fully functional `gvisor` sandbox implementation supporting sandbox lifecycle, command execution, and file transfers.
+4. Comprehensive documentation and example script showing RL code evaluation using all experimental APIs.
 
 ---
 
 ## (Optional) Follow-on Work
 
-- **Additional Runtimes**: Support for Kubernetes Pod backend (`runtime="kubernetes"`), Firecracker microVMs (`runtime="firecracker"`), other open-source projects for sandboxes (agent-sandbox, skypilot sandboxing, huggingface openenv, etc.), and third-party APIs (modal, etc.).
-- **gVisor Checkpoint / Restore**: Fast-start warm sandbox pools leveraging `runsc checkpoint` and `runsc restore` to snapshot pre-warmed Python interpreter states for sub-10ms execution start.
+- **Additional Runtimes**: Support for other sandboxing runtimes such as [Agent Substrate](https://github.com/agent-substrate/substrate), Firecracker microVMs, and third-party APIs (modal, etc.).
+- **Checkpoint / Restore**: Support for checkpoint / restoring sandboxes, leveraging `runsc checkpoint` and `runsc restore` for state snapshotting and sub-10ms execution start.
