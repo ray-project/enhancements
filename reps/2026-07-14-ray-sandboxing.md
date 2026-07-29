@@ -4,7 +4,7 @@
 
 Ray is emerging as the de facto orchestrator for Reinforcement Learning (RL) frameworks and AI agent workflows (e.g. veRL, MILES, SkyRL, SLIME, NeMo-RL, coding benchmarks, and tool-use evaluation). A key requirement in these workloads is the safe execution of untrusted, model-generated code and tool calls during training and evaluation loops.
 
-Currently, running untrusted code directly on Ray worker nodes poses severe security and operational risks, including arbitrary host access, data leakage, and cluster instability. To avoid these risks, frameworks often delegate execution to external sandbox services or third-party APIs. However, this externalized approach fragments the Ray ecosystem with ad-hoc abstractions and increases orchestration complexity.
+Currently, running untrusted code directly on Ray worker nodes poses severe security and operational risks, including arbitrary host access, data leakage, and cluster instability. To mitigate these risks, frameworks often delegate execution to external sandbox services or third-party APIs. These services play an important role in the ecosystem and will continue to be fully supported. That said, we believe there is also value in a native sandbox solution that works out of the box on any Ray cluster and provides strong isolation for agentic workloads.
 
 This proposal addresses these challenges by introducing an (experimental) Ray Sandbox library. The library will provide common building blocks for secure sandboxing with unified resource scheduling in Ray. The initial implementation will focus solely on a gVisor-based backend (`runsc`) operating directly on Ray worker nodes for fast sandbox startup, strong kernel isolation, and dense bin packing of execution environments.
 
@@ -34,7 +34,7 @@ Ray will introduce the following experimental APIs to provide building blocks fo
 2. A `Sandbox` Ray actor (in `ray.experimental.sandbox`) that wraps `SandboxRuntime` and provides a high-level API for creating and managing sandbox environments. The main purpose of this API is to manage scheduling and lifecycle of sandboxes using familiar Ray Actor API.
 3. A Modal-like library (in `ray.experimental.sandbox`) that manages `ray.experimental.sandbox.Sandbox` actors.
 
-> [!NOTE]
+> [!WARNING]
 > All experimental APIs are subject to review prior to GA graduation and may be modified or removed.
 
 ```
