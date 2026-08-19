@@ -132,7 +132,7 @@ Take the most typical example of 4 GiB / core. Approximately 25% of the memory w
 
 ### Operator sizing and placement
 
-Note: The following is a high-level description of the proposed implementation. Future implementation details are subject to change in the future. 
+Note: The following is a high-level description of the proposed implementation. The implementation details are subject to change in the future. 
 
 The `OperatorSizer` runs in two modes.
 
