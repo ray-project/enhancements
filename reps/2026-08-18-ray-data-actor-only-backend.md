@@ -552,7 +552,19 @@ New tests are still needed for: row expansion, fast producers, deliberately bad 
 7. **Observability shipped**: the actor-only Grafana panels populate on a real run, and the per-node object-store breakdown is sufficient to attribute a spill without a heap dump.
 8. **Docs**: a migration guide covering the promotion of tasks to actors, the inert backpressure knobs, the unsupported surface, and how to read the new dashboards.
 
+## Early Results
 
+To test our prototype, we considered a couple real-world batch-inference problems.
+
+Consider creating embeddings from 10 TiBs of raw images using google’s vision transformer: `google/vit-base-patch16-224`
+
+```python
+Read(CPU) -> Preprocess(CPU) -> create_image_embedding(GPU) -> Write(CPU)
+```
+
+We ran this pipeline on a cluster with 100 r6a.8xlarge, 40 g5.4xlarge. The existing design undergoes \~160GiB of spilling, and runs in \~700 seconds. The prototype design undergoes 0 spilling, and runs in \~600 seconds.
+
+Similar trends in spilling and runtime were observed for other large-scale batch-inference jobs.
 
 ## Known Limitations and Risks
 
