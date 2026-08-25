@@ -28,12 +28,11 @@ before an object-table entry is inserted, and before a client receives a
 writable buffer. The virtual mapping, file size, and non-moving object layout
 remain intact.
 
-The feature is disabled by default. The initial scope is one normal-page,
-tmpfs-backed primary arena on Linux. Fallback allocations, hugetlb arenas,
-non-tmpfs mappings, and `preallocate_plasma_memory=true` are excluded. It does
-not move live objects, replace spilling or eviction, or increase logical object
-store capacity. Enabling it by default is out of scope and would require a
-separate REP under the boundary in the Compatibility section.
+The feature is disabled by default. The scope of this proposal is one
+normal-page, tmpfs-backed primary arena on Linux. Fallback allocations, hugetlb
+arenas, non-tmpfs mappings, and `preallocate_plasma_memory=true` are excluded. It
+does not move live objects, replace spilling or eviction, or increase logical
+object store capacity.
 
 ### General Motivation
 
@@ -72,13 +71,16 @@ of live objects while close to 400 GiB of tmpfs blocks remain allocated. The
 free chunks are reusable by Plasma, but that capacity cannot be used by
 unrelated processes or other tmpfs files.
 
-Sparse backing also creates the other half of the correctness problem.
-`ftruncate` establishes the arena's file length without reserving every block,
-and `MADV_REMOVE` deliberately makes selected pages sparse again. If tmpfs,
-quota, or cgroup capacity is exhausted when dlmalloc or a worker later writes
-one of those pages, the write may fail as `SIGBUS`, without returning an errno
-to the allocation call. Reclamation therefore requires synchronous backing
-admission before allocator mutation and client exposure; relying on a lazy
+Sparse backing creates two distinct correctness problems. First, `ftruncate`
+establishes the arena's file length without reserving every block. During arena
+startup, dlmalloc may write sparse pages before the steady-state allocation hooks
+are active; exhausting tmpfs, quota, or cgroup capacity at that point can trigger
+the pre-existing `SIGBUS` failure mode. Sparse bootstrap covers that startup
+window.
+
+Separately, `MADV_REMOVE` deliberately makes selected pages sparse again. Before
+such a page is reused, steady-state backing admission must synchronously restore
+its backing before allocator mutation and client exposure; relying on a lazy
 first-write fault is not acceptable.
 
 [ray-project/ray#53261](https://github.com/ray-project/ray/issues/53261) reports
@@ -150,7 +152,7 @@ The design has the following goals:
 - bound work per Plasma Store turn and give Create/OOM handling priority; and
 - fail closed whenever page state or backing is uncertain.
 
-The initial implementation does **not**:
+The proposed implementation does **not**:
 
 - move live objects or compact the address space;
 - replace spilling, eviction, or logical allocation limits;
@@ -201,8 +203,9 @@ Responsibilities are deliberately narrow:
 | `PhysicalPageTrimmer` | Own the persistent normal/retry cursors, apply the logical/backing policy, and run a bounded remove quantum. |
 | `PlasmaStore` | Serialize Create/Free/trim, prioritize Create and OOM recovery, translate preparation errors, and stop callbacks before shutdown. |
 
-V1 does not add an allocator-mutating worker thread. One small synchronous trim
-quantum runs in the existing Store callback and posts at most one successor.
+The proposed implementation does not add an allocator-mutating worker thread.
+One small synchronous trim quantum runs in the existing Store callback and posts
+at most one successor.
 
 ### Exact accounting domain
 
@@ -213,10 +216,11 @@ The controller compares quantities from the same primary arena:
 - `ratio = L / P` when `P > 0`; `P = 0` means there is no measured backing to
   reclaim and the controller does not divide.
 
-If the allocator exposes only aggregate logical bytes, then
-`L = allocated_bytes - fallback_allocated_bytes`. Fallback files are excluded
-from both numerator and denominator. The controller samples the actual primary
-file descriptor rather than rediscovering the unlinked file by path.
+`Allocated()` includes primary-arena and actual fallback logical bytes, while
+`FallbackAllocated()` includes only actual fallback-file bytes. Therefore,
+`L = Allocated() - FallbackAllocated()`. Fallback files are excluded from both
+numerator and denominator. The controller samples the actual primary file
+descriptor rather than rediscovering the unlinked file by path.
 
 `P` is filesystem block accounting. It is neither process RSS nor guaranteed
 resident DRAM. Successfully advised bytes and the observed decrease in `P`
@@ -273,9 +277,9 @@ bounded deferred REMOVE retry may safely re-examine this state.
 
 Each `BUSY` range has an owner descriptor
 `{kind, begin_page, end_page, operation_id}`. Only that owner, or its RAII
-cleanup on every exit path, may finalize the range. The V1 Store serialization
-means contention should be rare, but this ownership rule is required before
-any future asynchronous implementation.
+cleanup on every exit path, may finalize the range. Store serialization in the
+proposed implementation means contention should be rare, but this ownership rule
+is required for any asynchronous implementation.
 
 A timeout or non-owner must not guess a stable state for `BUSY`. If completion
 ownership is lost while the process remains alive, the range stays quarantined
@@ -285,9 +289,14 @@ destroyed together.
 
 ### Sparse bootstrap
 
-The primary file is sparse after `ftruncate`, so the page ledger cannot be
-initialized optimistically as entirely `COMMITTED`. Bootstrap follows this
-order:
+Sparse bootstrap is a startup-only safety mechanism, not a trim phase: it does
+not perform steady-state reclaim or report reclaimed bytes. It closes the
+pre-existing `SIGBUS` window in arena initialization, where dlmalloc may write
+sparse pages before the steady-state allocation hooks are active. The Allocate
+path separately performs backing admission before reusing pages made sparse by
+this proposal's `MADV_REMOVE`. Because the primary file is sparse after
+`ftruncate`, the page ledger cannot be initialized optimistically as entirely
+`COMMITTED`. Bootstrap follows this order:
 
 1. validate tmpfs, page geometry, `MADV_REMOVE`, and
    `FALLOC_FL_KEEP_SIZE` support before enabling removal;
@@ -307,10 +316,10 @@ constrained Linux test. Inferring safe initialization from `st_blocks` is not
 allowed.
 
 An environment rejected by the pre-bootstrap capability gates remains on the
-existing non-trimming path. Once an explicitly requested trim mode begins page
-classification and backing admission, however, bootstrap failure aborts Store
-startup. It must not silently fall back to lazy faults or drop the admission
-hook after establishing sparse-page state.
+existing non-trimming path. Once startup bootstrap begins reserving the
+initialization write set and classifying pages, however, bootstrap failure aborts
+Store startup. It must not silently fall back to lazy faults or drop the
+admission hook after establishing sparse-page state.
 
 ### Free path: certify reclaim candidates
 
@@ -338,8 +347,10 @@ kernel hole-punch work and lets policy coalesce adjacent candidates.
 
 ### Trim path and topology-independent bounded progress
 
-The controller starts only after `L/P < 0.50` continuously for 30 seconds and
-stops when `L/P >= 0.60`. While trimming, one Store turn:
+The controller starts only after
+`L/P < plasma_physical_trim_start_ratio` continuously for
+`plasma_physical_trim_low_ratio_grace_ms`, and stops when
+`L/P >= plasma_physical_trim_stop_ratio`. While trimming, one Store turn:
 
 1. enters the allocator mutation gate and yields immediately if Create/OOM
    work has priority;
@@ -436,13 +447,13 @@ within Ray's ownership boundary.
 stateDiagram-v2
   [*] --> DISABLED
   DISABLED --> IDLE: enabled and capability probe passes
-  IDLE --> TRIMMING: L/P below start ratio for full grace
-  TRIMMING --> IDLE: L/P reaches stop ratio
+  IDLE --> TRIMMING: L/P below plasma_physical_trim_start_ratio for plasma_physical_trim_low_ratio_grace_ms
+  TRIMMING --> IDLE: L/P reaches plasma_physical_trim_stop_ratio
   TRIMMING --> SUSPENDED_OOM: Create pressure or OOM path
   SUSPENDED_OOM --> IDLE: pressure clears and cooldown expires
   TRIMMING --> NO_PROGRESS: full ledger pass removes nothing
   NO_PROGRESS --> TRIMMING: new candidate or remove-retry deadline
-  NO_PROGRESS --> IDLE: ratio recovers or new episode is required
+  NO_PROGRESS --> IDLE: L/P reaches plasma_physical_trim_stop_ratio or new episode is required
 ```
 
 `DISABLED` describes the trim controller. If a fatal trim error occurs after
@@ -461,7 +472,7 @@ Each quantum is bounded by:
 
 - at most 128 MiB worth of ledger pages inspected;
 - at most 128 MiB successfully advised;
-- at most 32 REMOVE syscall entries, counting retries, as an independent V1
+- at most 32 REMOVE syscall entries, counting retries, as an independent
   attempt cap;
 - at most 4 MiB in one `MADV_REMOVE` call; and
 - a 10 ms soft wall-clock budget checked between calls.
@@ -470,27 +481,27 @@ The deadline is soft because a running kernel syscall is not interruptible by
 the controller. PoC-A therefore informs the 4 MiB cap, while real Store Create
 latency remains an acceptance measurement.
 
-V1 accesses the ledger in the same external serialization domain as allocator
+The ledger is accessed in the same external serialization domain as allocator
 mutation and therefore does not require an independently acquired page-state
-mutex. If a dedicated state lock is used or later introduced, the mandatory
-lock order is:
+mutex. If a dedicated state lock is used or later introduced, the mandatory lock
+order is:
 
 ```text
 allocator mutation gate -> page-state lock
 ```
 
-V1 performs REMOVE and COMMIT synchronously while allocator mutation is
-excluded. The callback checks already queued Create pressure before starting a
-turn. Because new event-loop requests are not observable inside that synchronous
-turn, the independent budgets bound their delay; the callback then returns and
-posts at most one successor. Shutdown first prevents new quantums, then waits
-for the current synchronous turn before destroying the allocator, file
-descriptor, page ledger, or Store callbacks.
+REMOVE and COMMIT execute synchronously while allocator mutation is excluded.
+The callback checks already queued Create pressure before starting a turn.
+Because new event-loop requests are not observable inside that synchronous turn,
+the independent budgets bound their delay; the callback then returns and posts
+at most one successor. Shutdown first prevents new quantums, then waits for the
+current synchronous turn before destroying the allocator, file descriptor, page
+ledger, or Store callbacks.
 
-Any future syscall offload must preserve explicit range ownership, quarantine
-`BUSY` ranges from allocator reuse, cancel or join work at shutdown, and prove
-the same lock order. It is not an implementation detail that can be added
-without revisiting the concurrency proof.
+A syscall-offload implementation must preserve explicit range ownership,
+quarantine `BUSY` ranges from allocator reuse, cancel or join work at shutdown,
+and prove the same lock order. It is not an implementation detail that can be
+added without revisiting the concurrency proof.
 
 ### `MADV_REMOVE` and remove-retry semantics
 
@@ -507,10 +518,10 @@ safe even when reclaim accounting is ambiguous.
 
 A transient `EAGAIN` must not strand the last candidates in
 `NO_PROGRESS`. Immediate retries are finite. If they are exhausted while
-reclaim remains eligible, V1 sets the fixed retry bits for the 2 MiB regions
-overlapping the failed range and schedules a bounded retry pass after capped
-backoff, even if no Allocate or Free occurs. A persistent region/page retry
-cursor visits only marked regions, claims their `NEEDS_RECOMMIT` pages as
+reclaim remains eligible, the controller sets the fixed retry bits for the 2 MiB
+regions overlapping the failed range and schedules a bounded retry pass after
+capped backoff, even if no Allocate or Free occurs. A persistent region/page
+retry cursor visits only marked regions, claims their `NEEDS_RECOMMIT` pages as
 `BUSY/REMOVE`, rechecks safety under the allocator gate, and applies the same
 scan, advice, call-count, range, and time budgets as a normal turn.
 
@@ -565,7 +576,7 @@ separate completion criterion and is not claimed here.
 
 ### Configuration
 
-The initial configuration is internal, experimental, and disabled by default.
+The proposed configuration is internal, experimental, and disabled by default.
 
 | Ray configuration | Default | Meaning |
 |---|---:|---|
@@ -583,10 +594,11 @@ The initial configuration is internal, experimental, and disabled by default.
 Validation requires page-aligned byte limits,
 `page_size <= syscall_bytes <= quantum_bytes`,
 `0 < start_ratio < stop_ratio <= 1`, and non-overflowing timing values.
-V1 also enforces an internal cap of 32 REMOVE syscall entries per turn. That
-number matches `quantum_bytes / syscall_bytes` for contiguous default-size
-ranges, but it is enforced independently because fragmented candidates and
-`EINTR` retries can produce more calls without exhausting the byte budget.
+Each trim quantum also enforces an internal cap of 32 REMOVE syscall entries per
+turn. That number matches `quantum_bytes / syscall_bytes` for contiguous
+default-size ranges, but it is enforced independently because fragmented
+candidates and `EINTR` retries can produce more calls without exhausting the byte
+budget.
 
 ### Observability
 
@@ -607,68 +619,6 @@ The existing aggregate `object_store_physical_bytes` remains an observation
 metric for compatibility, but it is not the denominator because it may include
 fallback files. High-cardinality operation ids and page offsets remain in
 debug/test telemetry, not exported labels.
-
-### Alternatives and prior art
-
-#### Worker-side `MADV_DONTNEED`
-
-The experiment in [ray-project/ray#62854](https://github.com/ray-project/ray/pull/62854)
-is complementary. It can reduce page-table residency in a worker that releases
-an object while preserving shared data for other clients. It cannot remove the
-tmpfs inode backing. This REP acts after allocator-level deletion.
-
-#### Synchronous removal in every Free
-
-Removing each object's pages directly in Free puts potentially large syscall
-work on deletion, performs poorly for rapid reuse, and observes object payload
-boundaries rather than the allocator's final coalesced free interval. The
-post-free hook records candidates cheaply; the controller later removes them
-under hysteresis and byte limits.
-
-#### Cross-quantum dlmalloc chunk cursor
-
-An earlier design resumed a dynamic chunk walk with a target offset, validation
-offset, and topology generations. Backward coalescing can invalidate a retained
-chunk, so each generation change had to reconstruct an unbounded prefix.
-PoC-B demonstrates cadence-1 deep-cursor starvation, and PoC-C demonstrates
-advice amplification when each Free generation restarts a pass. Raw dirty
-offsets and stale chunk pointers are unsafe; one normal pass plus a delayed
-catch-up pass only bounds amplification and does not provide topology-
-independent inspection progress.
-
-The fixed page ledger and page-index cursor replace that design. PoC-B and
-PoC-C remain regression inputs, not validation of the replacement.
-
-#### `dlmalloc_trim` or partial `munmap`
-
-Generic heap trimming is principally useful for a top chunk or detachable
-segments. Plasma maintains a stable shared primary mapping and rejects partial
-fake-`munmap` requests. It also needs to release interior free pages separated
-by live chunks. Hole punching retains the mapping and handles those pages.
-
-#### Rely only on spilling or eviction
-
-Spilling and eviction make objects logically removable, which ultimately calls
-`dlfree`, but the primary tmpfs backing remains. They solve logical capacity
-and durability, not this physical high-water mark.
-
-#### Replace dlmalloc or move live objects
-
-An extent-based allocator could make page ownership cheaper, and object
-relocation could address fragmentation. Either change affects shared-memory
-layout, raw client pointers, and object lifetime substantially. This REP adds a
-conservative protocol to the existing non-moving allocator.
-
-#### Related allocator designs
-
-- glibc's [`malloc_trim`](https://man7.org/linux/man-pages/man3/malloc_trim.3.html)
-  releases complete pages inside free heap regions while preserving allocator
-  metadata.
-- [Cxlalloc](https://www.cs.utexas.edu/~witchel/pubs/ni26asplos-cxlalloc.pdf)
-  keeps cross-process mappings while using `MADV_REMOVE` when whole slabs are
-  globally free.
-- [TCMalloc adaptive subrelease](https://research.google/pubs/adaptive-hugepage-subrelease-for-non-moving-memory-allocators-in-warehouse-scale-computers/)
-  demonstrates delayed, demand-aware release to avoid reclaim/refault churn.
 
 ## Compatibility, Deprecation, and Migration Plan
 
@@ -691,8 +641,7 @@ The rollout is:
 3. canary it only on normal-page primary arenas with
    `preallocate_plasma_memory=false` and monitored tmpfs headroom;
 4. compare Create latency, backing, reclaim/recommit churn, capacity errors,
-   `SIGBUS`/OOM, and object correctness against control nodes; and
-5. treat any default change as a separate REP.
+   `SIGBUS`/OOM, and object correctness against control nodes.
 
 Disabling the configuration and restarting the raylet restores the existing
 non-trimming behavior on the newly created arena; the previous unlinked arena
@@ -705,27 +654,6 @@ exists to reserve backing up front and reduce later allocation-fault failure
 ([current source](https://github.com/ray-project/ray/blob/71df1551d91571a5fef508b8330f401e90f86170/src/ray/object_manager/plasma/dlmalloc.cc#L179-L189));
 punching holes would revoke that guarantee while claiming the option remains
 active.
-
-### Default-on boundary
-
-This REP approves only a default-off, opt-in experiment. The bounded page cursor
-and pre-write backing admission are part of the proposed V1 design; they are no
-longer deferred prerequisites.
-
-A separate default-on REP requires evidence from the final implementation:
-
-- allocator fault injection and a complete bootstrap write-set proof;
-- cadence-1 200K/500K/1M bounded page-cursor tests;
-- real Store churn and Create tail-latency measurements;
-- active high-fanout mapper results on non-oversubscribed hosts;
-- pressure, refault, capacity-exhaustion, OOM, and `SIGBUS` tests;
-- shutdown and complete task/object-transfer error propagation;
-- disabled-mode performance parity; and
-- production canaries on supported kernels and cgroup modes.
-
-Zero feature-induced `SIGBUS` in tests and canaries is necessary evidence, not
-a proof against unrelated faults. The default-on decision must publish the
-measured safety and latency boundary rather than infer it from standalone PoCs.
 
 ## Test Plan and Acceptance Criteria
 
@@ -753,7 +681,7 @@ CreateRequestQueue, protocol errors, shutdown, or real Create latency.
 
 The published results come from one Linux 5.15 x86_64 host with 32 available
 CPUs, one NUMA node, 4 KiB pages, tmpfs `/dev/shm`, shmem THP set to
-`never`, and zero memory PSI during PoC-A. They select initial parameters and
+`never`, and zero memory PSI during PoC-A. They select proposed parameters and
 reject old mechanisms; they do not establish production readiness.
 
 ### Focused PoC results
@@ -778,7 +706,7 @@ backing, or validation failures. The aggregate is
 
 The number of present PTEs dominates mapping count. At `P=64`, increasing the
 range from 4 MiB to 16 MiB improves p50 throughput by less than 1% while raising
-mean p99 from 3.055 ms to 12.186 ms. This supports a 4 MiB initial cap. It does
+mean p99 from 3.055 ms to 12.186 ms. This supports the proposed 4 MiB cap. It does
 not measure complete Store Create p99, and high-fanout active mappings on a
 non-oversubscribed host remain unmeasured.
 
@@ -858,9 +786,9 @@ Before merge, the final implementation must include:
    does not expand a small allocation's `fallocate` range.
 3. **Bootstrap fault tests:** under a restricted tmpfs/quota, cover the actual
    `init_top` trailing header, `TOP_FOOT`, hook installation, and first split
-   write set. Prove no bootstrap write can `SIGBUS` before admission is active,
-   and prove that a non-4-KiB system page size is rejected before sparse-state
-   tracking begins in the initial V1 scope.
+   write set. Prove no startup initialization write can `SIGBUS` before the
+   steady-state admission hook is active, and prove that a non-4-KiB system page
+   size is rejected before sparse-state tracking begins in the proposed scope.
 4. **REMOVE fault tests:** no-call, success, partial/unknown effect, `EINTR`,
    `EAGAIN`, and permanent errors. A final-candidate `EAGAIN` case must retry
    within a bound without any intervening Allocate or Free, while overlapping
@@ -909,8 +837,9 @@ Acceptance requires:
 - no false-negative ledger state or write before successful admission;
 - bounded page-cursor inspection under cadence-1 topology churn;
 - transient remove retries to progress without a new allocator mutation;
-- physical backing to move toward the stop ratio when certified backed free
-  pages exist, otherwise enter `NO_PROGRESS` without spinning;
+- `L/P` to move toward `plasma_physical_trim_stop_ratio` as physical backing is
+  reclaimed when certified backed free pages exist, otherwise enter
+  `NO_PROGRESS` without spinning;
 - every syscall and Store turn to respect scan, advice, call-count, range, and
   soft-time budgets at their documented boundaries;
 - a sustained Create storm to show Create priority and no event-loop starvation;
@@ -967,9 +896,9 @@ new Free generation.
 
 Pages containing headers, boundary tags, small objects, or mixed live/free
 content remain backed. A low logical/physical ratio therefore does not imply
-enough candidate pages to reach the stop ratio. The controller reports
-`NO_PROGRESS` and stops rather than scanning indefinitely; this feature does
-not compact live objects.
+enough candidate pages to reach `plasma_physical_trim_stop_ratio`. The
+controller reports `NO_PROGRESS` and stops rather than scanning indefinitely;
+this feature does not compact live objects.
 
 ### Platform and evidence variability
 
