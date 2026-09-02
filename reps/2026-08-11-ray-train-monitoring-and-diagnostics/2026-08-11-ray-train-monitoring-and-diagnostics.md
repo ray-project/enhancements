@@ -101,6 +101,14 @@ unhealthy nodes, failed sanity checks).
 1. A hook for users to screen GPU and node health before training starts, such as a TFLOPS or
    temperature screen, DCGM diagnostics, or an NCCL/collective proof.
 
+**Out of scope: starting on spares.** Allocating a capacity buffer and starting a 1,024-GPU run on
+the healthy 1,024 of 1,032 provisioned nodes is *not* in this REP. This proposal produces the signal
+that decision needs — pre-flight `ProbeResult`s per candidate node — but acting on it requires
+provisioning spares in the launcher and letting the worker group start at a size smaller than the
+allocation, which is a scheduling and elastic-sizing change rather than a health one. This REP
+assumes a fixed world size throughout (see [Act](#act)). Spares are tracked as
+[follow-on work](#optional-follow-on-work).
+
 **Mid-flight monitoring and detection** — actively monitor ranks and nodes during training instead
 of relying on an NCCL timeout and abort, using the controller's global view to correlate signals
 across ranks, including degraded-but-alive runs (memory leaks, data-pipeline slowdowns, hardware
@@ -131,9 +139,17 @@ restart/retry state machine, and push work to nodes whose training worker is dea
 controller-internal paths that cannot be layered on from outside.
 
 We start scoped to Ray Train, in a new `ray.train.health` module, plus one small addition to Ray
-Core (`ray.drain_node`, see [Act](#act)). If the same collect/decide machinery later proves useful
-to other workloads (Serve, Data), the workload-agnostic parts can be extracted into a shared
-`ray.health`.
+Core (`ray.drain_node`, see [Act](#act)).
+
+**Only the Act half is Ray Train-specific.** Collect and Decide are deliberately workload-agnostic:
+`Probe`, `ProbeResult`, `HealthState`, `Evaluator`, and the `NodeMonitor` know nothing about
+training, and node-level collection in particular is just "sample this host." What binds them to
+Ray Train is the worker-side half of Collect (health rides along the existing `poll_status` call)
+and all of Act (the decision drives the controller's restart/retry path). So the machinery is usable
+by post-training, inference, or non-Ray-Train compute, but not *yet* — that would need a second
+consumer of `HealthDecision`. We keep the coupling loose on purpose, and once a second workload
+wants it, the workload-agnostic parts move to a shared `ray.health` and `ray.train.health` keeps
+only the controller integration.
 
 What stays outside is the content: probes, evaluators, and policies are user-supplied, and vendor
 integrations (DCGM, NCCL RAS, NVSentinel, NVIDIA Resiliency Extension) live in their own packages.
@@ -142,13 +158,13 @@ integrations (DCGM, NCCL RAS, NVSentinel, NVIDIA Resiliency Extension) live in t
 
 ### Required Reviewers
 
-@richardliaw 
-@matthewdeng 
+@richardliaw   
+@matthewdeng  
 
 ### Shepherd of the Proposal (should be a senior committer)
 
-@richardliaw 
-@edoakes 
+@richardliaw  
+@edoakes   
 
 ## Design and Architecture
 
@@ -264,9 +280,12 @@ class WorkerHealth:
 
 #### Per-node health
 
-When a training process hangs or is killed, its rank goes silent at exactly the moment its evidence matters most. Node-level health covers that blind spot. A
-`NodeProbe` runs inside the `NodeMonitor`, so its signals keep flowing regardless of worker state,
-and a single sample covers every worker on the host.
+When a training process hangs or is killed, its rank goes silent at exactly the moment its evidence
+matters most. What that rank already reported is not lost — everything it sent before it died is
+controller-side and stays available as evidence — but the signal stops exactly when it would have
+been most diagnostic, and nothing on the host is left to say why. Node-level health covers that blind
+spot. A `NodeProbe` runs inside the `NodeMonitor`, so its signals keep flowing regardless of worker
+state, and a single sample covers every worker on the host.
 
 ```python
 @dataclass
@@ -325,10 +344,19 @@ class Action(Enum):
 
 SEVERITY = {Action.NOOP: 0, Action.DIAGNOSE: 1, Action.REATTEMPT: 2, Action.EVICT: 3}
 
+class Cause(Enum):
+    """Structured classification, alongside the free-text reason."""
+    UNKNOWN = auto()
+    HARDWARE = auto()        # GPU, NIC, or host fault attributable to a node
+    INFRASTRUCTURE = auto()  # remote storage, preemption, control plane
+    APPLICATION = auto()     # NaN loss, user code, data pipeline
+    NO_PROGRESS = auto()     # hang or straggler, not yet attributed
+
 @dataclass
 class HealthDecision:
     action: ClassVar[Action]
-    reason: str = ""
+    cause: Cause = Cause.UNKNOWN
+    reason: str = ""          # human-readable detail, for logs and events
 
 @dataclass
 class Noop(HealthDecision):
@@ -350,6 +378,10 @@ class Diagnose(HealthDecision):
     target_nodes: list[str] = field(default_factory=list)
     target_ranks: list[int] = field(default_factory=list)
 ```
+
+`cause` is what downstream consumers key off — whether quarantine is authorized at all (only
+`HARDWARE` should taint a node), which structured event to emit, and what a cross-run "lemon node"
+tracker can aggregate on. `reason` stays free text for humans.
 
 #### The HealthManager
 
@@ -407,6 +439,11 @@ on restart. This is what gives the temporal axis its teeth — an evaluator can 
 slowing down" from "this rank is fine" — while letting each evaluator size the window its own check
 actually needs, instead of the framework guessing on everyone's behalf.
 
+Crucially, evaluators run **in the controller**, so the time series lives outside the failure domain
+of the thing being measured. Probes sample on the node; nothing accumulates there. A host whose
+network is degrading cannot take its own history down with it, and the samples leading up to a node
+going dark are still on hand to explain what happened.
+
 #### Evaluators and HealthPolicy (the user-facing API)
 
 Evaluation reads collected metrics and returns `HealthDecision`s. It runs on the controller:
@@ -458,13 +495,31 @@ this way, today's raised error is just the simplest possible decision, a reattem
 arrives for a fault the controller is already handling, it is dropped.
 
 - **REATTEMPT** restarts from the last checkpoint, reusing the existing `FailurePolicy` retry path.
-- **EVICT** emits a structured evict event, then restarts the worker group with the bad node
-  excluded.
+- **EVICT** marks the target node(s) unusable and emits a structured evict event. It does **not**
+  restart the worker group itself — it hands off to Ray Train's existing worker-group sizing path
+  (`ResizeDecision`), which decides what to bring back up. With a fixed world size that means the
+  same-size group scheduled without the evicted nodes; under elastic training it can mean continuing
+  at a smaller world size down to the user's configured minimum. Keeping these separate is what lets
+  eviction compose with elastic resizing instead of duplicating it.
 - **DIAGNOSE** is the push path. It stops the affected workers if the check needs the GPU, runs the
   `OnDemandProbe` on the relevant node(s) through their `NodeMonitor`, and feeds the `ProbeResult`
   back to the `HealthManager`. This is what closes the loop: an action produces fresh evidence that
   the next Decide step reads.
 - **NOOP** needs no action.
+
+**Eviction is a request, not a guarantee.** Most training jobs run under a queue or priority
+scheduler (Kueue, KAI) that gang-schedules the whole job, so a single lost pod often cannot simply be
+replaced — the workload gets re-queued, sometimes automatically after a timeout. Topology-aware
+placement makes this sharper: on NVL72-style hardware a colocated group may stay infeasible until
+the bad GPU is remediated, which can be slow. That gives three escalation tiers — replace a node
+within a rack, replace the rack, pre-empt and re-queue the whole workload — and only the first is
+Ray Train's to make.
+
+So `EVICT` deliberately stops at naming the node and emitting the event. Ray Train does not model
+the scheduler's queueing semantics or attempt tiers 2 and 3; the cluster manager owns escalation,
+and `after_health_decision` is the seam for anyone who needs to drive it themselves. Whether Ray
+Train should ever *request* a higher tier is left open — see
+[follow-on work](#optional-follow-on-work).
 
 Eviction lands in two milestones.
 
@@ -494,15 +549,16 @@ evicts a node and prevents it from being rescheduled onto.
 def drain_node(
     node_id: str,
     *,
-    reason: str,
-    severity: str = "unhealthy",
+    reason: str,                # free text, for humans
+    severity: DrainSeverity = DrainSeverity.UNHEALTHY,   # structured; Core-side enum
     replace: bool = True,
     grace_period_s: float = 0.0,
 ) -> "DrainResult": ...
 ```
 
-With this in place, Ray Train simply calls `drain_node(...)` when acting on
-`Evict(target_nodes=["..."], reason="bad node")`.
+With this in place, Ray Train simply calls `drain_node(...)` when acting on an `Evict`, passing the
+decision's `cause` and `reason` straight through so the drain carries the same structured
+classification the evict event does.
 
 ### End-to-end example
 
@@ -605,8 +661,10 @@ Small multi-node clusters, with faults injected by test probes:
 - **Push path**: a `Diagnose` decision stops workers when `stop_workers=True`, runs the on-demand
   probe, and the result reappears in the next `HealthState`. A probe that hangs is killed at
   `timeout_s` without taking down the `NodeMonitor`.
-- **Evict path**: an `Evict` decision restarts the worker group with the target node excluded and
-  fires `after_health_decision`; with Milestone 2, the drained node is not rescheduled onto.
+- **Evict path**: an `Evict` decision fires `after_health_decision` and hands off to the worker-group
+  sizing path, which brings the group back without the target node; with Milestone 2, the drained
+  node is not rescheduled onto. Also covered with elastic sizing, where the run continues at a
+  smaller world size instead.
 - **No-config regression**: a script with no `HealthConfig` runs unchanged and starts no
   `NodeMonitor`.
 - **Silent hang**: a release test reproducing the NIC example above — detection in seconds rather
@@ -627,8 +685,14 @@ Small multi-node clusters, with faults injected by test probes:
 
 - **Ray Core `drain_node` (Milestone 2)** as a shared, workload-agnostic eviction primitive for
   Train, Serve, and Data.
-- **Topology-aware grouping.** Probes are per-worker and per-node today; extending the spatial axis
-  to topology groups (rack, TP/PP group) would let evaluators reason about a shared switch or
-  rack-level fault.
+- **Topology-aware grouping and escalation tiers.** Probes are per-worker and per-node today;
+  extending the spatial axis to topology groups (rack, TP/PP group) would let evaluators reason about
+  a shared switch or rack-level fault — and is the prerequisite for Ray Train ever requesting a
+  higher escalation tier (replace the rack, or re-queue the workload) rather than only naming a node.
+- **Starting on spares.** Provisioning a capacity buffer and starting the run on the healthy subset
+  (1,024 of 1,032) using pre-flight results, which needs elastic worker-group sizing at startup.
+- **Cross-run health history.** Persisting the structured evict events (`cause` + `reason`) so a
+  layer above Ray Train can identify "lemon nodes" that pass pre-flight repeatedly and then fail
+  mid-flight.
 - **A shipped policy library**, so common cases (DCGM ECC/thermal, NCCL RAS, host OOM, NaN loss, no
   progress) work without the user writing any evaluator code.
