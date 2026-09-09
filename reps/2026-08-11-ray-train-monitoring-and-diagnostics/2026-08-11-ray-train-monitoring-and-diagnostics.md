@@ -470,7 +470,6 @@ EvaluatorCreator = Callable[[], list[Evaluator]]
 class HealthPolicy:
     """(probes, evaluators) — what to measure, and what to conclude from it."""
     probe_creator: ProbeCreator = None
-    probe_creator: ProbeCreator = None
     evaluator_creator: EvaluatorCreator = None
     preflight: bool = False
 ```
