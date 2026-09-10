@@ -296,20 +296,20 @@ The process of batching reconstructions follows:
 
 #### Resource management
 
-Because we now run lineage reconstruction in the Ray Data sphere itself, we have implicit control in terms of resource management and scheduling. Reconstructed blocks reside in the same operator queues as the fresh blocks, which means that lineage reconstruction is ratcheted by the existing backpressure mechanism, and we prevent over-loading the cluster with work. The existing resource budget checks apply before operators take on reconstruction tasks (as they do for fresh tasks).
+Because reconstruction now runs inside Ray Data, we get resource management and scheduling control implicitly. Reconstructed blocks live in the same operator queues as fresh blocks, which means reconstruction is ratcheted by the existing backpressure mechanism and cannot flood the cluster with work. Existing resource budget checks apply before an operator takes on reconstruction tasks, exactly as they do for fresh tasks.
 
-The decision to keep unified queues for fresh blocks and the reconstruction blocks is an intentional one, to prevent duplicating behaviour in the code base for handling the outputs and inputs of operators. However, this leads to some complexity in making sure the reconstruction blocks do not bundle with fresh blocks, and that reconstruction tasks only get the exact reconstruction blocks that the plan requires them to accept as inputs.
+Keeping unified queues for fresh and reconstruction blocks is an intentional decision, to avoid duplicating operator input/output handling in the codebase. It does introduce complexity: we must ensure reconstruction blocks do not bundle with fresh blocks, and that a reconstruction task receives exactly the reconstruction blocks its plan requires as inputs.
 
-Pros and cons of the above approach to re-use Ray Data's existing operator queues, resource budget, and scheduling policy include:
+Pros and cons of reusing Ray Data's existing operator queues, resource budget, and scheduling policy for reconstruction:
 
 **Pros**
 
-- We do not need to re-implement complex mechanisms such as backpressure or operator queuing for reconstruction tasks/blocks.
+- No need to re-implement complex mechanisms such as backpressure or operator queuing for reconstruction tasks and blocks.
 
 **Cons**
 
-- Admission control for reconstruction tasks becomes a little more complicated. Basically, an example of this is that we now have heterogeneous op queues containing both fresh and reconstructed blocks, and we have to make sure that reconstruction tasks are only scheduled with their corresponding inputs.
-- We lose some observability in terms of the progress of reconstruction tasks.
+- Admission control becomes more complicated: operator queues are now heterogeneous (fresh and reconstructed blocks), and reconstruction tasks must be scheduled only with their corresponding inputs.
+- We lose some observability into the progress of reconstruction tasks specifically, since they share queues with fresh work.
 
 ### Data–client interface and lineage garbage collection
 
