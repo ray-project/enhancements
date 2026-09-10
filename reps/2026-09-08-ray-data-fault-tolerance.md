@@ -101,25 +101,25 @@ Critically, **this all happens inside Core, independent of application code**: U
 ### Overview of the proposed design
 
 ```
-             Today                                    Proposed
-  +---------------------------+            +---------------------------+
-  |   Ray Data                |            |   Ray Data                |
-  |   StreamingExecutor       |            |   StreamingExecutor       |
-  |   - operator queues       |            |   - operator queues       |
-  |   - backpressure          |            |   - backpressure          |
-  |   - resource budgets      |            |   - resource budgets      |
-  +---------------------------+            |   - LineageTracker  <--+  |
-              |  fresh tasks                |   - reconstruction     |  |
-              v                             |     plans              |  |
-  +---------------------------+            +---------------------------+
-  |   Ray Core                |                   |  fresh + reconstruction
-  |   - lineage pinning       |                   |  tasks (one path)
-  |   - reconstruction  ------+--> resubmits      v
-  |     (invisible to Data)   |    tasks    +---------------------------+
-  +---------------------------+   *outside* |   Ray Core                |
-                                  Data's    |   - lineage pinning OFF   |
-                                  scheduler |     for Data objects      |
-                                            +---------------------------+
+             Today                                                Proposed
+  +---------------------------+                        +---------------------------+
+  |   Ray Data                |                        |   Ray Data                |
+  |   StreamingExecutor       |                        |   StreamingExecutor       |
+  |   - operator queues       |                        |   - operator queues       |
+  |   - backpressure          |                        |   - backpressure          |
+  |   - resource budgets      |                        |   - resource budgets      |
+  +---------------------------+                        |   - LineageTracker  <--+  |
+              |  fresh tasks                           |   - reconstruction     |  |
+              v                                        |     plans              |  |
+  +---------------------------+                        +---------------------------+
+  |   Ray Core                |                               |  fresh + reconstruction
+  |   - lineage pinning       |                               |  tasks (one path)
+  |   - reconstruction  ------+--> resubmits                  v
+  |     (invisible to Data)   |    tasks               +---------------------------+
+  +---------------------------+   *outside*            |   Ray Core                |
+                                  Data's               |   - lineage pinning OFF   |
+                                  scheduler            |     for Data objects      |
+                                                       +---------------------------+
 ```
 
 The design has four parts:
