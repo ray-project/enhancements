@@ -165,9 +165,9 @@ Used internally when Ray Data itself can observe that a block has been fully mat
 
 ### Lineage tracking
 
-To reconstruct a failed task we must know the dependency chain that produced its inputs: for each task, which arguments it needs and which task produced them. We considered the following designs.
+To reconstruct a failed task we must know the dependency chain that produced its inputs: for each task, which arguments it needs and which task produced them. We considered several designs. The chosen design is described below; the alternatives are in the [Appendix](#alternative-designs-considered).
 
-#### Option 2: Plan-based reconstruction (recommended)
+#### Plan-based reconstruction
 
 To avoid redundant work on fan-out and to know when mappings can be erased, we track the full lineage as a graph. Each node is a submitted task; each directed edge is a dependency (a task depends on another when it takes one or more of that task's outputs as an argument).
 
@@ -213,15 +213,9 @@ This repeats until the originally failed task completes.
 - Plan metadata scales with the number of simultaneous reconstruction attempts.
 - *Mitigation idea:* batch reconstruction triggers (e.g. defer until the end of a scheduling window, or until resources are otherwise underutilized) so overlapping attempts can be merged.
 
-#### Option 4: Tracking via Ray Core (unexplored)
-
-There is design space for a hybrid where Core tracks some lineage information (or simply exposes a better resubmission API) so Data does less work and we are not reimplementing lineage reconstruction. One idea considered and abandoned: have Core invoke a callback into Data whenever it triggers reconstruction, so Data can record the resource consumption while Core performs the reconstruction. This is unsatisfying because there are still two underlying scheduling mechanisms.
-
-This space is worth revisiting. The position of this REP is that the Data-side reconstruction implementation is a P0 that immediately improves Ray Data fault tolerance, and a more elegant Core/Data split can be designed later.
-
 #### Decision
 
-We recommend **Option 2 (plan-based reconstruction)**: it is the only option that covers all Ray Data topologies, avoids reconstructing unrelated work, and supports clean garbage collection, at the cost of duplicated work across simultaneous overlapping reconstructions — which can be mitigated by batching.
+We recommend **plan-based reconstruction**: it is the only option that covers all Ray Data topologies, avoids reconstructing unrelated work, and supports clean garbage collection, at the cost of duplicated work across simultaneous overlapping reconstructions — which can be mitigated by batching.
 
 ### Scheduling reconstruction tasks
 
@@ -501,7 +495,7 @@ We should explore these options for completeness if time allows, but high-level 
 3. **Data–Train interface for T2A/T2B** — reconstruct exactly the blocks lost by a dead Train worker, and avoid reconstruction entirely when the producing Data workers are still alive.
 4. **Broader consumption-interface support** — first-class support for `take`/`take_batch`, aggregations, `materialize`, and `to_random_access_dataset` beyond the initially supported write-to-sink and `streaming_split`.
 5. **Reconstruction-specific observability** — recover the per-task progress visibility lost by sharing operator queues between fresh and reconstruction work.
-6. **Core/Data hybrid design** — revisit Option 4 for a more elegant division of responsibility once the Data-side implementation is in production.
+6. **Core/Data hybrid design** — revisit Option 3 (see Appendix) for a more elegant division of responsibility once the Data-side implementation is in production.
 7. **Stable-store evaluation** — benchmark checkpointing/WAL approaches against reconstruction for completeness.
 
 ## Appendix
@@ -526,9 +520,9 @@ When a task fails, the streaming executor on the driver detects the failure via 
 - Only works for workloads with no fan-out. A fan-out task causes unrelated downstream tasks to be resubmitted as well.
 - Still needs lineage tracking for the per-task mappings to be garbage collected correctly.
 
-#### Option 3: Three-color graph reconstruction
+#### Option 2: Three-color graph reconstruction (rejected)
 
-An attempt to fix the duplicated-shared-lineage problem in Option 2 by giving each node in the same graph one of three states — `PENDING_RECONSTRUCTION`, `EXECUTING`, `COMPLETE` — instead of tracking plans.
+An attempt to fix the duplicated-shared-lineage problem in the plan-based design by giving each node in the same graph one of three states — `PENDING_RECONSTRUCTION`, `EXECUTING`, `COMPLETE` — instead of tracking plans.
 
 Normal execution builds the same graph, plus: mark a node `EXECUTING` on submission and `COMPLETE` on completion. On failure, instead of building a plan, color the graph:
 
@@ -541,3 +535,9 @@ Then resubmit the pending seed tasks (if no new pending seed tasks were added, n
 Because the walk stops at nodes already marked `PENDING_RECONSTRUCTION`, simultaneous failures sharing upstream lineage do not duplicate that work. No special handling is needed for mid-reconstruction failure, since there is no notion of a reconstruction attempt. Metadata is lighter than plans and scales with the number of nodes rather than the number of attempts.
 
 **Why we rejected it:** the design does not actually hold up. When reconstruction reaches a task that is *mid-execution*, the reconstruction may produce extra output — strictly worse behavior than Core's lineage reconstruction — and reaching an `EXECUTING` node that is itself part of a reconstruction still results in double work. Fixing this requires tracking state per *object* rather than per task, which is substantially more complex than the plan-based approach.
+
+#### Option 3: Tracking via Ray Core (unexplored)
+
+There is design space for a hybrid where Core tracks some lineage information (or simply exposes a better resubmission API) so Data does less work and we are not reimplementing lineage reconstruction. One idea considered and abandoned: have Core invoke a callback into Data whenever it triggers reconstruction, so Data can record the resource consumption while Core performs the reconstruction. This is unsatisfying because there are still two underlying scheduling mechanisms.
+
+This space is worth revisiting. The position of this REP is that the Data-side reconstruction implementation is a P0 that immediately improves Ray Data fault tolerance, and a more elegant Core/Data split can be designed later.
