@@ -259,34 +259,57 @@ We recommend **Option 2 (plan-based reconstruction)**: it is the only option tha
 
 ### Scheduling reconstruction tasks
 
-#### Triggering reconstruction
-
-The `StreamingExecutor` catches `ObjectLostError` while processing completed tasks. A single scheduling tick may catch and trigger multiple lineage reconstructions (*potential optimization: batch across ticks*). The triggering task may itself be a reconstruction attempt; that case is handled the same way as a regular task failure, except that we do not create a new task node for it.
-
 #### Data Task IDs
 
-Reconstruction tasks submitted from Data's `StreamingExecutor` are technically new Ray tasks and therefore do not preserve the original Ray task ID. We need a stable identity to distinguish a task's first run from re-runs that are part of reconstruction, so we define a **Data Task ID** preserved across reconstruction attempts:
+Since the reconstruction tasks submitted from Data's `StreamingExecutor` are technically new Ray tasks, they do not preserve their original Ray task ID. We need a stable identity that allows us to differentiate between tasks that were run for the first time, and tasks that are re-run as part of reconstruction. For this reason, we define a stable **Data Task ID** which is preserved across reconstruction attempts.
+
+Data Task ID is defined as:
 
 ```
 data_task_id = "{op_id}:{task_index}"
 ```
 
-where `op_id` is the physical operator's UUID and `task_index` is the value of the counter tracking fresh task indices for that operator stage.
+where `op_id` is the physical operator's UUID and `task_index` represents the value of the counter which tracks the fresh task index of an operator stage.
+
+#### Triggering reconstruction
+
+As mentioned above, we catch an `ObjectLostError` while processing completed tasks in the `StreamingExecutor`. The scheduler might catch and trigger multiple lineage reconstructions in the same scheduling tick. The triggering task might also itself be a "reconstruction attempt", but is treated the same way as a regular task failure except that we do not create a new task node for it.
+
+#### Resubmitting seed tasks
+
+After the failed task is registered with the lineage tracker, we trace the task node graph, returning the set of seed task IDs the plan needs to re-execute. The current failed task is marked aborted. We then re-submit the seeds and continue, without failing the pipeline.
+
+For each task in the chain of reconstruction tasks, we are careful to only propagate the blocks that are needed to reconstruct a lost object, or are fresh blocks. These dependencies are accounted for in the lineage tracker by tracking Data Task ID and object index for every submitted task. This means that any output blocks that are not needed to reconstruct a lost object, or are not fresh blocks, are pruned away. Also, reconstruction blocks are supposed to be withheld by the producing operator until a child reconstruction task that consumes them can be scheduled, i.e. all the required input blocks for the particular reconstruction task are produced by its parents.
+
+#### Batching reconstruction plans
+
+In a naive implementation, every lost object opens its own plan and re-injects every seed it traces to. A node death that destroys `N` blocks descended from one `ListFiles` seed task therefore re-runs that single task `N` times, pruning a different set of output indices in the chain on each execution.
+
+We resolve this wasted effort by letting later plans attach to a seed resubmission that is still queued. Critically, under our approach, we can only batch seed reconstruction plans for a seed task that is still queued, rather than one that is already in flight. This is because with a seed task in progress, an object that is required by a new task failure that traced to the same seed might have already been pruned, and batching here would lead to missing blocks.
+
+The process of batching reconstructions follows:
+
+1. When a plan re-submits a seed task, the seed operator records each seed Data Task ID, and a set of reconstruction plans that this seed task provides outputs for. The operator is responsible for tracking this data because it knows which seed tasks are queued and which are already scheduled.
+2. A new plan first checks the seed operator to see if the seed task it traces to has already been queued, and if so, simply joins the set of pending reconstructions for this seed task.
+3. When the seed task is dispatched and starts producing outputs, it needs to check if any of the pending reconstruction plans require each object that is produced. That decides if the object is pruned or held for the downstream reconstruction task.
+4. As in the case without batching, we withhold reconstruction blocks, except we have to separately track them for each reconstruction plan and release each plan group separately. This prevents the blocks from different reconstruction plans from interfering with each other in fan-in tasks downstream, to ensure deterministic reconstruction.
 
 #### Resource management
 
-Because reconstruction now runs inside Ray Data, we get resource management and scheduling control implicitly. Reconstructed blocks live in the same operator queues as fresh blocks, which means reconstruction is ratcheted by the existing backpressure mechanism and cannot flood the cluster with work. Existing resource budget checks apply before an operator takes on reconstruction tasks, exactly as they do for fresh tasks.
+Because we now run lineage reconstruction in the Ray Data sphere itself, we have implicit control in terms of resource management and scheduling. Reconstructed blocks reside in the same operator queues as the fresh blocks, which means that lineage reconstruction is ratcheted by the existing backpressure mechanism, and we prevent over-loading the cluster with work. The existing resource budget checks apply before operators take on reconstruction tasks (as they do for fresh tasks).
 
-Keeping unified queues for fresh and reconstruction blocks is an intentional decision, to avoid duplicating operator input/output handling in the codebase. It does introduce complexity: we must ensure reconstruction blocks do not bundle with fresh blocks, and that a reconstruction task receives exactly the reconstruction blocks its plan requires as inputs.
+The decision to keep unified queues for fresh blocks and the reconstruction blocks is an intentional one, to prevent duplicating behaviour in the code base for handling the outputs and inputs of operators. However, this leads to some complexity in making sure the reconstruction blocks do not bundle with fresh blocks, and that reconstruction tasks only get the exact reconstruction blocks that the plan requires them to accept as inputs.
+
+Pros and cons of the above approach to re-use Ray Data's existing operator queues, resource budget, and scheduling policy include:
 
 **Pros**
 
-- No need to re-implement complex mechanisms such as backpressure or operator queuing for reconstruction tasks and blocks.
+- We do not need to re-implement complex mechanisms such as backpressure or operator queuing for reconstruction tasks/blocks.
 
 **Cons**
 
-- Admission control becomes more complicated: operator queues are now heterogeneous (fresh and reconstructed blocks), and reconstruction tasks must be scheduled only with their corresponding inputs.
-- We lose some observability into the progress of reconstruction tasks specifically, since they share queues with fresh work.
+- Admission control for reconstruction tasks becomes a little more complicated. Basically, an example of this is that we now have heterogeneous op queues containing both fresh and reconstructed blocks, and we have to make sure that reconstruction tasks are only scheduled with their corresponding inputs.
+- We lose some observability in terms of the progress of reconstruction tasks.
 
 ### Data–client interface and lineage garbage collection
 
