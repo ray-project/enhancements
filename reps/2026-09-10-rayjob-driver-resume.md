@@ -92,18 +92,55 @@ measured, not assumed, and one is a hard non-goal.
 
 ### Should this change be within `ray` or outside?
 
+**Inside `ray`** — both the pattern and the three supporting fixes below.
+
 Ray's REP process asks reviewers to check whether a proposed change can be
 layered on top of Ray instead of living inside it. We tested that question
 directly rather than leaving it to review: **the pattern needs zero Ray core
 patches on 2.57+**, and a working reference implementation runs on unmodified
 Ray 2.58.0.
 
-So the answer is split, and deliberately lopsided:
+That is a statement about *feasibility*, and we keep it deliberately separate
+from *where the code should live*. It means this can be prototyped, reviewed and
+adopted incrementally without destabilising core — not that it belongs outside
+it. Four reasons it should be in-tree:
 
-- **Outside core — the pattern itself.** The coordinator and ledger are a
-  library. They can ship as an ecosystem project or a thin `ray.util` module.
-  Nothing about them requires privileged access.
-- **Inside core — three small things**, none of which is a new subsystem:
+1. **The correctness traps are the whole point of the proposal.** Three
+   load-bearing claims were refuted during validation (see "What we got wrong"),
+   and none of the three is visible from the design summary: fencing stops
+   writes but not deletes; the same race recurs across epochs and is invisible
+   with fewer than three coordinators; and no in-cluster identifier can
+   distinguish a head restart from a new cluster on a recycled volume. An
+   out-of-tree pattern is a way to *distribute* those bugs to every team that
+   reimplements it. One in-tree implementation, with the stdlib model checker
+   running in CI, is a way to retire them.
+2. **The pattern and the core asks are a single contract.** The ledger's safety
+   argument rests on `internal_kv` durability under `gcs_storage=rocksdb` and on
+   the compare-and-set semantics of `_internal_kv_put`. Out of tree, that is a
+   dependence on undocumented behaviour of a private API — recorded honestly in
+   our ledger as an accepted risk (C11). In tree, the guarantee and its only
+   first-party consumer are tested together and cannot drift apart silently.
+3. **RayJob integration requires it.** Surfacing resume state in `RayJob`
+   status, and injecting the scope key via the downward API *by default*
+   (follow-on 1), means the KubeRay controller must know the ledger's layout.
+   That cannot be turned on by default from an ecosystem package.
+4. **Precedent.** `ray.util` already carries small, dependency-free
+   coordination utilities of exactly this shape, and Ray Train's checkpointing —
+   the closest analogue, solving the adjacent half of this problem — is in-tree
+   for the same reason.
+
+**Proposed placement:** a small `ray.util` module (working name
+`ray.util.resume`) holding the coordinator and ledger, plus the three core
+changes below. Explicitly *not* asked for: no new daemon, no scheduler change,
+no new GCS table, no change to any existing API.
+
+If reviewers prefer to stage the risk, an acceptable fallback is: land the three
+core fixes first, incubate the library out of tree for one release, promote it
+once the API has settled. We would accept that ordering. We would rather not,
+for reason 1 — the incubation period is precisely when the subtle bugs get
+copied.
+
+**The three core changes**, none of which is a new subsystem:
 
 | # | Ask | Why |
 |---|---|---|
@@ -131,14 +168,19 @@ that sits under a primitive several Ray components already build on.
 
 ### Three tiers
 
-```
-driver          disposable. Owns nothing. May die at any time.
-   │  submits / reattaches by name
-   ▼
-coordinator     detached named actor, max_restarts=-1. Owns the work.
-   │  commits progress
-   ▼
-ledger          internal_kv keys under gcs_storage=rocksdb. Durable.
+```mermaid
+flowchart TD
+    D["<b>driver</b><br/>disposable · owns nothing<br/>may die at any time"]
+    C["<b>coordinator</b><br/>detached named actor<br/>max_restarts=-1 · owns the work"]
+    W["<b>workers</b><br/>units of work"]
+    L[("<b>ledger</b><br/>internal_kv keys<br/>gcs_storage=rocksdb · durable")]
+
+    D -->|"create or reattach by name"| C
+    C -->|"stream results"| D
+    C -->|"dispatch units"| W
+    W -->|"completions"| C
+    C -->|"commit every W units"| L
+    L -->|"carry-forward read on start"| C
 ```
 
 The driver holds **no** state worth losing. It creates or reattaches to a
@@ -181,6 +223,94 @@ cluster, **the same physical event**. Nine candidate identifiers were probed;
 zero were usable. `session_name` is inherited from the storage path, so it looks
 stable exactly when you need it to change. Without an injected key, a new
 cluster mounting a recycled PV will happily adopt a dead job's ledger.
+
+### Driver loss and reattach
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant D1 as driver (first)
+    participant C as coordinator (detached, named)
+    participant KV as internal_kv (RocksDB)
+    participant D2 as driver (replacement)
+
+    D1->>C: get_if_exists(scope/job)
+    C->>KV: claim epoch 1, read back to confirm
+    C->>KV: commit progress every W units
+    Note over D1: submitter pod evicted
+    Note over C: unaffected — detached, owns the work
+    C->>KV: commit progress (units 40..)
+    D2->>C: reattach by name
+    C-->>D2: resumed_from = 40
+    Note over D2: streams only the remaining units
+```
+
+The scope key in the actor name is the orchestrator-injected identifier (M4);
+it is what makes "reattach by name" mean *this* job and not a dead one.
+
+### Coordinator loss and epoch fencing
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C1 as coordinator, epoch 1
+    participant KV as internal_kv (RocksDB)
+    participant C2 as coordinator, epoch 2
+
+    C1->>KV: put(epoch/1/owner, id_a, overwrite=False)
+    C1->>KV: get(epoch/1/owner) - read back, M1
+    KV-->>C1: id_a - ownership confirmed
+    C1->>KV: seg@40, base_ptr
+    Note over C1: crash
+    C2->>KV: put(epoch/2/owner, id_b, overwrite=False)
+    C2->>KV: get(epoch/2/owner) - read back
+    KV-->>C2: id_b - ownership confirmed
+    C2->>KV: ascending epoch scan (M1c), carry forward
+    KV-->>C2: resumed_from = 40
+    Note over C1,C2: a returning C1 fails its read-back, is fenced,<br/>and must stop compacting
+```
+
+The read-back is not optional. `_internal_kv_put(..., overwrite=False)` returns
+`True` when the key **already existed** (core ask 3), so a coordinator that
+trusts the return value alone concludes it lost a race it actually won, or the
+reverse.
+
+### The delete race, and why read order fixes it
+
+This is refutation 1 below, drawn out because it is the part most likely to be
+reimplemented incorrectly.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant R as new coordinator (reader)
+    participant KV as internal_kv (RocksDB)
+    participant Z as fenced coordinator (still compacting)
+
+    Note over R,Z: fencing stops writes to the new epoch.<br/>It does not stop deletes in the old one.
+
+    rect rgb(255,235,235)
+        Note over R,Z: WRONG - base_ptr first
+        R->>KV: get(base_ptr)
+        KV-->>R: base@30
+        Z->>KV: write base@40, flip base_ptr, delete base@30
+        R->>KV: get(base@30)
+        KV-->>R: missing - progress lost
+    end
+
+    rect rgb(235,247,235)
+        Note over R,Z: RIGHT - M1b: segments first, base_ptr last
+        R->>KV: read segments 31..40
+        Z->>KV: write base@40, flip base_ptr, delete superseded
+        R->>KV: get(base_ptr)
+        KV-->>R: base@40 - already published before its predecessor was deleted
+        R->>KV: get(base@40) - bounded retry if raced again
+    end
+```
+
+The rule, stated once and applied at two scales: **read in the order that makes
+"I missed X" imply "X's replacement is already published."** M1b applies it
+within an epoch, M1c across epochs. Together they are about six lines of code.
 
 ### Requirements that are not optional
 
@@ -268,7 +398,8 @@ for jobs long enough to want this feature, a pause is preferable to redo.
 
 **No compatibility implications for existing users.** Nothing here changes an
 existing API, and the pattern is opt-in by construction: a job either restructures
-itself behind a coordinator or does not.
+itself behind a coordinator or does not. The new module is additive and imports
+nothing that existing code paths touch.
 
 The three core asks are additive:
 
@@ -314,7 +445,8 @@ numbers: they are not a demo that was polished until it passed.
 
 1. **RayJob controller integration** — surfacing resume state in `RayJob`
    status, and supplying the scope key via the downward API by default.
-2. **Reference library** — packaging the coordinator and ledger.
+2. **Promotion path for the module** — ship as experimental, stabilise the API
+   once real jobs have exercised resume in production.
 3. **Composition with REP-65** — active/passive head shortens the outage this
    design pauses through; the two together turn a multi-minute stall into a
    sub-second one.
