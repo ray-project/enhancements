@@ -12,7 +12,7 @@ it, that lets a RayJob resume from its last committed progress after driver
 loss, using **only** the GCS key-value store as durable state. No Redis, no
 external database, no additional operational dependency.
 
-This is **follow-on work item 1 of
+It is **follow-on work item 1 of
 [REP-64 (Embedded Storage Backend for GCS Fault Tolerance)](https://github.com/ray-project/enhancements/blob/main/reps/2026-02-23-gcs-embedded-storage.md)**,
 which named it as needed and out of its own scope:
 
@@ -22,30 +22,56 @@ which named it as needed and out of its own scope:
 > reconnection logic need hardening so the driver can survive GCS downtime
 > gracefully and resume orchestration after recovery.
 
-REP-64 also framed the three pieces required end to end: *"GCS persistence (this
-REP), driver resilience (follow-on), and application checkpointing (workload
-responsibility)."* This REP is the middle piece.
+REP-64 framed three pieces as required end to end: *"GCS persistence (this REP),
+driver resilience (follow-on), and application checkpointing (workload
+responsibility)."* This is the middle piece.
 
 ### General Motivation
 
-Consider a RayJob that fans out 5,000 shards of a batch computation over several
-hours, on a KubeRay cluster with GCS fault tolerance enabled. Shard 4,900
-completes. The head pod is then restarted for node maintenance.
+A RayJob fans out 5,000 shards over several hours on a KubeRay cluster with GCS
+fault tolerance enabled. Shard 4,900 completes. The head pod then restarts for
+node maintenance.
 
-Today, with REP-64's embedded storage, the *cluster* survives this. The **job**
-does not: the driver holds the only record of which shards finished, that record
-is in the driver's heap, and the driver is gone. The job restarts and redoes
-4,900 shards of successful work.
+With REP-64's embedded storage the *cluster* survives this. The **job** does
+not: the only record of which shards finished lived in the driver's heap, and
+the driver is gone.
 
-The gap is narrow and specific. Ray already persists actor tables, node tables
-and job metadata across head restarts. It does not persist **what the driver
-knew**, because a driver is by construction an ordinary client process.
+```mermaid
+flowchart TB
+    subgraph T["Today"]
+        direction TB
+        A1["shards 1..4900 complete<br/>results already durable on object storage"]
+        A2["head pod restarts — driver dies"]
+        A3["progress was in the driver's heap"]
+        A4["job restarts at shard 1<br/>4900 shards recomputed"]
+        A1 --> A2 --> A3 --> A4
+    end
+    subgraph P["With a durable progress ledger"]
+        direction TB
+        B1["shards 1..4900 complete<br/>progress committed to internal_kv"]
+        B2["head pod restarts — driver dies"]
+        B3["ledger survives in RocksDB"]
+        B4["job resumes at shard 4901<br/>at most W shards recomputed"]
+        B1 --> B2 --> B3 --> B4
+    end
+    classDef bad fill:#ffe3e3,stroke:#d33
+    classDef good fill:#e3f7e3,stroke:#3a3
+    class A4 bad
+    class B4 good
+```
 
-This proposal closes that gap for jobs willing to express their work as
-re-enumerable, idempotent units — and is explicit, below, about which jobs those
-are and which they are not.
+The gap is narrow and specific. Ray persists actor, node and job tables across
+head restarts. It does not persist **what the driver knew**, because a driver
+is by construction an ordinary client process.
 
-### Use cases this helps
+### Where this helps, and where it does not
+
+| Helps | Does not help |
+|---|---|
+| **Long-running sharded batch jobs** — a driver enumerating shards; resume skips the completed ones | **Distributed training (NCCL).** The collective group breaks on head failure and does not reconnect; training resumes from its application checkpoint regardless. Ray Train checkpointing covers this and we add nothing to it |
+| **Multi-stage orchestration pipelines**, where each stage is expensive and externally durable | **Fine-grained, high-throughput work.** Measured, not assumed: `N=10³` admits no usable configuration above ~100 units/s; `N=10⁶` tolerates 10⁴/s. Millisecond units should not use this |
+| **Spot / preemptible fleets**, where driver loss is routine rather than exceptional | **Arbitrary, uncooperative driver code.** A hard non-goal. This does not checkpoint a Python process; work must be restructured into re-enumerable idempotent units |
+| | **Exactly-once semantics.** Not offered. The contract is at-least-once: a crash between execution and commit re-executes at most `W` units |
 
 **Environment and scale**, per the REP checklist:
 
@@ -57,88 +83,48 @@ are and which they are not.
 | Unit granularity | seconds to minutes per unit; `N` from 10² to 10⁶ |
 | Failure being survived | submitter-pod eviction, driver crash, head restart |
 
-Concretely:
-
-1. **Long-running sharded batch jobs.** A driver enumerating shards and
-   collecting results. Resume skips completed shards.
-2. **Multi-stage orchestration pipelines**, where each stage is expensive and
-   externally durable (writes to object storage / a table).
-3. **Spot / preemptible fleets**, where driver loss is routine rather than
-   exceptional.
-
-### Use cases this does *not* help — stated plainly
-
-This section is deliberately as detailed as the one above. Two of these were
-measured, not assumed, and one is a hard non-goal.
-
-1. **Distributed training (NCCL).** Not helped. The collective group breaks on
-   head failure and has no reconnection; training resumes from the last
-   application checkpoint regardless of what the driver remembers. REP-64 says
-   the same thing about itself. **Ray Train checkpointing already covers this
-   case, and this proposal adds nothing to it.**
-2. **Fine-grained, high-throughput work.** Measured breaking point, not a
-   guess. Because durability costs an fsync, a job of `N` units at a high
-   completion rate cannot keep its ledger cheap *and* its redo window small:
-   `N=1,000` admits no usable configuration above ~100 units/s, while `N=10⁶`
-   tolerates 10⁴/s. Jobs whose units complete in milliseconds should not use
-   this.
-3. **Arbitrary, uncooperative driver code.** A hard non-goal. This does **not**
-   checkpoint a Python process. Work must be restructured into re-enumerable
-   idempotent units behind a coordinator. Jobs unwilling to do that are not
-   served by this proposal, and no amount of ledger design changes that.
-4. **Exactly-once semantics.** Not offered. The contract is **at-least-once**: a
-   crash between execution and commit re-executes at most `W` units. Units must
-   be idempotent.
+```mermaid
+flowchart TD
+    Q1{"Can the work be expressed as<br/>re-enumerable, idempotent units?"}
+    Q1 -->|no| N1["Not served — a hard non-goal"]
+    Q1 -->|yes| Q2{"Is the failure you care about<br/>driver or submitter-pod loss?"}
+    Q2 -->|"no — a broken collective group"| N2["Use Ray Train checkpointing"]
+    Q2 -->|yes| Q3{"Unit completion rate<br/>within the band for your N?"}
+    Q3 -->|no| N3["Too fine-grained — ledger cost<br/>or redo window dominates"]
+    Q3 -->|yes| Q4{"Tolerates at-least-once<br/>re-execution of up to W units?"}
+    Q4 -->|no| N4["Not safe — exactly-once<br/>is not offered"]
+    Q4 -->|yes| Y["Good fit"]
+    classDef bad fill:#ffe3e3,stroke:#d33
+    classDef good fill:#e3f7e3,stroke:#3a3
+    class N1,N2,N3,N4 bad
+    class Y good
+```
 
 ### Should this change be within `ray` or outside?
 
-**Inside `ray`** — both the pattern and the three supporting fixes below.
+**Inside `ray`** — both the pattern (a small `ray.util` module) and the three
+core changes below.
 
-Ray's REP process asks reviewers to check whether a proposed change can be
-layered on top of Ray instead of living inside it. We tested that question
-directly rather than leaving it to review: **the pattern needs zero Ray core
-patches on 2.57+**, and a working reference implementation runs on unmodified
-Ray 2.58.0.
+The checklist asks whether this could be layered on top instead. We tested that
+rather than argued it: the pattern needs **zero core patches on 2.57+** and runs
+on unmodified Ray 2.58.0. That is feasibility, not placement. It belongs in-tree
+because:
 
-That is a statement about *feasibility*, and we keep it deliberately separate
-from *where the code should live*. It means this can be prototyped, reviewed and
-adopted incrementally without destabilising core — not that it belongs outside
-it. Four reasons it should be in-tree:
+1. **The traps are the proposal.** Three load-bearing claims were refuted during
+   validation and none is visible from a design summary (see *What we got
+   wrong*). Out of tree, every team that reimplements this reimplements the
+   bugs; in tree, one implementation plus the model checker in CI retires them.
+2. **The ledger and the `internal_kv` contract are one contract.** Split, this
+   is a dependence on undocumented behaviour of a private API — our accepted
+   risk C11. Together, they are tested together and cannot drift apart.
+3. **RayJob integration requires it.** Resume state in `RayJob` status, and the
+   scope key injected via the downward API by default, cannot be turned on from
+   an ecosystem package.
 
-1. **The correctness traps are the whole point of the proposal.** Three
-   load-bearing claims were refuted during validation (see "What we got wrong"),
-   and none of the three is visible from the design summary: fencing stops
-   writes but not deletes; the same race recurs across epochs and is invisible
-   with fewer than three coordinators; and no in-cluster identifier can
-   distinguish a head restart from a new cluster on a recycled volume. An
-   out-of-tree pattern is a way to *distribute* those bugs to every team that
-   reimplements it. One in-tree implementation, with the stdlib model checker
-   running in CI, is a way to retire them.
-2. **The pattern and the core asks are a single contract.** The ledger's safety
-   argument rests on `internal_kv` durability under `gcs_storage=rocksdb` and on
-   the compare-and-set semantics of `_internal_kv_put`. Out of tree, that is a
-   dependence on undocumented behaviour of a private API — recorded honestly in
-   our ledger as an accepted risk (C11). In tree, the guarantee and its only
-   first-party consumer are tested together and cannot drift apart silently.
-3. **RayJob integration requires it.** Surfacing resume state in `RayJob`
-   status, and injecting the scope key via the downward API *by default*
-   (follow-on 1), means the KubeRay controller must know the ledger's layout.
-   That cannot be turned on by default from an ecosystem package.
-4. **Precedent.** `ray.util` already carries small, dependency-free
-   coordination utilities of exactly this shape, and Ray Train's checkpointing —
-   the closest analogue, solving the adjacent half of this problem — is in-tree
-   for the same reason.
-
-**Proposed placement:** a small `ray.util` module (working name
-`ray.util.resume`) holding the coordinator and ledger, plus the three core
-changes below. Explicitly *not* asked for: no new daemon, no scheduler change,
-no new GCS table, no change to any existing API.
-
-If reviewers prefer to stage the risk, an acceptable fallback is: land the three
-core fixes first, incubate the library out of tree for one release, promote it
-once the API has settled. We would accept that ordering. We would rather not,
-for reason 1 — the incubation period is precisely when the subtle bugs get
-copied.
+Not asked for: no new daemon, no scheduler change, no new GCS table, no change
+to any existing API. If reviewers prefer to phase the risk — land the three core
+fixes first, incubate the module for a release — that is acceptable, though the
+incubation window is exactly when the subtle bugs get copied.
 
 **The three core changes**, none of which is a new subsystem:
 
@@ -210,19 +196,32 @@ implemented and rejected on measurements (see below).
 
 **M3 — compaction.** Write `base@m`, flip `base_ptr` (the linearization point),
 then delete superseded segments. A startup sweep runs **after** the pointer
-flip, never before.
+flip, never before. Every prefix of this sequence leaves a readable ledger:
+
+```mermaid
+flowchart TD
+    S1["<b>1</b> · write base@40<br/>a new key; nothing existing changes"]
+    S2["<b>2</b> · flip base_ptr → base@40<br/><b>linearization point</b>"]
+    S3["<b>3</b> · delete seg@31..40 and base@30"]
+    S1 --> S2 --> S3
+    S1 -. "crash here" .-> C1["reader sees base@30 + segments<br/>correct; base@40 is garbage, swept later"]
+    S2 -. "crash here" .-> C2["reader sees base@40<br/>correct; superseded keys swept later"]
+    S3 -. "crash here" .-> C3["partial delete<br/>correct; the sweep is idempotent"]
+    classDef ok fill:#e3f7e3,stroke:#3a3
+    class C1,C2,C3 ok
+```
 
 **M4 — orchestrator-injected scope key.** The ledger is scoped by an identifier
 **supplied from outside the cluster** — under KubeRay, `RayCluster`
 `metadata.uid` via the downward API.
 
-M4 also came from a refutation, and it is the one with the sharpest consequence:
-we could not find *any* in-cluster identity that works. A head restart and a
-brand-new cluster reusing the same persistent volume are, from inside the
-cluster, **the same physical event**. Nine candidate identifiers were probed;
-zero were usable. `session_name` is inherited from the storage path, so it looks
-stable exactly when you need it to change. Without an injected key, a new
-cluster mounting a recycled PV will happily adopt a dead job's ledger.
+M4 also came from a refutation, and it has the sharpest consequence: we could
+not find *any* in-cluster identity that works. A head restart and a brand-new
+cluster reusing the same persistent volume are, from inside the cluster, **the
+same physical event**. Nine candidate identifiers were probed; zero were usable.
+`session_name` is inherited from the storage path, so it looks stable exactly
+when you need it to change. Without an injected key, a new cluster mounting a
+recycled PV will adopt a dead job's ledger.
 
 ### Driver loss and reattach
 
@@ -312,37 +311,20 @@ The rule, stated once and applied at two scales: **read in the order that makes
 "I missed X" imply "X's replacement is already published."** M1b applies it
 within an epoch, M1c across epochs. Together they are about six lines of code.
 
-### Requirements that are not optional
-
-1. **Per-incarnation instance ids**, never actor-derived — an actor-derived id
-   makes fencing self-defeating, since a restarted actor presents the same id.
-2. **No hard node affinity.** `NodeAffinitySchedulingStrategy(soft=False)`
-   leaves the coordinator permanently **unschedulable** once its node is gone —
-   its name, epoch and ledger all survive, and it still cannot be revived.
-   `soft=True`, or no strategy, recovers cleanly.
-3. **Deterministic, scope-prefixed child actor names.** If the coordinator owns
-   long-lived children, their names must carry attribution
-   (`<scope>/<job>/child-<i>`). With opaque names, a crash between creating a
-   child and recording it **orphans** the child permanently.
-4. **Every coordinator method idempotent under replay.** `max_task_retries=-1`
-   replays in-flight tasks on a restarted actor — including administrative ones.
-
 ## What we got wrong
 
 Three load-bearing claims were **refuted** during validation and repaired. They
-are listed because they are the parts most likely to be re-invented incorrectly
-by anyone implementing this from the summary alone.
+are listed because they are what a reimplementation from the summary alone will
+get wrong too.
 
 1. **Epoch scoping protects the writer, not the reader.** A fenced-out
-   coordinator does not corrupt the new epoch's state — it does not write those
-   keys. But it keeps **compacting**, and compaction *deletes*. It can delete
-   segments the new epoch is midway through reading. The original safety
-   argument was framed entirely around writes; both bugs were about deletes.
-   → M1b.
+   coordinator never writes the new epoch's keys — but it keeps *compacting*,
+   and compaction deletes. The original safety argument was framed entirely
+   around writes; both bugs were about deletes. → M1b (diagrammed above).
 2. **The same bug across epochs.** The startup sweep deletes a superseded epoch
-   unconditionally, including one a third coordinator is mid-read of. This is
-   invisible with two coordinators, because the sweeper and the reader are then
-   the same process. → M1c.
+   unconditionally, including one a third coordinator is mid-read of — invisible
+   with two coordinators, because the sweeper and the reader are then the same
+   process. → M1c.
 3. **`session_name` is a storage-path identity, not a cluster identity.** → M4.
 
 ## Measurements
@@ -376,23 +358,35 @@ an independent positive control (4 MB values) moved p99 by **42×**.
 | Driver dies | Coordinator continues; new driver reattaches by name |
 | Coordinator killed | One restart, epoch +1, resume with **0** redundant units |
 | Coordinator dies *during* a GCS outage | **One** restart, ≤`W` redo, ledger contiguous. No restart storm |
-| GCS outage < 60 s | Job **pauses**, then continues. Ledger consistent, no wedge |
-| GCS outage ≥ 60 s | The **cluster** dies (raylet reconnect timeout), not just the job. Cold restart on the same path recovers **all** committed units with **zero** redo |
 
-The last row is the worst case, and it is better than the design assumed: past
-the ceiling the failure mode is **downtime**, not data loss. That is the direct
-payoff of putting the ledger in RocksDB rather than in memory, and it is a
+GCS outages split at a hard 60 s boundary — `gcs_rpc_server_reconnect_timeout_s`:
+
+```mermaid
+flowchart TD
+    O["GCS unavailable<br/>head restart, GCS crash"] --> D{"duration"}
+    D -->|"< 60 s"| A1["unit loop stalls within W units<br/>the commit is synchronous"]
+    A1 --> A2["GCS returns"] --> A3["job continues<br/>ledger consistent · no wedge · no restart storm"]
+    D -->|"≥ 60 s"| B1["raylets exceed the reconnect timeout<br/>the <b>cluster</b> dies, not just the job"]
+    B1 --> B2["cold restart on the same storage path"] --> B3["<b>all</b> committed units recovered<br/><b>zero</b> redo"]
+    classDef good fill:#e3f7e3,stroke:#3a3
+    classDef warn fill:#fff4d6,stroke:#d90
+    class A3,B3 good
+    class B1 warn
+```
+
+The right-hand branch is the worst case and it is better than the design
+assumed: past the ceiling the failure mode is **downtime, not data loss** — the
+direct payoff of putting the ledger in RocksDB rather than in memory, and a
 concrete argument for pairing this with
 [REP-65 (Active-Passive Head)](https://github.com/ray-project/enhancements/pull/65),
 which shortens exactly that outage.
 
-**A GCS outage pauses the job rather than only pausing durability.** We expected
-work to continue while commits queued. It does not: the commit is a synchronous
-`internal_kv` put on the unit loop's critical path, so the loop stalls within
-`W` units. An asynchronous writer behind a bounded queue was then implemented and
-measured: it buys ≈`Q·W` units of continued work during an outage and costs a
-redo window of exactly `Q·W + 2W` units. **We propose the synchronous path** —
-for jobs long enough to want this feature, a pause is preferable to redo.
+**A GCS outage pauses the job, not merely its durability.** We expected work to
+continue while commits queued; it does not, because the commit sits on the unit
+loop's critical path. An asynchronous writer behind a bounded queue was
+implemented and measured: it buys ≈`Q·W` units of continued work and costs a
+redo window of exactly `Q·W + 2W`. **We propose the synchronous path** — for
+jobs long enough to want this feature, a pause beats redo.
 
 ## Compatibility, Deprecation, and Migration Plan
 
@@ -414,32 +408,22 @@ The three core asks are additive:
 
 ## Test Plan and Acceptance Criteria
 
-The validation already performed is described above and shipped as an evidence
-bundle. For upstreaming:
-
-**Core asks.** Unit tests for the `internal_kv` durability contract under
+**Core changes.** Unit tests for the `internal_kv` durability contract under
 `gcs_storage=rocksdb` (ack implies fsync); a regression test for #55996 (a KV
 call that times out must not wedge its caller); quota/TTL enforcement tests.
 
-**Pattern.** The stage-A crash/interleaving model checker in the evidence bundle
-is stdlib-only and runs the full C6 sweep in **51 s on a single core**, so it is
-offered as a CI-able artifact rather than a one-off. It enumerates crash and
-lost-ack interleavings across up to six concurrent coordinator incarnations and
-asserts durability, pointer-validity, GC and liveness invariants — and it ships
-with negative controls, so a regression that disables the checker itself is
-caught rather than reported as a pass.
+**Pattern.** The crash/interleaving model checker in the evidence bundle is
+stdlib-only and runs its full sweep in **51 s on one core**, so it is offered as
+a CI artifact rather than a one-off. It enumerates crash and lost-ack
+interleavings across up to six concurrent coordinator incarnations, asserts
+durability, pointer-validity, GC and liveness invariants, and ships with
+negative controls — so a regression that disables the checker is caught rather
+than reported as a pass.
 
 **Acceptance criteria.** A RayJob that loses its driver mid-run resumes with
 zero redundant committed units; a coordinator killed during a GCS outage
 restarts exactly once and redoes at most `W`; ledger key count does not grow
 with `N`; no measurable p99 regression for other GCS users at the design rate.
-
-**Method note.** Every experiment referenced here was **pre-registered** — the
-prediction and the refutation threshold were committed to git *before* the run —
-and every run carried negative controls that had to fail as expected. Runs whose
-controls came out green were discarded; **5 of 35 runs are retained in the
-bundle as void or partial**, with their diagnoses. This matters for reviewing the
-numbers: they are not a demo that was polished until it passed.
 
 ## Follow-on Work
 
@@ -463,9 +447,30 @@ numbers: they are not a demo that was polished until it passed.
 - [#65037](https://github.com/ray-project/ray/issues/65037) — JobManager recovery not triggered after dashboard agent restart
 - **Evidence bundle** — [ray-project/ray#66065](https://github.com/ray-project/ray/pull/66065) (draft, not for merge): the full claim ledger, pre-registered experiment cards and all 35 run directories
 
-## Appendix: claim ledger
+## Appendix: implementation requirements that are not optional
 
-Every claim below carried a written refutation condition. Bold = load-bearing.
+1. **Per-incarnation instance ids**, never actor-derived — an actor-derived id
+   makes fencing self-defeating, since a restarted actor presents the same id.
+2. **No hard node affinity.** `NodeAffinitySchedulingStrategy(soft=False)`
+   leaves the coordinator permanently **unschedulable** once its node is gone —
+   its name, epoch and ledger all survive, and it still cannot be revived.
+   `soft=True`, or no strategy, recovers cleanly.
+3. **Deterministic, scope-prefixed child actor names.** If the coordinator owns
+   long-lived children, their names must carry attribution
+   (`<scope>/<job>/child-<i>`). With opaque names, a crash between creating a
+   child and recording it **orphans** the child permanently.
+4. **Every coordinator method idempotent under replay.** `max_task_retries=-1`
+   replays in-flight tasks on a restarted actor — including administrative ones.
+
+## Appendix: claim ledger and method
+
+Every claim below carried a written refutation condition, committed to git
+*before* the run that settled it, and every run carried negative controls that
+had to fail as expected. Runs whose controls came out green were discarded:
+**5 of 35 runs are retained in the bundle as void or partial**, with their
+diagnoses. The numbers are not a demo that was polished until it passed.
+
+Bold = load-bearing.
 
 | id | claim | verdict |
 |---|---|---|
