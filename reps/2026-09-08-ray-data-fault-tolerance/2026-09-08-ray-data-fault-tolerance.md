@@ -8,21 +8,21 @@ Date: Aug 3, 2026
 
 ### General Motivation
 
-As the scale and "spottiness" of Ray Data workloads increase, node loss becomes routine rather than exceptional. Today, every lost node makes a running Ray Data job measurably worse: spilling spikes, the pipeline stalls, throughput degrades, and the job frequently ends in an `ObjectLostError`.
+As the scale and "spottiness" of Ray Data workloads increase, node losses becomes increasingly common. Today, as each of the nodes goes down, spilling spikes, resource utilization becomes unstable, and the job stalls without clear indications of what's happening. In some scenarios, this can even lead to `ObjectLostErrors` failing the pipeline.
 
-The root cause is a schism between two independent schedulers. When a node is lost to spot preemption or failure, **Ray Core's lineage reconstruction** resubmits the producer tasks needed to rebuild lost objects. That resubmission happens entirely inside Core, below and outside of **Ray Data's streaming executor**, which owns operator queues, backpressure, and resource accounting for the same workload. Specifically:
+The root cause is a schism between two independent schedulers. When a node is lost to spot preemption or failure, **Ray Core's lineage reconstruction** resubmits the producer tasks needed to rebuild lost objects. That resubmission happens entirely inside Core, outside of **Ray Data's streaming executor**, which relies on full visibility on what's scheduled to provide stable and high workload throughput. Specifically:
 
 1. **Split-brain scheduling.** Lineage reconstruction's rescheduling mechanism lives outside Ray Data's scheduling and resource accounting layer. Reconstruction tasks are not backpressured and are not counted against Data's resource budgets, which leads to unexpected cluster resource usage and significant performance degradation (the excessive spilling users observe).
-2. **No actor pool awareness.** Ray Core has no representation of an actor pool that would let a failed actor task run on a *different* actor in the same pool; it requires the task to re-run on the same actor. When there aren't enough resources to bring that actor back, the workload waits for a long time on retry.
-3. **Poor debuggability.** Debugging reconstruction issues originating from Data pipelines is difficult, because accounting and lineage information about lost objects in Core cannot easily be reconciled with the corresponding operators or execution state in Data.
+2. **No actor pool awareness.** Ray Core has no representation of an actor pool that would let a failed actor task run on a *different* actor in the same pool. Instead resubmitted actor tasks must re-run on the same actor. When there aren't enough resources to bring that actor back, the workload waits for a long time on retry.
+3. **Poor debuggability.** Debugging reconstruction issues originating from Data pipelines can be difficult since there isn't an easy way to reconcile lineage information of lost objects in Core with the corresponding operators or execution state in Data.
 
-This proposal unifies reconstruction with the happy-path scheduling mechanism by **moving lineage tracking into the application layer (Ray Data)** and letting the `StreamingExecutor` schedule reconstruction tasks and fresh tasks through the same path. Reconstruction then inherits Data's backpressure, resource budgets, actor pools, and observability for free.
+This proposal unifies reconstruction with Ray Data's happy-path scheduling mechanism by **moving lineage tracking into the application layer (Ray Data)**, unifying how the scheduler determine when to reconstruct failed tasks or schedule fresh tasks through the same path. This allows reconstruction to inherit Data's backpressure, resource budgets, actor pools, and observability for free.
 
 #### Goals
 
-- **Stability**: Ray Data jobs should complete even under frequent node preemptions and node failures in large batches.
-- **Predictability**: Ray Data jobs should have predictable, consistent resource utilization under failures. Failure should not cause excessive spilling.
-- **Debuggability**: Reconstruction should be fully observable — alerting on bad FT behavior before customers hit it, plus enough logging, metrics, and runbook guidance for an on-call engineer to debug reconstruction.
+- **Stability**: Ray Data jobs should complete even under frequent node preemptions and node failures.
+- **Predictability**: Ray Data jobs should have predictable, consistent resource utilization under failures. Failure should not cause excessive spilling or unpredictable resource usage.
+- **Debuggability**: Reconstruction should be fully observable. The system should provide the exact lineage story that lead to a stalled pipeline or a lost object. 
 
 #### Success criteria
 
@@ -31,13 +31,9 @@ This proposal unifies reconstruction with the happy-path scheduling mechanism by
 3. Feature parity with the fault tolerance coverage that Ray Core lineage reconstruction provides today.
 4. Application-level visibility into recovery progress under node loss.
 
-#### Secondary goals
-
-- Fault tolerance performance (recovery time), as opposed to correctness/completion.
-
 #### Non-goals and assumptions
 
-- **Exactly-once is not provided.** The mechanism provides *at-least-once* execution, matching Core's behavior today.
+- **Exactly-once is not provided.** The mechanism provides *at-least-once* execution, matching Core's lineage reconstruction behavior today.
 - **UDFs are assumed to be deterministic.** A reconstructed task that runs a non-deterministic UDF will produce different output than the original.
 - **Order preservation is not a requirement under failure.**
 - Driver failure is out of scope for this proposal; it is handled by the complementary Ray Data driver checkpointing work (see [Relationship to checkpointing](#relationship-to-checkpointing-and-stable-store-mechanisms)).
@@ -60,17 +56,13 @@ This proposal unifies reconstruction with the happy-path scheduling mechanism by
 
 ### Should this change be within `ray` or outside?
 
-Within `ray`. The bulk of the change lives in `ray.data` (a new lineage tracker owned by the `StreamingExecutor`, plus changes to operator input/output handling and task submission). It also requires a small amount of Ray Core surface: a supported way to disable lineage pinning/reconstruction *for Ray Data's objects only*, without changing behavior for the rest of the cluster.
+Within `ray`. The bulk of the change lives in `ray.data` (a new lineage tracker owned by the `StreamingExecutor`, plus changes to operator input/output handling and task submission). It also requires a small amount of Ray Core surface: the `_enable_ray_data_reconstruction` job config, which disables lineage pinning/reconstruction *at job scope only*, without changing behavior for the rest of the cluster.
 
 ## Stewardship
 
 ### Required Reviewers
 
-TODO: fill in Ray Data and Ray Core committers before marking ready for review.
-
 ### Shepherd of the Proposal (should be a senior committer)
-
-TODO
 
 ## Design and Architecture
 
@@ -96,64 +88,39 @@ For the purposes of a Ray Data workload, Core's lineage reconstruction can be su
 
 This guarantees the lost object is reconstructed at least once, and in the common case (no duplicated submission) exactly once per failure. It assumes UDF determinism.
 
-Critically, **this all happens inside Core, independent of application code**: UDFs are re-executed with no corresponding task submission at the Ray Data level. That is precisely the property this REP changes.
+Critically, this reconstruction process occurs completely within Core’s layer independent from any application code. This means that the reconstruction will automatically re-execute the UDFs without any task submissions or awareness at the application level. That is precisely the property this REP changes.
 
 ### Overview of the proposed design
-
-```
-             Today                                                Proposed
-  +---------------------------+                        +---------------------------+
-  |   Ray Data                |                        |   Ray Data                |
-  |   StreamingExecutor       |                        |   StreamingExecutor       |
-  |   - operator queues       |                        |   - operator queues       |
-  |   - backpressure          |                        |   - backpressure          |
-  |   - resource budgets      |                        |   - resource budgets      |
-  +---------------------------+                        |   - LineageTracker  <--+  |
-              |  fresh tasks                           |   - reconstruction     |  |
-              v                                        |     plans              |  |
-  +---------------------------+                        +---------------------------+
-  |   Ray Core                |                               |  fresh + reconstruction
-  |   - lineage pinning       |                               |  tasks (one path)
-  |   - reconstruction  ------+--> resubmits                  v
-  |     (invisible to Data)   |    tasks               +---------------------------+
-  +---------------------------+   *outside*            |   Ray Core                |
-                                  Data's               |   - lineage pinning OFF   |
-                                  scheduler            |     for Data objects      |
-                                                       +---------------------------+
-```
 
 The design has four parts:
 
 1. **Lineage tracking** — the `StreamingExecutor` maintains a task dependency graph so it can trace back from a failed task to the seed tasks needed to reproduce it.
 2. **Reconstruction planning** — on failure, the executor builds a plan describing exactly which upstream tasks must re-run and which of their outputs are actually needed.
 3. **Scheduling** — reconstruction tasks are submitted through the executor's normal submission path, so they are subject to backpressure and resource budgets like any other task.
-4. **Garbage collection** — lineage metadata is dropped once outputs are durably consumed, either automatically (sink/materialization) or via an explicit user-facing API.
+4. **Garbage collection** — lineage metadata is dropped once outputs are durably consumed.
 
 ### API Design
 
-#### Feature flags
+#### Public API changes
 
-| Flag | Default |
-|---|---|
-| `RAY_DATA_RECONSTRUCTION` | `OFF` |
-| `RAY_LINEAGE_PINNING_ENABLED` | `ON` |
-
-We add a new feature flag, `RAY_DATA_RECONSTRUCTION`, that toggles Ray Data reconstruction. It is **off by default** while development completes.
-
-Ray lineage pinning (Core reconstruction) **must be disabled for Ray Data reconstruction to work** — otherwise both mechanisms will attempt to recover the same objects. Lineage pinning is currently controlled only by an environment variable, so enabling the Ray Data fault tolerance flag must also disable lineage pinning.
-
-> **Open ask (Ray Core):** we need a way to disable lineage reconstruction *only for Ray Data workloads*; the rest of the cluster should be unaffected. A job-level configuration is one candidate, but the right configuration surface still needs design. This is the main Core-side dependency of this REP.
-
-#### Public API: `block_consumed`
+To enable Ray Data fault tolerance instead of the default Core lineage reconstruction, we introduce the following job-level config parameter that can be passed to `ray.init`:
 
 ```python
-def block_consumed(block: ObjectRef) -> None: ...
-def block_consumed(block_id: str) -> None: ...
+import ray
+
+ray.init(
+    job_config=JobConfig(_enable_ray_data_reconstruction=True)
+)
 ```
 
-`block_consumed` tells Ray Data that a block has been committed and its lineage can be garbage collected — the block will never be reconstructed again. When every output block of a task has been marked consumed, that task is *lineage complete*.
+The job config performs the following:
 
-`ray.train`'s `dataset.state_dict` should invoke this API under the hood for all blocks that it saves.
+| `enable_ray_data_reconstruction` | Behavior |
+|---|---|
+| **Enabled** | Enables Ray Data's fault tolerance mechanism described below, and disables Core's lineage reconstruction. |
+| **Disabled** | Disables Ray Data's fault tolerance mechanism and defers to the cluster-level lineage pinning environment variable for whether Core's lineage reconstruction is enabled. |
+
+Note that Ray lineage pinning (Core reconstruction) **must be disabled for Data reconstruction to work**, as data reconstruction is only triggered by object lost errors, which are only surfaced when lineage reconstruction is disabled or fails.
 
 #### Internal API: `clear_block_lineage`
 
@@ -161,28 +128,26 @@ def block_consumed(block_id: str) -> None: ...
 def clear_block_lineage(data_task_id: str, output_index: int) -> None: ...
 ```
 
-Used internally when Ray Data itself can observe that a block has been fully materialized. `block_consumed` resolves the object ref to a `(data_task_id, output_index)` pair and calls `clear_block_lineage` underneath.
+Used internally when Ray Data itself has detected when a block's lineage is completed (e.g. the block has been written to sink and will no longer need to be reconstructed) to garbage collect the lineage.
 
 ### Lineage tracking
 
-To reconstruct a failed task we must know the dependency chain that produced its inputs: for each task, which arguments it needs and which task produced them. We considered several designs. The chosen design is described below; the alternatives are in the [Appendix](#alternative-designs-considered).
+To reconstruct a failed task we must know the dependency chain that produced its inputs: for each task, which arguments it needs and which task produced them. We considered several designs. The chosen design is described below; the alternatives considered are present in [Appendix](#alternative-designs-considered).
 
 #### Plan-based reconstruction
 
-To avoid redundant work on fan-out and to know when mappings can be erased, we track the full lineage as a graph. Each node is a submitted task; each directed edge is a dependency (a task depends on another when it takes one or more of that task's outputs as an argument).
+In this apporach, we track the full lineage as a graph. Each node is a submitted task; each directed edge is a dependency (a task depends on another when it takes one or more of that task's outputs as an argument).
 
 The graph is built during normal execution:
+
+![Lineage graph construction during normal execution](graph_construction.png)
 
 1. When the `StreamingExecutor` submits a task, add a node for that task.
 2. Group the submitted task's arguments by producer, and draw an edge from each producer to the submitted task, recording which of the producer's outputs are needed. Edges are implemented bidirectionally so the graph can be walked in both directions.
 
-```
-  seed_0 ──► map_0 ──┬──► agg_0
-                     └──► agg_1
-  seed_1 ──► map_1 ──┘
-```
-
 **Plan construction.** When a task fails, the executor picks up the error and constructs a *reconstruction plan* describing exactly the steps needed to rebuild the failed task:
+
+![Reconstruction plan construction after a task failure](plan_construction.png)
 
 1. Generate a new unique `plan_id` for this reconstruction attempt, associated with the failed task.
 2. For the current node, build a mapping from downstream tasks participating in this attempt to the output object indices they depend on. A downstream task participates if it carries this `plan_id`. Note the failed task itself has no downstream dependencies in the same attempt.
@@ -190,6 +155,8 @@ The graph is built during normal execution:
 4. Walk up to the parents of the current node and repeat steps 2–3 until reaching the seed tasks.
 
 **Resubmission.** Once the plan is built, every seed task reached during plan construction is resubmitted, tagged with the `plan_id`:
+
+![Resubmission of tasks following the reconstruction plan](plan_execution.png)
 
 1. Each time a resubmitted task produces an output, look up the plan on that node by `plan_id` to check whether the object is needed. If a downstream task with the same `plan_id` needs it, resubmit that downstream task with the object once all of its arguments are resolved. Otherwise ignore the output and let it be GC'd immediately.
 2. When a resubmitted task completes, remove the plan entry from its node to signal that this task's part of the reconstruction is done.
@@ -271,77 +238,9 @@ Pros and cons of reusing Ray Data's existing operator queues, resource budget, a
 - Admission control becomes more complicated: operator queues are now heterogeneous (fresh and reconstructed blocks), and reconstruction tasks must be scheduled only with their corresponding inputs.
 - We lose some observability into the progress of reconstruction tasks specifically, since they share queues with fresh work.
 
-### Data–client interface and lineage garbage collection
-
-Ray Data pipeline outputs are consumed in several ways:
-
-- Materialize to driver: `take`, `take_batch`, `show`, …
-- Aggregations: `sum`, `min`, `max`, `mean`, …
-- Metadata queries: `schema`, `columns`, `num_blocks`, …
-- Dataset iteration: `dataset.iterator()`, `streaming_split`, …
-- Write to sink: `write_datasink`
-- Materialization: `materialize`
-- *(Experimental)* Materialization into other frameworks: `to_random_access_dataset`
-
-These fall into two categories for garbage collection purposes: **block refs fate-share with the pipeline**, and **block refs outlive the pipeline**.
-
-> **Scope:** we plan to support write-to-sink and `streaming_split` as first-party. Supporting all other interfaces is lower priority.
-
-#### Block refs fate-share with the pipeline
-
-Blocks produced by the last operator are materialized — written to a sink, aggregated, or materialized to the driver. Once materialization completes for a block, it is no longer needed.
-
-When a block is materialized, we invoke `clear_block_lineage(data_task_id, output_index)` so the lineage tracker can drop its state; the block will not be reconstructed. Concretely for writes: each time a write task completes, we invoke `clear_block_lineage` on each of its input blocks.
-
-#### Block refs outlive the pipeline
-
-Blocks produced by the last operator have their refs passed downstream, outside the pipeline. Here Ray Data cannot know when a block is safe to GC unless the user explicitly indicates the block is fully consumed and will never be needed again — that is what the public `block_consumed` API is for.
-
-For blocks to remain reconstructable, **the streaming executor must remain pinned until all output blocks of the last stage are marked consumed**, since the executor holds the lineage. `block_consumed` resolves the block to its Data Task ID and output index and calls `clear_block_lineage`.
-
-### Data–Train interface
-
-Ray Train consumes Ray Data output through the iterator interface, so reconstruction must interoperate with the dispatch loop.
-
-```python
-# Data driver process
-def dispatch_loop():
-    while not done:
-        for worker in train_workers:
-            block_ref: ObjectRef = executor.get_next_block()
-            if needs_data(worker):  # gates based on prefetch backpressure
-                worker.receive_block.remote(block_ref)
-
-# Train worker process
-block_queue = queue.Queue()
-
-class RayTrainWorker:
-    def receive_block(self, block: pyarrow.Table):
-        block_queue.put(block)
-
-# Running on another thread
-def user_training_loop(self):
-    # constructs batches from the next block in `block_queue`
-    for batch in ds.iter_batches(...):
-        do_training_step(batch)
-```
-
-A complication is that **Train's batches do not line up with Data's blocks**. Each trainer must track the index it is at within a block; given that, reconstruction need not be more complex than the block-level design above.
-
-Failure classes Train wants to tolerate, and where this design lands on each:
-
-| Case | Description | Status |
-|---|---|---|
-| **T1** | Coordinated checkpoint | Relies on Data block-based checkpointing lining up with Train's checkpointing. No reconstruction needed. |
-| **T2A** | Single Train worker death with full worker-group restart | Open: if the Train worker dies but all Data workers are alive, the Data outputs may not need reconstruction and could be re-fetched directly. |
-| **T2B** | Single Train worker death with in-place healing | Open: relies on Data identifying the exact blocks lost by Train so it can determine what to reconstruct. |
-| **T4** | Data worker / node loss | Data reconstruction as proposed here should be sufficient. |
-
-The T2A/T2B interfaces are **open design work** and are called out as follow-on in [Follow-on Work](#follow-on-work).
-
 ### Relationship to checkpointing and stable-store mechanisms
 
-We have not benchmarked against a checkpointing or write-ahead-logging approach, but we evaluated the options at a high level.
+We have not yet benchmarked against a checkpointing or write-ahead-logging approach, but we will do so as part of the fault tolerance implementation process. However, our high level decision for choosing a reconstruction style fault tolerance mechanism is as follows:
 
 Data processing systems come in stateful and stateless flavors. Stateful implementations almost always checkpoint, because there is no way to reconstruct state without re-executing the pipeline from the start. Stateless implementations (Spark, Ray Data) have typically chosen reconstruction. The reason is that either way, re-executing part of the lost work is unavoidable; reconstruction is simply an optimization where only the branch that was actually lost is recomputed, rather than rolling back to a checkpoint and redoing everything after it. Writing to a stable store additionally incurs the cost of writing to S3 or similar, which in-cluster reconstruction avoids.
 
@@ -446,10 +345,9 @@ We should explore these options for completeness if time allows, but high-level 
 
 ## Compatibility, Deprecation, and Migration Plan
 
-- **Off by default.** `RAY_DATA_RECONSTRUCTION` defaults to `OFF`. With the flag off, behavior is unchanged: Core lineage reconstruction remains the fault tolerance mechanism for Ray Data.
-- **Mutual exclusion with Core lineage pinning.** Enabling `RAY_DATA_RECONSTRUCTION` must also disable lineage pinning for Ray Data's objects. Running both mechanisms simultaneously would result in duplicated reconstruction of the same objects. The blocking issue is that lineage pinning is currently a cluster-wide environment variable; we need scoping so that non-Data workloads in the same cluster keep Core reconstruction. Until that scoping exists, enabling Ray Data reconstruction in a mixed cluster changes fault tolerance behavior for non-Data workloads, which is not acceptable for GA.
-- **New public API.** `block_consumed` is purely additive. Users who never call it keep today's behavior, except that lineage for blocks whose refs outlive the pipeline cannot be garbage collected — the executor stays pinned. This is a memory-footprint consideration, not a correctness one, and should be documented.
-- **Guarantee changes.** The mechanism is at-least-once and assumes deterministic UDFs — the same guarantees Core lineage reconstruction provides today, so no user-visible weakening. Output order is not preserved under failure.
+- **Off by default.** `_enable_ray_data_reconstruction` defaults to `False`. With it disabled, behavior is unchanged: the cluster-level lineage pinning environment variable governs whether Core lineage reconstruction is the fault tolerance mechanism for Ray Data.
+- **Mutual exclusion with Core lineage pinning.** Enabling the job config also disables Core lineage pinning for that job. Running both mechanisms simultaneously would result in duplicated reconstruction of the same objects, and Data reconstruction would never trigger, since it keys off the `ObjectLostError`s that only surface when lineage reconstruction is disabled or fails. Because the config is job-scoped, other jobs in the same cluster keep Core reconstruction unchanged.
+- **Guarantee changes.** The mechanism is at-least-once and assumes deterministic UDFs — the same guarantees Core lineage reconstruction provides today. There should not be any difference in reconstruction output behavior compared to Core lineage reconstruction.
 - **No deprecation.** Nothing is deprecated by this REP. If Ray Data reconstruction becomes the default in a future release, deprecating Core lineage reconstruction *for Data workloads* would be proposed separately, after parity is demonstrated.
 
 ## Test Plan and Acceptance Criteria
@@ -475,7 +373,7 @@ We should explore these options for completeness if time allows, but high-level 
 
 ### Performance tests
 
-- Happy-path regression: throughput and memory overhead of lineage tracking with no failures, versus `RAY_DATA_RECONSTRUCTION=OFF`.
+- Happy-path regression: throughput and memory overhead of lineage tracking with no failures, versus the job config disabled.
 - Recovery time and total resource consumption versus Core lineage reconstruction on the same failure scenarios.
 - Driver-side memory growth of the lineage graph on long-running pipelines with many tasks.
 
@@ -484,19 +382,15 @@ We should explore these options for completeness if time allows, but high-level 
 1. **Guaranteed completion**: pipelines complete successfully under repeated and batched node loss in the chaos suite.
 2. **Stable resource utilization**: no excessive spilling during failure — object store usage stays within the bounded envelope defined above.
 3. **Feature parity**: every fault tolerance scenario covered by Core lineage reconstruction for Ray Data today is covered by the new mechanism, demonstrated by the chaos suite.
-4. **Observability**: metrics and logs expose reconstruction progress at the application level — tasks pending reconstruction, active plans, reconstruction task counts per operator — plus alerting on pathological FT behavior and a debugging runbook for on-call.
-5. **Documentation**: user-facing docs for `RAY_DATA_RECONSTRUCTION`, `block_consumed`, and the guarantees (at-least-once, deterministic UDF assumption, no order preservation under failure).
-6. **No happy-path regression**: throughput overhead of lineage tracking with the flag on and no failures is within an agreed threshold of baseline.
+4. **Observability**: metrics and logs expose reconstruction progress at the application level — tasks pending reconstruction, active plans, reconstruction task counts per operator. Telemetry will also be added to track the stability of the application layer reconstruction versus existing reconstruction and alert on any anomalies. 
+5. **Documentation**: user-facing docs for `_enable_ray_data_reconstruction`, `block_consumed`, and the guarantees (at-least-once, deterministic UDF assumption, no order preservation under failure).
+6. **No happy-path regression**: throughput overhead of lineage tracking with reconstruction enabled and no failures is within an agreed threshold of baseline.
 
 ## Follow-on Work
 
-1. **Core-side scoping of lineage pinning** — a job-level (or similar) configuration to disable Core lineage reconstruction only for Ray Data objects. Required before the flag can be enabled by default.
-2. **Batching reconstruction triggers** — merge simultaneous reconstruction attempts that share upstream lineage, so the shared lineage is reconstructed once. Addresses the primary drawback of the plan-based design.
-3. **Data–Train interface for T2A/T2B** — reconstruct exactly the blocks lost by a dead Train worker, and avoid reconstruction entirely when the producing Data workers are still alive.
-4. **Broader consumption-interface support** — first-class support for `take`/`take_batch`, aggregations, `materialize`, and `to_random_access_dataset` beyond the initially supported write-to-sink and `streaming_split`.
-5. **Reconstruction-specific observability** — recover the per-task progress visibility lost by sharing operator queues between fresh and reconstruction work.
-6. **Core/Data hybrid design** — revisit Option 3 (see Appendix) for a more elegant division of responsibility once the Data-side implementation is in production.
-7. **Stable-store evaluation** — benchmark checkpointing/WAL approaches against reconstruction for completeness.
+1. **Ray Train interface** - This design was developed in close collaboration with Ray Train. This REP scopes itself to fault tolerance in Ray Data pipelines, but the immediate follow-up is to extend that coverage end to end: from the Ray Data pipeline, through Ray Train ingestion, to model training. We will roll this out directly after fault tolerance ships for Ray Data-only pipelines.
+2. **Shuffle workerload support** - The current design already supports operators with fan-in and fan-out stages, which should also encompass shuffle workloads. However, current Ray Data shuffle implementation is actively being evolved, and thus the next step is to ensure shuffle is fully tested with the new application layer fault tolerance mechanism proposed in this REP as well.
+3. **Stable-store evaluation** — benchmark checkpointing/WAL approaches against reconstruction for completeness.
 
 ## Appendix
 
@@ -524,13 +418,19 @@ When a task fails, the streaming executor on the driver detects the failure via 
 
 An attempt to fix the duplicated-shared-lineage problem in the plan-based design by giving each node in the same graph one of three states — `PENDING_RECONSTRUCTION`, `EXECUTING`, `COMPLETE` — instead of tracking plans.
 
+![Node states during normal execution in the three-color design](states.png)
+
 Normal execution builds the same graph, plus: mark a node `EXECUTING` on submission and `COMPLETE` on completion. On failure, instead of building a plan, color the graph:
 
 1. Transition the current node (starting with the failed task) to `PENDING_RECONSTRUCTION`.
 2. Walk up to each parent.
 3. Repeat until reaching a seed task marked `PENDING_RECONSTRUCTION`, or a parent that is already `PENDING_RECONSTRUCTION`.
 
+![Marking the failed task and its ancestors PENDING_RECONSTRUCTION](pending.png)
+
 Then resubmit the pending seed tasks (if no new pending seed tasks were added, no resubmission is needed): transition a task to `EXECUTING` when resubmitted; when a resubmitted task produces an output, resubmit any `PENDING_RECONSTRUCTION` child that needs it once its arguments are resolved, and otherwise drop the output.
+
+![Resubmitting pending seed tasks, with the walk stopping at an already-pending parent](executing.png)
 
 Because the walk stops at nodes already marked `PENDING_RECONSTRUCTION`, simultaneous failures sharing upstream lineage do not duplicate that work. No special handling is needed for mid-reconstruction failure, since there is no notion of a reconstruction attempt. Metadata is lighter than plans and scales with the number of nodes rather than the number of attempts.
 
