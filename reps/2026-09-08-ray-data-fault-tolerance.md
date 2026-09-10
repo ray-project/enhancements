@@ -167,24 +167,6 @@ Used internally when Ray Data itself can observe that a block has been fully mat
 
 To reconstruct a failed task we must know the dependency chain that produced its inputs: for each task, which arguments it needs and which task produced them. We considered the following designs.
 
-#### Option 1: Resubmission from root
-
-The simplest approach: each task records the *root task* it descends from, where a root task is the upstream-most task on the dependency chain that takes no dependencies.
-
-When a task fails, the streaming executor on the driver detects the failure via Core reporting `ObjectLostError` or a variant of `TaskError`, looks up the root task the failed task depends on, and queues that root for resubmission.
-
-**Pros**
-
-- Resubmitted tasks enter the `StreamingExecutor`'s queue and are backpressured like normal tasks — no Core/Data split brain.
-- Resubmitted tasks are new tasks to Core, so they are not bound to a specific actor. With actor pools, the task can run on any actor in the pool.
-- Extremely simple to implement and maintain.
-- Very low per-task driver overhead — essentially a map from each task to its root task.
-
-**Cons**
-
-- Only works for workloads with no fan-out. A fan-out task causes unrelated downstream tasks to be resubmitted as well.
-- Still needs lineage tracking for the per-task mappings to be garbage collected correctly.
-
 #### Option 2: Plan-based reconstruction (recommended)
 
 To avoid redundant work on fan-out and to know when mappings can be erased, we track the full lineage as a graph. Each node is a submitted task; each directed edge is a dependency (a task depends on another when it takes one or more of that task's outputs as an argument).
@@ -230,22 +212,6 @@ This repeats until the originally failed task completes.
 - A new plan is created per fresh task failure. If two reconstructions are triggered simultaneously and share a common upstream lineage, that shared lineage is reconstructed twice.
 - Plan metadata scales with the number of simultaneous reconstruction attempts.
 - *Mitigation idea:* batch reconstruction triggers (e.g. defer until the end of a scheduling window, or until resources are otherwise underutilized) so overlapping attempts can be merged.
-
-#### Option 3: Three-color graph reconstruction (rejected)
-
-An attempt to fix the duplicated-shared-lineage problem in Option 2 by giving each node in the same graph one of three states — `PENDING_RECONSTRUCTION`, `EXECUTING`, `COMPLETE` — instead of tracking plans.
-
-Normal execution builds the same graph, plus: mark a node `EXECUTING` on submission and `COMPLETE` on completion. On failure, instead of building a plan, color the graph:
-
-1. Transition the current node (starting with the failed task) to `PENDING_RECONSTRUCTION`.
-2. Walk up to each parent.
-3. Repeat until reaching a seed task marked `PENDING_RECONSTRUCTION`, or a parent that is already `PENDING_RECONSTRUCTION`.
-
-Then resubmit the pending seed tasks (if no new pending seed tasks were added, no resubmission is needed): transition a task to `EXECUTING` when resubmitted; when a resubmitted task produces an output, resubmit any `PENDING_RECONSTRUCTION` child that needs it once its arguments are resolved, and otherwise drop the output.
-
-Because the walk stops at nodes already marked `PENDING_RECONSTRUCTION`, simultaneous failures sharing upstream lineage do not duplicate that work. No special handling is needed for mid-reconstruction failure, since there is no notion of a reconstruction attempt. Metadata is lighter than plans and scales with the number of nodes rather than the number of attempts.
-
-**Why we rejected it:** the design does not actually hold up. When reconstruction reaches a task that is *mid-execution*, the reconstruction may produce extra output — strictly worse behavior than Core's lineage reconstruction — and reaching an `EXECUTING` node that is itself part of a reconstruction still results in double work. Fixing this requires tracking state per *object* rather than per task, which is substantially more complex than the plan-based approach.
 
 #### Option 4: Tracking via Ray Core (unexplored)
 
@@ -537,3 +503,41 @@ We should explore these options for completeness if time allows, but high-level 
 5. **Reconstruction-specific observability** — recover the per-task progress visibility lost by sharing operator queues between fresh and reconstruction work.
 6. **Core/Data hybrid design** — revisit Option 4 for a more elegant division of responsibility once the Data-side implementation is in production.
 7. **Stable-store evaluation** — benchmark checkpointing/WAL approaches against reconstruction for completeness.
+
+## Appendix
+
+### Alternative designs considered
+
+#### Option 1: Resubmission from root
+
+The simplest approach: each task records the *root task* it descends from, where a root task is the upstream-most task on the dependency chain that takes no dependencies.
+
+When a task fails, the streaming executor on the driver detects the failure via Core reporting `ObjectLostError` or a variant of `TaskError`, looks up the root task the failed task depends on, and queues that root for resubmission.
+
+**Pros**
+
+- Resubmitted tasks enter the `StreamingExecutor`'s queue and are backpressured like normal tasks — no Core/Data split brain.
+- Resubmitted tasks are new tasks to Core, so they are not bound to a specific actor. With actor pools, the task can run on any actor in the pool.
+- Extremely simple to implement and maintain.
+- Very low per-task driver overhead — essentially a map from each task to its root task.
+
+**Cons**
+
+- Only works for workloads with no fan-out. A fan-out task causes unrelated downstream tasks to be resubmitted as well.
+- Still needs lineage tracking for the per-task mappings to be garbage collected correctly.
+
+#### Option 3: Three-color graph reconstruction
+
+An attempt to fix the duplicated-shared-lineage problem in Option 2 by giving each node in the same graph one of three states — `PENDING_RECONSTRUCTION`, `EXECUTING`, `COMPLETE` — instead of tracking plans.
+
+Normal execution builds the same graph, plus: mark a node `EXECUTING` on submission and `COMPLETE` on completion. On failure, instead of building a plan, color the graph:
+
+1. Transition the current node (starting with the failed task) to `PENDING_RECONSTRUCTION`.
+2. Walk up to each parent.
+3. Repeat until reaching a seed task marked `PENDING_RECONSTRUCTION`, or a parent that is already `PENDING_RECONSTRUCTION`.
+
+Then resubmit the pending seed tasks (if no new pending seed tasks were added, no resubmission is needed): transition a task to `EXECUTING` when resubmitted; when a resubmitted task produces an output, resubmit any `PENDING_RECONSTRUCTION` child that needs it once its arguments are resolved, and otherwise drop the output.
+
+Because the walk stops at nodes already marked `PENDING_RECONSTRUCTION`, simultaneous failures sharing upstream lineage do not duplicate that work. No special handling is needed for mid-reconstruction failure, since there is no notion of a reconstruction attempt. Metadata is lighter than plans and scales with the number of nodes rather than the number of attempts.
+
+**Why we rejected it:** the design does not actually hold up. When reconstruction reaches a task that is *mid-execution*, the reconstruction may produce extra output — strictly worse behavior than Core's lineage reconstruction — and reaching an `EXECUTING` node that is itself part of a reconstruction still results in double work. Fixing this requires tracking state per *object* rather than per task, which is substantially more complex than the plan-based approach.
