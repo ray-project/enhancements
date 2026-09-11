@@ -156,9 +156,13 @@ because:
    an ecosystem package.
 
 Not asked for: no new daemon, no scheduler change, no new GCS table, no change
-to any existing API. If reviewers prefer to phase the risk — land the three core
-fixes first, incubate the module for a release — that is acceptable, though the
-incubation window is exactly when the subtle bugs get copied.
+to any existing API. Reviewers have asked to phase the risk — land the three core
+fixes first, validate the pattern against a real workload out-of-tree, and only
+then decide on in-tree exposure. That is the plan this REP now follows; see
+**Agreed sequencing** below. The one cost of the deferral is that the
+out-of-tree window is exactly when the subtle bugs get copied, which is why the
+non-optional implementation requirements are written down in an appendix rather
+than left to be rediscovered.
 
 **The three core changes stand on their own.** They are worth making whether or
 not the ledger pattern lands in-tree: `internal_kv` already has durable users
@@ -173,12 +177,38 @@ that is still a good outcome.
 
 | # | Ask | Why |
 |---|---|---|
-| 1 | A documented **durability contract for `internal_kv`** under `gcs_storage=rocksdb`, plus **per-namespace quota and TTL** | Any durable use of `internal_kv` today relies on undocumented behaviour. This is REP-64 follow-on item 4 and composes with [#65692](https://github.com/ray-project/ray/issues/65692). Quota matters because a badly-behaved ledger must not be able to grow GCS storage without bound. |
+| 1 | A documented **durability contract for `internal_kv`** under `gcs_storage=rocksdb`, plus **per-namespace quota and TTL** — [#66113](https://github.com/ray-project/ray/issues/66113) | Any durable use of `internal_kv` today relies on undocumented behaviour. This is REP-64 follow-on item 4 and composes with [#65692](https://github.com/ray-project/ray/issues/65692). Quota matters because a badly-behaved ledger must not be able to grow GCS storage without bound. |
 | 2 | Fix [#55996](https://github.com/ray-project/ray/issues/55996) — `DEADLINE_EXCEEDED` is not retried by the GCS client and wedges the caller | This is the difference between "the job pauses during a head restart" and "the job hangs forever". |
-| 3 | Fix the `_internal_kv_put` **return-value inversion** | `_internal_kv_put(..., overwrite=False)` returns `True` when the key **already existed** — the opposite of the natural reading, and its docstring says *"Whether the value already exists"*. Every compare-and-set user of `internal_kv` is one inverted boolean away from a silent bug. In our own implementation this produced **livelock, not data corruption** — but only because we read the value back. |
+| 3 | Fix the `_internal_kv_put` **return-value inversion** — [#66114](https://github.com/ray-project/ray/issues/66114) | `_internal_kv_put(..., overwrite=False)` returns `True` when the key **already existed** — the opposite of the natural reading, and its docstring says *"Whether the value already exists"*. Every compare-and-set user of `internal_kv` is one inverted boolean away from a silent bug. In our own implementation this produced **livelock, not data corruption** — but only because we read the value back. |
 
 Item 3 is worth emphasising: it is a two-line documentation and naming problem
 that sits under a primitive several Ray components already build on.
+
+**All three are now tracked independently of this REP**, per review discussion:
+[#66113](https://github.com/ray-project/ray/issues/66113),
+[#55996](https://github.com/ray-project/ray/issues/55996) and
+[#66114](https://github.com/ray-project/ray/issues/66114). None of them is gated
+on the ledger pattern being accepted, and they can be reviewed and landed on
+their own schedule.
+
+### Agreed sequencing
+
+The path settled on in review is deliberately incremental, and defers the
+in-tree question rather than answering it up front:
+
+1. **Land the three independent `internal_kv` changes** on their own merits, as
+   the issues above. They are prerequisites for anything durable built on
+   `internal_kv`, this proposal included, but they are not specific to it.
+2. **Implement resume for a real workload using this pattern**, out-of-tree, as
+   a validation case. The value of the pattern is an empirical question, and the
+   honest way to answer it is to run it against a production job that actually
+   loses its driver rather than to argue it in a document.
+3. **Then decide whether to expose it as a common in-tree utility**, informed by
+   (2). If the pattern turns out to need per-workload shaping, it stays
+   out-of-tree and this REP has still paid for itself via (1).
+
+Under this sequencing the REP's in-tree module (tier 3) should be read as a
+proposal conditional on the outcome of step 2, not as an immediate ask.
 
 ## Stewardship
 
@@ -486,6 +516,8 @@ with `N`; no measurable p99 regression for other GCS users at the design rate.
 - [REP-65 — Ray Active-Passive Head Architecture](https://github.com/ray-project/enhancements/pull/65)
 - [#65692](https://github.com/ray-project/ray/issues/65692) — bounded retention for finished driver job metadata
 - [#55996](https://github.com/ray-project/ray/issues/55996) — job stuck when `InternalKVPut` times out
+- [#66113](https://github.com/ray-project/ray/issues/66113) — document the `internal_kv` durability contract; add per-namespace quota and TTL
+- [#66114](https://github.com/ray-project/ray/issues/66114) — `_internal_kv_put(..., overwrite=False)` return value is inverted relative to caller expectation
 - [#47167](https://github.com/ray-project/ray/issues/47167) — `internal_kv` initialization assertion
 - [#65037](https://github.com/ray-project/ray/issues/65037) — JobManager recovery not triggered after dashboard agent restart
 - **Evidence bundle** — [ray-project/ray#66065](https://github.com/ray-project/ray/pull/66065) (draft, not for merge): the full claim ledger, pre-registered experiment cards and all 35 run directories
