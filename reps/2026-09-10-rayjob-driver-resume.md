@@ -100,6 +100,40 @@ flowchart TD
     class Y good
 ```
 
+### Relationship to checkpoint/recovery in Data, Train and Serve
+
+Ray Data, Train and Serve each implement recovery, and this REP does **not**
+attempt to unify them. Their recovery is *inside* a library-owned execution
+loop, and in every case the driver is assumed to be alive:
+
+| | What it recovers | What owns the recovery state | Survives driver loss? |
+|---|---|---|---|
+| Ray Train | training loop, from the last application checkpoint | trainer + checkpoint storage | no — a lost driver ends the run; KubeRay restarts it from the start of the script |
+| Ray Data | task/actor failures inside one `Dataset` execution | the driver-resident execution plan | no |
+| Ray Serve | replica and controller failures | detached controller actor + `internal_kv` | yes, but Serve deployments are not jobs and have no notion of committed progress |
+
+The gap is the layer above all three: **user-written orchestration code in a
+RayJob entrypoint** — the `for shard in shards: ray.get(...)` or the
+stage-by-stage pipeline that *calls* Data or Train. That code holds its progress
+in the driver's heap, and nothing in Ray persists it. A RayJob whose submitter
+pod is evicted re-runs the entrypoint from line one, including the stages whose
+outputs are already durable.
+
+So the honest scope claim is narrower than "unify library checkpointing":
+Serve's pattern (detached actor + `internal_kv`) is the closest existing
+analogue, and this REP is essentially that pattern made available to job
+drivers, with the durability contract it depends on written down. If the
+libraries later want a common substrate, the ledger is a plausible one — but
+that is not being claimed here and no library change is proposed.
+
+**The workloads driving this** are multi-hour, fan-out batch and multi-stage
+pipeline jobs run as RayJobs on KubeRay with GCS FT: tens of thousands of
+independent shards whose outputs land on object storage, run on clusters where
+head restarts and submitter-pod eviction are routine rather than exceptional
+(node maintenance, spot capacity). For these, redoing completed shards is pure
+waste, and the information needed to avoid it — which shards committed — is a
+few kilobytes.
+
 ### Should this change be within `ray` or outside?
 
 **Inside `ray`** — both the pattern (a small `ray.util` module) and the three
@@ -125,6 +159,15 @@ Not asked for: no new daemon, no scheduler change, no new GCS table, no change
 to any existing API. If reviewers prefer to phase the risk — land the three core
 fixes first, incubate the module for a release — that is acceptable, though the
 incubation window is exactly when the subtle bugs get copied.
+
+**The three core changes stand on their own.** They are worth making whether or
+not the ledger pattern lands in-tree: `internal_kv` already has durable users
+(Serve, Jobs, the dashboard) relying on undocumented behaviour, the
+`DEADLINE_EXCEEDED` wedge ([#55996](https://github.com/ray-project/ray/issues/55996))
+is a hang bug independent of this proposal, and the `_internal_kv_put` return
+inversion is a correctness trap for every existing compare-and-set caller. If
+the outcome of this REP is only that those three land as independent changes,
+that is still a good outcome.
 
 **The three core changes**, none of which is a new subsystem:
 
