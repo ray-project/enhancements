@@ -70,7 +70,7 @@ is by construction an ordinary client process.
 |---|---|
 | **Long-running sharded batch jobs** — a driver enumerating shards; resume skips the completed ones | **Distributed training (NCCL).** The collective group breaks on head failure and does not reconnect; training resumes from its application checkpoint regardless. Ray Train checkpointing covers this and we add nothing to it |
 | **Multi-stage orchestration pipelines**, where each stage is expensive and externally durable | **Fine-grained, high-throughput work.** Measured, not assumed: `N=10³` admits no usable configuration above ~100 units/s; `N=10⁶` tolerates 10⁴/s. Millisecond units should not use this |
-| **Spot / preemptible fleets**, where driver loss is routine rather than exceptional | **Arbitrary, uncooperative driver code.** A hard non-goal. This does not checkpoint a Python process; work must be restructured into re-enumerable idempotent units |
+| **Spot / preemptible fleets**, where driver loss is routine rather than exceptional | **Arbitrary, uncooperative driver code.** A hard non-goal. This does not checkpoint a Python process; work must be restructured into re-enumerable idempotent units — see the [appendix](#appendix-writing-a-driver-that-can-resume) for what that means concretely |
 | | **Exactly-once semantics.** Not offered. The contract is at-least-once: a crash between execution and commit re-executes at most `W` units |
 
 **Environment and scale**, per the REP checklist:
@@ -461,6 +461,89 @@ with `N`; no measurable p99 regression for other GCS users at the design rate.
    child and recording it **orphans** the child permanently.
 4. **Every coordinator method idempotent under replay.** `max_task_retries=-1`
    replays in-flight tasks on a restarted actor — including administrative ones.
+
+## Appendix: writing a driver that can resume
+
+The contract is two functions. Everything else follows from them.
+
+```python
+enumerate_units(job_spec) -> list[UnitId]   # pure; same list on every incarnation
+execute(unit_id, job_spec) -> Summary       # idempotent; running twice == running once
+```
+
+If you can write those two honestly, the ledger can resume your job. If you
+cannot, no amount of ledger design will save it.
+
+### A driver that cannot resume
+
+Four independently fatal problems, all of them ordinary Python:
+
+```python
+results, total = [], 0
+for path in list_new_files(bucket):                  # (1)
+    df = ray.get(process.remote(path))
+    total += df.revenue.sum()                        # (2)
+    out = f"{dest}/part-{len(results)}.parquet"      # (3)
+    append_rows(df, out)                             # (4)
+    results.append(out)
+publish(total)
+```
+
+1. **Not re-enumerable.** `list_new_files` returns a different set on the second
+   incarnation, so "unit 37" is not the same work it was. The ledger's `done`
+   set becomes meaningless — worse than useless, because it is confidently wrong.
+2. **Progress lives in the driver's heap.** `total` is reconstructible from
+   nothing once the process dies.
+3. **Positional unit identity.** `len(results)` depends on how far *this*
+   incarnation got. After a resume the same shard writes to a different file.
+4. **Append-style side effect.** Re-executing a unit duplicates rows. The
+   contract is at-least-once, so this *will* happen.
+
+### The same job, restructured
+
+```python
+def enumerate_units(spec):
+    # pinned to an immutable snapshot, so the list is identical on every
+    # incarnation.  Sorted, so ids do not depend on listing order.
+    return sorted(list_files(spec.bucket, as_of=spec.snapshot_id))
+
+def execute(unit_id, spec):
+    df = process(unit_id)
+    # destination derived from the unit, not from a counter; atomic overwrite,
+    # not append.  Re-running the unit reproduces the same object.
+    write_atomic(df, f"{spec.dest}/part-{sha256(unit_id)}.parquet")
+    return {"unit": unit_id, "revenue": float(df.revenue.sum())}
+```
+
+`total` is now derived at the end from the committed per-unit summaries, not
+accumulated in the driver. The driver itself submits and reads; it may be killed
+at any line.
+
+The coordinator's loop is then exactly what the reference implementation does —
+skip what the ledger already knows, execute the rest:
+
+```python
+for u in (u for u in enumerate_units(spec) if u not in done):
+    execute(u, spec)
+```
+
+### Checklist
+
+| Rule | What breaks without it |
+|---|---|
+| **Enumeration is a pure function of the job spec.** Pin the input set — snapshot id, manifest, partition range. Never list a mutable directory at runtime | Unit ids shift between incarnations; the `done` set silently refers to different work |
+| **Unit ids are stable and content-derived.** No loop index, counter, `uuid4()`, or timestamp | Resume rewrites the same shard to a new location, or skips the wrong one |
+| **`execute` is idempotent.** Deterministic destination + overwrite, temp-file + atomic rename, or upsert keyed by unit id | At-least-once re-execution duplicates rows, double-counts, or corrupts partial writes |
+| **No cross-unit state in the driver.** Anything you would accumulate must be derivable from per-unit outputs, or small enough to ride along in the committed record | The one thing the ledger cannot recover is what only the driver knew |
+| **Units are coarse** — seconds to minutes, not milliseconds | You fall outside the measured rate band; ledger cost or redo window dominates |
+| **External side effects carry their own dedupe key** — payments, emails, outbound POSTs | The ledger offers at-least-once, not exactly-once. It cannot un-send |
+| **The driver does no work of its own** | It stops being disposable, and you are back to the original problem |
+
+### How to check, rather than hope
+
+Run the job, kill the coordinator mid-flight, let it resume, and diff the output
+against an uninterrupted run. They should be byte-identical. If they are not,
+one of the rules above is being violated — and the diff usually names which one.
 
 ## Appendix: claim ledger and method
 
