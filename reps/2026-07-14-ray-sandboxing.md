@@ -384,5 +384,5 @@ All experimental APIs are subject to breaking changes or removal prior to GA gra
 ## (Optional) Follow-on Work
 
 - **Additional Runtimes**: Support for other sandboxing runtimes such as [Agent Substrate](https://github.com/agent-substrate/substrate), Firecracker microVMs, and third-party APIs (modal, etc.).
-- **Checkpoint / Restore**: Support for checkpoint / restoring sandboxes, leveraging `runsc checkpoint` and `runsc restore` for state snapshotting and sub-10ms execution start.
+- **Checkpoint / Restore**: Support for checkpoint / restoring sandboxes, leveraging `runsc checkpoint` and `runsc restore` for state snapshotting and sub-10ms execution start. (See [REP: Ray Sandboxing Checkpoint and Restore](2026-09-24-ray-sandboxing-checkpoint-restore.md)).
 - **Modal Compatible API:** Support a Modal compatible API in `ray.experimental.sandbox.modal`.
