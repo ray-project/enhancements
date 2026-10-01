@@ -40,6 +40,7 @@ This proposal unifies reconstruction with the happy-path scheduling mechanism by
 - **Exactly-once is not provided.** The mechanism provides *at-least-once* execution, matching Core's behavior today.
 - **UDFs are assumed to be deterministic.** A reconstructed task that runs a non-deterministic UDF will produce different output than the original.
 - **Order preservation is not a requirement under failure.**
+- **Object loss is assumed to come from a node death.** A reconstructed task's outputs that no child had consumed are assumed lost with the node and are re-emitted.
 - Driver failure is out of scope for this proposal; it is handled by the complementary Ray Data driver checkpointing work (see [Relationship to checkpointing](#relationship-to-checkpointing-and-stable-store-mechanisms)).
 
 #### Example workloads
@@ -60,7 +61,7 @@ This proposal unifies reconstruction with the happy-path scheduling mechanism by
 
 ### Should this change be within `ray` or outside?
 
-Within `ray`. The bulk of the change lives in `ray.data` (a new lineage tracker owned by the `StreamingExecutor`, plus changes to operator input/output handling and task submission). It also requires a small amount of Ray Core surface: a supported way to disable lineage pinning/reconstruction *for Ray Data's objects only*, without changing behavior for the rest of the cluster.
+Within `ray`. The bulk of the change lives in `ray.data` (a new lineage tracker owned by the `StreamingExecutor`, plus changes to operator input/output handling and task submission). It also requires a small amount of Ray Core surface: a supported way to disable lineage pinning/reconstruction for a single job, without changing behavior for the rest of the cluster. This was added as `JobConfig(_disable_job_level_lineage_reconstruction=True)` ([ray#65487](https://github.com/ray-project/ray/pull/65487)).
 
 ## Stewardship
 
@@ -83,7 +84,7 @@ TODO
 | **Fan-in stage** | A stage where a single operator task may consume multiple blocks produced by multiple producer tasks. |
 | **Lineage** | The dependency chain for a task — the chain of tasks that led to the current task being submitted. |
 | **Lineage completion** | A lineage is *complete* when the final task in the chain produces no output needed by any downstream task. |
-| **Data Task ID** | A stable Data-level task identity that is preserved across reconstruction attempts (see [Data Task IDs](#data-task-ids)). |
+| **Lineage Task ID** | A stable Data-level task identity that is preserved across reconstruction attempts (see [Lineage Task IDs](#lineage-task-ids)). |
 
 ### Background: Ray Core lineage reconstruction
 
@@ -135,16 +136,15 @@ The design has four parts:
 
 | Flag | Default |
 |---|---|
-| `RAY_DATA_RECONSTRUCTION` | `OFF` |
-| `RAY_LINEAGE_PINNING_ENABLED` | `ON` |
+| `JobConfig(_disable_job_level_lineage_reconstruction=...)` | `False` |
 
-We add a new feature flag, `RAY_DATA_RECONSTRUCTION`, that toggles Ray Data reconstruction. It is **off by default** while development completes.
+Ray lineage pinning (Core reconstruction) **must be disabled for Ray Data reconstruction to work** — otherwise both mechanisms will attempt to recover the same objects. We therefore use a single job-level switch on the Core side ([ray#65487](https://github.com/ray-project/ray/pull/65487)). Setting `_disable_job_level_lineage_reconstruction=True` turns off lineage pinning for that job only, and Ray Data enables its own reconstruction (`DataContext.enable_ray_data_reconstruction`) based on that setting. It is **off by default** while development completes.
 
-Ray lineage pinning (Core reconstruction) **must be disabled for Ray Data reconstruction to work** — otherwise both mechanisms will attempt to recover the same objects. Lineage pinning is currently controlled only by an environment variable, so enabling the Ray Data fault tolerance flag must also disable lineage pinning.
+#### Supported plans
 
-> **Open ask (Ray Core):** we need a way to disable lineage reconstruction *only for Ray Data workloads*; the rest of the cluster should be unaffected. A job-level configuration is one candidate, but the right configuration surface still needs design. This is the main Core-side dependency of this REP.
+Ray Data reconstruction currently supports plans made entirely of map operators fed by a source, in linear, fan-in and fan-out shapes. Any other plan (e.g. one containing union, limit, shuffle, or a strict repartition that slices blocks across tasks) has Ray Data reconstruction disabled with a warning. Since Core reconstruction is also off for the job, a lost object in such a plan fails the dataset.
 
-#### Public API: `block_consumed`
+#### Public API: `block_consumed` (not yet implemented)
 
 ```python
 def block_consumed(block: ObjectRef) -> None: ...
@@ -155,13 +155,13 @@ def block_consumed(block_id: str) -> None: ...
 
 `ray.train`'s `dataset.state_dict` should invoke this API under the hood for all blocks that it saves.
 
-#### Internal API: `clear_block_lineage`
+#### Internal API: `clear_block_lineage` (not yet implemented)
 
 ```python
-def clear_block_lineage(data_task_id: str, output_index: int) -> None: ...
+def clear_block_lineage(lineage_task_id: str, output_index: int) -> None: ...
 ```
 
-Used internally when Ray Data itself can observe that a block has been fully materialized. `block_consumed` resolves the object ref to a `(data_task_id, output_index)` pair and calls `clear_block_lineage` underneath.
+Used internally when Ray Data itself can observe that a block has been fully materialized. `block_consumed` resolves the object ref to a `(lineage_task_id, output_index)` pair and calls `clear_block_lineage` underneath.
 
 ### Lineage tracking
 
@@ -184,7 +184,7 @@ The graph is built during normal execution:
 
 **Plan construction.** When a task fails, the executor picks up the error and constructs a *reconstruction plan* describing exactly the steps needed to rebuild the failed task:
 
-1. Generate a new unique `plan_id` for this reconstruction attempt, associated with the failed task.
+1. Use the failed task's lineage task ID as the `plan_id` for this reconstruction attempt.
 2. For the current node, build a mapping from downstream tasks participating in this attempt to the output object indices they depend on. A downstream task participates if it carries this `plan_id`. Note the failed task itself has no downstream dependencies in the same attempt.
 3. Record on the current node a new mapping from `plan_id` to the map built in step 2.
 4. Walk up to the parents of the current node and repeat steps 2–3 until reaching the seed tasks.
@@ -192,19 +192,19 @@ The graph is built during normal execution:
 **Resubmission.** Once the plan is built, every seed task reached during plan construction is resubmitted, tagged with the `plan_id`:
 
 1. Each time a resubmitted task produces an output, look up the plan on that node by `plan_id` to check whether the object is needed. If a downstream task with the same `plan_id` needs it, resubmit that downstream task with the object once all of its arguments are resolved. Otherwise ignore the output and let it be GC'd immediately.
-2. When a resubmitted task completes, remove the plan entry from its node to signal that this task's part of the reconstruction is done.
+2. When a downstream task in the plan is resubmitted, remove the outputs it consumes from its parents' plan entries. A plan entry is removed once it is empty, signaling that this task's part of the reconstruction is done.
 
 This repeats until the originally failed task completes.
 
-**Failure mid-reconstruction.** If a resubmitted task itself fails, we do *not* create a new plan. We re-run the existing plan starting from the failed resubmitted node.
+**Failure mid-reconstruction.** If a resubmitted task itself fails, we do *not* create a new plan. We trace from the failed resubmitted node back to the seeds again and re-inject them under the existing `plan_id`.
 
-**Garbage collection.** When a lineage completes, walk back up the dependency graph from the terminating node; for each node with no remaining children, remove it from the graph.
+**Garbage collection (not yet implemented).** When a lineage completes, walk back up the dependency graph from the terminating node; for each node with no remaining children, remove it from the graph.
 
 **Pros**
 
 - Reconstruction tasks go through the `StreamingExecutor`'s queue and are backpressured like normal tasks — no Core/Data split brain.
 - Reconstruction tasks are new Core tasks, so with actor pools they can run on any actor in the pool.
-- Supports all Ray Data workloads (fan-in and fan-out) without reconstructing tasks unrelated to the failure.
+- Supports fan-in and fan-out without reconstructing tasks unrelated to the failure.
 - Lineage metadata can be garbage collected cleanly on lineage completion.
 
 **Cons**
@@ -219,14 +219,14 @@ We recommend **plan-based reconstruction**: it is the only option that covers al
 
 ### Scheduling reconstruction tasks
 
-#### Data Task IDs
+#### Lineage Task IDs
 
-Since the reconstruction tasks submitted from Data's `StreamingExecutor` are technically new Ray tasks, they do not preserve their original Ray task ID. We need a stable identity that allows us to differentiate between tasks that were run for the first time, and tasks that are re-run as part of reconstruction. For this reason, we define a stable **Data Task ID** which is preserved across reconstruction attempts.
+Since the reconstruction tasks submitted from Data's `StreamingExecutor` are technically new Ray tasks, they do not preserve their original Ray task ID. We need a stable identity that allows us to differentiate between tasks that were run for the first time, and tasks that are re-run as part of reconstruction. For this reason, we define a stable **Lineage Task ID** which is preserved across reconstruction attempts.
 
-Data Task ID is defined as:
+Lineage Task ID is defined as:
 
 ```
-data_task_id = "{op_id}:{task_index}"
+lineage_task_id = "{op_id}:{task_index}"
 ```
 
 where `op_id` is the physical operator's UUID and `task_index` represents the value of the counter which tracks the fresh task index of an operator stage.
@@ -239,17 +239,17 @@ As mentioned above, we catch an `ObjectLostError` while processing completed tas
 
 After the failed task is registered with the lineage tracker, we trace the task node graph, returning the set of seed task IDs the plan needs to re-execute. The current failed task is marked aborted. We then re-submit the seeds and continue, without failing the pipeline.
 
-For each task in the chain of reconstruction tasks, we are careful to only propagate the blocks that are needed to reconstruct a lost object, or are fresh blocks. These dependencies are accounted for in the lineage tracker by tracking Data Task ID and object index for every submitted task. This means that any output blocks that are not needed to reconstruct a lost object, or are not fresh blocks, are pruned away. Also, reconstruction blocks are supposed to be withheld by the producing operator until a child reconstruction task that consumes them can be scheduled, i.e. all the required input blocks for the particular reconstruction task are produced by its parents.
+For each task in the chain of reconstruction tasks, we are careful to only propagate the blocks that are needed to reconstruct a lost object, or are fresh blocks. These dependencies are accounted for in the lineage tracker by tracking lineage task ID and object index for every submitted task. This means that any output blocks that are not needed to reconstruct a lost object, or are not fresh blocks, are pruned away. Also, reconstruction blocks are supposed to be withheld by the producing operator until a child reconstruction task that consumes them can be scheduled, i.e. all the required input blocks for the particular reconstruction task are produced by its parents.
 
-#### Batching reconstruction plans
+#### Batching reconstruction plans (not yet implemented)
 
-In a naive implementation, every lost object opens its own plan and re-injects every seed it traces to. A node death that destroys `N` blocks descended from one `ListFiles` seed task therefore re-runs that single task `N` times, pruning a different set of output indices in the chain on each execution.
+In the current implementation, every lost object opens its own plan and re-injects every seed it traces to. A node death that destroys `N` blocks descended from one `ListFiles` seed task therefore re-runs that single task `N` times, pruning a different set of output indices in the chain on each execution.
 
 We resolve this wasted effort by letting later plans attach to a seed resubmission that is still queued. Critically, under our approach, we can only batch seed reconstruction plans for a seed task that is still queued, rather than one that is already in flight. This is because with a seed task in progress, an object that is required by a new task failure that traced to the same seed might have already been pruned, and batching here would lead to missing blocks.
 
 The process of batching reconstructions follows:
 
-1. When a plan re-submits a seed task, the seed operator records each seed Data Task ID, and a set of reconstruction plans that this seed task provides outputs for. The operator is responsible for tracking this data because it knows which seed tasks are queued and which are already scheduled.
+1. When a plan re-submits a seed task, the seed operator records each seed lineage task ID, and a set of reconstruction plans that this seed task provides outputs for. The operator is responsible for tracking this data because it knows which seed tasks are queued and which are already scheduled.
 2. A new plan first checks the seed operator to see if the seed task it traces to has already been queued, and if so, simply joins the set of pending reconstructions for this seed task.
 3. When the seed task is dispatched and starts producing outputs, it needs to check if any of the pending reconstruction plans require each object that is produced. That decides if the object is pruned or held for the downstream reconstruction task.
 4. As in the case without batching, we withhold reconstruction blocks, except we have to separately track them for each reconstruction plan and release each plan group separately. This prevents the blocks from different reconstruction plans from interfering with each other in fan-in tasks downstream, to ensure deterministic reconstruction.
@@ -291,13 +291,13 @@ These fall into two categories for garbage collection purposes: **block refs fat
 
 Blocks produced by the last operator are materialized — written to a sink, aggregated, or materialized to the driver. Once materialization completes for a block, it is no longer needed.
 
-When a block is materialized, we invoke `clear_block_lineage(data_task_id, output_index)` so the lineage tracker can drop its state; the block will not be reconstructed. Concretely for writes: each time a write task completes, we invoke `clear_block_lineage` on each of its input blocks.
+When a block is materialized, we invoke `clear_block_lineage(lineage_task_id, output_index)` so the lineage tracker can drop its state; the block will not be reconstructed. Concretely for writes: each time a write task completes, we invoke `clear_block_lineage` on each of its input blocks.
 
 #### Block refs outlive the pipeline
 
 Blocks produced by the last operator have their refs passed downstream, outside the pipeline. Here Ray Data cannot know when a block is safe to GC unless the user explicitly indicates the block is fully consumed and will never be needed again — that is what the public `block_consumed` API is for.
 
-For blocks to remain reconstructable, **the streaming executor must remain pinned until all output blocks of the last stage are marked consumed**, since the executor holds the lineage. `block_consumed` resolves the block to its Data Task ID and output index and calls `clear_block_lineage`.
+For blocks to remain reconstructable, **the streaming executor must remain pinned until all output blocks of the last stage are marked consumed**, since the executor holds the lineage. `block_consumed` resolves the block to its lineage task ID and output index and calls `clear_block_lineage`.
 
 ### Data–Train interface
 
@@ -417,7 +417,7 @@ We should explore these options for completeness if time allows, but high-level 
     <tr>
       <td>4b.</td>
       <td>Several children lose inputs at once, fail together</td>
-      <td>Batching reconstructions: The lineage tracker tries to submit a single reconstruction seed for all children as they share a common seed. The lineage tracker has an idea of what reconstruction plans map to a single seed, and uses this information to decide which blocks to prune</td>
+      <td>Each failure currently opens its own plan and re-submits the shared seed. With batching (not yet implemented), the lineage tracker submits a single reconstruction seed for all children as they share a common seed. The lineage tracker has an idea of what reconstruction plans map to a single seed, and uses this information to decide which blocks to prune</td>
       <td>All blocks consumed exactly once, and number of seed re-submissions (i.e. ListFiles) tasks is kept minimal because of batching</td>
     </tr>
     <tr>
@@ -446,8 +446,8 @@ We should explore these options for completeness if time allows, but high-level 
 
 ## Compatibility, Deprecation, and Migration Plan
 
-- **Off by default.** `RAY_DATA_RECONSTRUCTION` defaults to `OFF`. With the flag off, behavior is unchanged: Core lineage reconstruction remains the fault tolerance mechanism for Ray Data.
-- **Mutual exclusion with Core lineage pinning.** Enabling `RAY_DATA_RECONSTRUCTION` must also disable lineage pinning for Ray Data's objects. Running both mechanisms simultaneously would result in duplicated reconstruction of the same objects. The blocking issue is that lineage pinning is currently a cluster-wide environment variable; we need scoping so that non-Data workloads in the same cluster keep Core reconstruction. Until that scoping exists, enabling Ray Data reconstruction in a mixed cluster changes fault tolerance behavior for non-Data workloads, which is not acceptable for GA.
+- **Off by default.** `_disable_job_level_lineage_reconstruction` defaults to `False`. With the flag off, behavior is unchanged: Core lineage reconstruction remains the fault tolerance mechanism for Ray Data.
+- **Mutual exclusion with Core lineage pinning.** A single job-level switch both disables lineage pinning for the job and enables Ray Data reconstruction, so the two mechanisms never run for the same objects. Other jobs in the same cluster keep Core reconstruction.
 - **New public API.** `block_consumed` is purely additive. Users who never call it keep today's behavior, except that lineage for blocks whose refs outlive the pipeline cannot be garbage collected — the executor stays pinned. This is a memory-footprint consideration, not a correctness one, and should be documented.
 - **Guarantee changes.** The mechanism is at-least-once and assumes deterministic UDFs — the same guarantees Core lineage reconstruction provides today, so no user-visible weakening. Output order is not preserved under failure.
 - **No deprecation.** Nothing is deprecated by this REP. If Ray Data reconstruction becomes the default in a future release, deprecating Core lineage reconstruction *for Data workloads* would be proposed separately, after parity is demonstrated.
@@ -461,7 +461,7 @@ We should explore these options for completeness if time allows, but high-level 
 - Resubmission: outputs needed by the plan are routed to downstream tasks; outputs not needed are dropped immediately.
 - Failure mid-reconstruction: re-running the existing plan from the failed node, with no new plan created.
 - Garbage collection: graph nodes removed on lineage completion; `clear_block_lineage` and `block_consumed` correctly resolve blocks and drop state; no leaked nodes after a full pipeline run.
-- Data Task ID stability across reconstruction attempts.
+- Lineage task ID stability across reconstruction attempts.
 - Admission control: reconstruction blocks never bundle with fresh blocks; a reconstruction task receives exactly the inputs its plan specifies.
 
 ### Integration and chaos tests
@@ -475,7 +475,7 @@ We should explore these options for completeness if time allows, but high-level 
 
 ### Performance tests
 
-- Happy-path regression: throughput and memory overhead of lineage tracking with no failures, versus `RAY_DATA_RECONSTRUCTION=OFF`.
+- Happy-path regression: throughput and memory overhead of lineage tracking with no failures, versus `_disable_job_level_lineage_reconstruction=False`.
 - Recovery time and total resource consumption versus Core lineage reconstruction on the same failure scenarios.
 - Driver-side memory growth of the lineage graph on long-running pipelines with many tasks.
 
@@ -485,12 +485,12 @@ We should explore these options for completeness if time allows, but high-level 
 2. **Stable resource utilization**: no excessive spilling during failure — object store usage stays within the bounded envelope defined above.
 3. **Feature parity**: every fault tolerance scenario covered by Core lineage reconstruction for Ray Data today is covered by the new mechanism, demonstrated by the chaos suite.
 4. **Observability**: metrics and logs expose reconstruction progress at the application level — tasks pending reconstruction, active plans, reconstruction task counts per operator — plus alerting on pathological FT behavior and a debugging runbook for on-call.
-5. **Documentation**: user-facing docs for `RAY_DATA_RECONSTRUCTION`, `block_consumed`, and the guarantees (at-least-once, deterministic UDF assumption, no order preservation under failure).
+5. **Documentation**: user-facing docs for `_disable_job_level_lineage_reconstruction`, the supported plans, `block_consumed`, and the guarantees (at-least-once, deterministic UDF assumption, no order preservation under failure).
 6. **No happy-path regression**: throughput overhead of lineage tracking with the flag on and no failures is within an agreed threshold of baseline.
 
 ## Follow-on Work
 
-1. **Core-side scoping of lineage pinning** — a job-level (or similar) configuration to disable Core lineage reconstruction only for Ray Data objects. Required before the flag can be enabled by default.
+1. **Broader operator support** — extend Ray Data reconstruction beyond map-only plans (union, limit, shuffle, strict repartition). Required for feature parity before the flag can be enabled by default.
 2. **Batching reconstruction triggers** — merge simultaneous reconstruction attempts that share upstream lineage, so the shared lineage is reconstructed once. Addresses the primary drawback of the plan-based design.
 3. **Data–Train interface for T2A/T2B** — reconstruct exactly the blocks lost by a dead Train worker, and avoid reconstruction entirely when the producing Data workers are still alive.
 4. **Broader consumption-interface support** — first-class support for `take`/`take_batch`, aggregations, `materialize`, and `to_random_access_dataset` beyond the initially supported write-to-sink and `streaming_split`.
