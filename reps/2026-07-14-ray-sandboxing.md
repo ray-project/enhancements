@@ -415,7 +415,7 @@ On the Vera node, 8 host actors held 128 sandboxes between them, and 128 creates
 
 A lookup took 0.5 ms with every slot listed, and the store listed every slot ready again 3.5 to 4.5 s after all 128 sandboxes were deleted. A SQLite table of permits behaved the same (127 of 128 with the same routing). Its lookups took 0.22 ms alone, but under 64 concurrent callers, one connection per thread queued them to about 230 ms, and one shared connection per process brought that to about 27 ms, so a database store should share its connections per process.
 
-**Open problem: exact claims.** A host hands out any ready sandbox from its queue, not the one the caller saw listed. So a caller can't account exactly for its creates in flight. Skipping listed sandboxes it already sent a create for under-counts, because the host may claim a different one and leave a "sent" one ready. Counting creates in flight per host over-counts once they return, because a listing lags a claim by up to one publish. In the Vera runs either policy left 1 to 10 of 128 creates cold. The fix is to let a create name the listed sandbox (or slot) it wants, which the host claims if it is still ready, and otherwise any ready one; a store's rows then become permits a caller redeems exactly. This is future work.
+**Exact claims.** A host hands out any ready sandbox from its queue, so without more, a caller can't tell which listed sandbox a create took. Skipping listed sandboxes it already sent a create for under-counts, because the host may claim a different one and leave a "sent" one ready; counting creates in flight per host over-counts once they return, because a listing lags a claim by up to one publish. In the Vera runs either policy left 1 to 10 of 128 creates cold. So a create can name the record's sandbox, `runtime.create(..., warm_sandbox=entry.sandbox_id)`, and the host claims that one if it's still ready, and otherwise any ready one (ray-project/ray#67728). A caller that sends one create per record then never sends a host more creates than it has sandboxes ready, and a store's rows are permits a caller redeems exactly.
 
 ### Multi-sandbox actors
 
@@ -465,7 +465,6 @@ An unpinned sandbox (`cpu=0`) sees every CPU on the host, and gVisor sizes its G
 
 ### Future work from these changes
 
-- Exact claims for warm pools, as above.
 - The facade's node host actors, and facade warm pools that publish to the store.
 - Per-sandbox or sharded runsc roots: `runsc run` boot time grew with the number of sandboxes on a node (p50 47 ms at 100 sandboxes, about 150 to 175 ms at 3,100), most likely from the shared `/tmp/runsc` directory.
 - A default vCPU count for unpinned sandboxes, so one doesn't size itself to the whole host. This changes what `cpu=0` means to the guest, so it needs a product decision.
