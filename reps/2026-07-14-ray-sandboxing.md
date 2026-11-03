@@ -355,6 +355,8 @@ The initial version of the gVisor runtime did not support specifying container i
 | Multi-sandbox actors | One owner lock per process instead of two open files per sandbox | [ray#67731](https://github.com/ray-project/ray/pull/67731) | open |
 | Ownership and reclaim | A sandbox stops with its owner; the next create reclaims what it left | [ray#67022](https://github.com/ray-project/ray/pull/67022) | merged |
 | Resource limits | CPU and memory enforced with host cgroups, failing closed | [ray#66932](https://github.com/ray-project/ray/pull/66932) | merged |
+| Resource limits | Whole physical cores per sandbox; a node-wide cap on each sandbox's host tasks | [ray#67747](https://github.com/ray-project/ray/pull/67747), [ray#67748](https://github.com/ray-project/ray/pull/67748) | open |
+| Image cache | Build overlapping image pulls in child interpreters | [ray#67746](https://github.com/ray-project/ray/pull/67746) | open |
 | runsc's root directory | Remove the lock files deletes leave behind | [ray#67729](https://github.com/ray-project/ray/pull/67729), [gvisor#16903](https://github.com/google/gvisor/pull/16903), [gvisor#16902](https://github.com/google/gvisor/pull/16902) | open |
 | Start-up path | Pid-file readiness, `GOMAXPROCS=2` for runsc calls, less work per create | [ray#67074](https://github.com/ray-project/ray/pull/67074), [ray#67075](https://github.com/ray-project/ray/pull/67075), [ray#67076](https://github.com/ray-project/ray/pull/67076) | open |
 | Bursts | Switch roots without pivot_root(2) on Linux 7.1+ | [gvisor#16901](https://github.com/google/gvisor/pull/16901) | open |
@@ -362,6 +364,7 @@ The initial version of the gVisor runtime did not support specifying container i
 | gRPC facade | Exec state lives on the sandbox's host actor | [ray#67078](https://github.com/ray-project/ray/pull/67078) | merged |
 | Node settings | Default resolvers and extra runsc flags per node | [ray#67691](https://github.com/ray-project/ray/pull/67691), [ray#67692](https://github.com/ray-project/ray/pull/67692) | open |
 | arm64 and 64 KiB pages | Start apps with SSBS set; put vDSO parameters where the vDSO reads them | [gvisor#16814](https://github.com/google/gvisor/pull/16814), [gvisor#16815](https://github.com/google/gvisor/pull/16815) | open |
+| arm64 | Complete trapped WFE/WFI and emulate ID register reads on KVM; show apps BF16, I8MM and other stateless HWCAP2 features | [gvisor#16909](https://github.com/google/gvisor/pull/16909), [gvisor#16910](https://github.com/google/gvisor/pull/16910) | open |
 | Tests | An out-of-memory kill stays inside its sandbox | [ray#67694](https://github.com/ray-project/ray/pull/67694) | open |
 
 ### Warm pools in `SandboxRuntime`
@@ -450,17 +453,21 @@ runsc keeps every container's state and lock file in one root directory (`/tmp/r
 - **`GOMAXPROCS=2` for runsc CLI calls** (ray-project/ray#67075): each runsc invocation is sized for 2 CPUs, not every CPU on the host (31% more commands a second on 64 cores).
 - **Less work per create** (ray-project/ray#67076): a cached `runsc spec`, and image cache hits under a shared lock (3.3 ms to 0.09 ms).
 - **No cgroup join per exec** (ray-project/ray#67690): a command in a sandbox with limits started in 49 ms, now 3 ms, because commands no longer queue on a global kernel lock.
+- **Overlapping image builds run in child interpreters** (ray-project/ray#67746). Turning an image's layers into its EROFS root goes through `tarfile` twice, both holding the interpreter lock, so a process that pulls several images at once built them one at a time: the 49 Terminal-Bench images (70 GiB) from an empty cache took 265 s with the node 0.7% busy, against about 5 s for one image alone. While one build runs in a process, the next ones now run in child interpreters, at most one per two CPUs, and the 49 pulls took 21 to 22 s.
 - On RDMA hosts in the default shared mode, every new network namespace gets a copy of each RDMA device under a mutex, which caps creates at about 120 to 150 a second on the Vera node once the pivot_root walk is gone. Nodes where no pod needs shared RDMA devices should boot with `ib_core.netns_mode=0`.
 
 ### Sizing
 
 An unpinned sandbox (`cpu=0`) sees every CPU on the host, and gVisor sizes its Go runtime and thread pools for all of them: an idle one holds about 201 kernel tasks, against 24 at `cpu=2`. On the shared 352-CPU host, sandboxes that each saw every CPU lost about half their throughput: Terminal-Bench oracle runs at `cpu=2` reached 95% of Docker's runs per minute with 147 lanes (8,207 a minute), and 11,464 a minute with 294 lanes, while unpinned sandboxes reached 48%. With 512 unpinned sandboxes, commands in them topped out near 1,000 a second from any number of processes, with the node 74% busy and 172,000 threads on it. Dense nodes should size sandboxes with `cpu=`.
 
+A sized sandbox runs on the least-used hardware threads, physical cores first, so once more sandboxes have limits than the node has cores, they share cores: a `cpu=2` probe among 160 busy `cpu=2` neighbors ran 1.86× slower. `RAY_SANDBOX_CPU_PLACEMENT=core` (ray-project/ray#67747) gives each sandbox whole physical cores instead, as Kubernetes' CPU manager does with `full-pcpus-only`; the probe then ran 1.04× slower, and Terminal-Bench throughput with 294 `cpu=2` sandboxes stayed the same (11,488 and 11,367 runs a minute).
+
 ### Node settings, arm64, and tests
 
 - `RAY_SANDBOX_DEFAULT_DNS` (ray-project/ray#67691) lets a node replace `network="public"` sandboxes' default resolvers where public DNS is blocked.
-- `RAY_SANDBOX_RUNSC_FLAGS` (ray-project/ray#67692) lets a node pass extra global flags to runsc, such as `--platform=kvm`. KVM made system calls about 5× cheaper for a single sandbox on the Vera node, but unsized KVM sandboxes died under concurrent load, and sized ones collapsed once their vCPUs outnumbered the host's CPUs, so it isn't recommended yet.
-- On arm64, gVisor started every application with speculative store bypass disabled; google/gvisor#16814 sets SSBS, which makes CPU-bound code 2.1× faster. On hosts with 16 or 64 KiB pages, gVisor's vDSO looked for its clock parameters in the wrong place, so every clock read became a system call; google/gvisor#16815 fixes that (3.4 µs to 0.24 µs per read).
+- `RAY_SANDBOX_RUNSC_FLAGS` (ray-project/ray#67692) lets a node pass extra global flags to runsc, such as `--platform=kvm`. KVM made system calls about 5× cheaper for a single sandbox on the Vera node. gVisor's arm64 KVM platform ran trapped `WFE` instructions, which OpenBLAS uses to spin-wait, and reads of ID registers as system calls, which crashed PyTorch; with google/gvisor#16909, all 49 Terminal-Bench tasks pass on KVM at 0.98× Docker's time with `cpu=1`. Unsized KVM sandboxes still died under concurrent load, though, and sized ones lose throughput once their vCPUs, two each, outnumber the host's CPUs, so KVM isn't recommended yet.
+- `RAY_SANDBOX_PIDS_MAX` (ray-project/ray#67748) caps the host tasks each sandbox may run. Under gVisor's systrap platform a guest process costs about two host tasks, so without a cap one sandbox could use up the node's process IDs: 2,000 processes in one sandbox took 4,035 host tasks. With a cap of 1,024 they stopped at 1,008, and the sandbox and its neighbor kept running.
+- On arm64, gVisor started every application with speculative store bypass disabled; google/gvisor#16814 sets SSBS, which makes CPU-bound code 2.1× faster. On hosts with 16 or 64 KiB pages, gVisor's vDSO looked for its clock parameters in the wrong place, so every clock read became a system call; google/gvisor#16815 fixes that (3.4 µs to 0.24 µs per read). gVisor also showed applications no HWCAP2 feature, so numeric libraries skipped BF16 and I8MM, and PyTorch's bfloat16 matrix multiplies ran 220 to 490× slower than with them; google/gvisor#16910 shows applications the HWCAP2 features that keep no state of their own.
 - ray-project/ray#67694 tests that a sandbox that runs out of memory is killed whole while its neighbors, the node and the parent cgroup are untouched.
 
 ### Future work from these changes
@@ -503,7 +510,9 @@ Each design change above is measured, not just tested, on a 352-CPU node and on 
 - **Commands**: `true` per second against sandboxes per process and against concurrency.
 - **Warm pools**: claim latency for a burst as large as the pool, refill time, and that a pool never exceeds its size; store routing across host actors against random routing.
 - **Multi-sandbox actors**: time to running, actor memory per sandbox, and command throughput for one actor per sandbox through one actor for all.
-- **Workloads**: Terminal-Bench 2.1 oracle runs per minute against lanes and sandbox sizing; stock Modal SDK and Harbor clients through the gRPC facade; SkyRL rollouts on H100s with every sandbox on the Vera node (256 trials at once, no sandbox failures, sandbox setup p50 1.6 s).
+- **Containment**: CPU quotas under load, out-of-memory kills, disk caps and task caps with real cgroups, and a latency probe among busy neighbors.
+- **Images**: a different image per sandbox, cold and warm, and a cache capped below its contents while some images are in use.
+- **Workloads**: Terminal-Bench 2.1 oracle runs per minute against lanes, sandbox sizing, CPU placement and gVisor platform; stock Modal SDK and Harbor clients through the gRPC facade; SkyRL rollouts on H100s with every sandbox on the Vera node (256 trials at once, no sandbox failures, sandbox setup p50 1.6 s).
 
 ### Acceptance Criteria
 1. Complete `ray.experimental.sandbox` Python package exported under `ray.experimental.sandbox`.
